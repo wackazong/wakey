@@ -2,7 +2,7 @@
 # Resolves the `profile: <hits> 0x<pc>` lines of a device log (see
 # src/profiler.rs) to functions and prints hits per function.
 #
-#   scripts/profile.sh target/riscv32imafc-esp-espidf/release/slint_test monitor.log
+#   scripts/profile.sh target/riscv32imafc-esp-espidf/release/ui_bench monitor.log
 set -euo pipefail
 elf="${1:?usage: profile.sh <elf> <log>}"
 log="${2:?usage: profile.sh <elf> <log>}"

@@ -3,11 +3,11 @@
 # ESP32-P4 rev < 3, matching the Tab5) and our partition table, then opens
 # the serial monitor.
 #
-#   cargo run --release --bin slint_test        # via .cargo/config.toml
-#   scripts/flash.sh target/riscv32imafc-esp-espidf/release/slint_test
+#   cargo run --release --bin ui_bench        # via .cargo/config.toml
+#   scripts/flash.sh target/riscv32imafc-esp-espidf/release/ui_bench
 #
 # Extra espflash options can be given in ESPFLASH_ARGS, e.g. a port:
-#   ESPFLASH_ARGS="--port /dev/cu.usbmodem2101" cargo run --release --bin slint_test
+#   ESPFLASH_ARGS="--port /dev/cu.usbmodem2101" cargo run --release --bin ui_bench
 set -euo pipefail
 
 elf="${1:?usage: flash.sh <elf>}"

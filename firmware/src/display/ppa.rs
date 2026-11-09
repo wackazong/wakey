@@ -44,9 +44,9 @@ const MAX_BLOCK_W: usize = 640;
 
 /// Shortest strip handed to the PPA. Rotated by 90°, a strip's line count
 /// becomes the output block width; blocks narrower than 8 pixels stall the
-/// PPA for good while the panel DMA reads PSRAM (reproduced with
-/// `ppa_probe`; ESP-IDF's DIG-734 workaround computes the output width from
-/// the unrotated block). Shorter strips are padded with lines read back from
+/// PPA for good while the panel DMA reads PSRAM (ESP-IDF's DIG-734
+/// workaround computes the output width from the unrotated block; see
+/// `docs/pitfalls.md`). Shorter strips are padded with lines read back from
 /// the frame buffer.
 const MIN_LINES: usize = 8;
 

@@ -145,7 +145,6 @@ unsafe extern "C" fn on_frame_buf_complete(
 
 pub struct Display {
     variant: PanelVariant,
-    refresh_hz: f32,
     panel: sys::esp_lcd_panel_handle_t,
     io: sys::esp_lcd_panel_io_handle_t,
     bus: sys::esp_lcd_dsi_bus_handle_t,
@@ -163,7 +162,6 @@ impl Display {
         let timing = variant.timing();
         let mut this = Self {
             variant,
-            refresh_hz: timing.refresh_hz(),
             panel: ptr::null_mut(),
             io: ptr::null_mut(),
             bus: ptr::null_mut(),
@@ -259,7 +257,7 @@ impl Display {
             variant,
             WIDTH,
             HEIGHT,
-            this.refresh_hz,
+            timing.refresh_hz(),
             this.fbs
         );
         Ok(this)
@@ -349,11 +347,6 @@ impl Display {
         self.variant
     }
 
-    /// Refresh rate from the panel timing, Hz.
-    pub fn refresh_hz(&self) -> f32 {
-        self.refresh_hz
-    }
-
     /// Frames the panel has scanned out since boot (wrapping counter).
     pub fn frames_scanned() -> u32 {
         FRAMES_DONE.load(Ordering::Acquire)
@@ -377,12 +370,6 @@ impl Display {
         // SAFETY: the driver allocated PIXELS u16 per buffer; the DMA only
         // reads the front buffer, and `&mut self` prevents aliasing.
         unsafe { core::slice::from_raw_parts_mut(self.fbs[back], PIXELS) }
-    }
-
-    /// The buffer currently on screen (read-only).
-    pub fn front_buffer(&self) -> &[u16] {
-        // SAFETY: as above; the DMA only reads.
-        unsafe { core::slice::from_raw_parts(self.fbs[self.front], PIXELS) }
     }
 
     /// Shows the back buffer from the next frame on. `rows` are the panel

@@ -11,6 +11,9 @@
 #![cfg_attr(slint_nightly_test, feature(non_exhaustive_omitted_patterns_lint))]
 #![cfg_attr(slint_nightly_test, warn(non_exhaustive_omitted_patterns))]
 #![no_std]
+// wakey patch: as a path dependency this crate does not get Cargo's lint
+// capping; silence the upstream warnings it triggers with `libm`.
+#![allow(unused_imports, dead_code)]
 #![debugger_visualizer(gdb_script_file = "gdb_pretty_printers.py")]
 
 extern crate alloc;
