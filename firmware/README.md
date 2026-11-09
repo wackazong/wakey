@@ -5,6 +5,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5
 
 | Binary | What it shows |
 | --- | --- |
+| `wakey` | The alarm clock itself (work in progress): clock screen with the real time from the RX8130 RTC in Europe/Zurich time, touch, USB speaker set up and idle |
 | `panel_test` | One static picture in both frame buffers, no flips; the backlight steps 100 / 50 / 20 % every 10 s (1–3 white squares show the step); logs the INA226 battery readings. Separates panel or backlight flicker from rendering problems |
 | `ppa_probe` | With the display streaming: PPA and 2D-DMA throughput (rotate and copy a 640×720 window), and a sweep of strip heights that reports the first PPA stall (the < 8-line limitation) |
 | `display_test` | Panel bring-up, tear-free double buffering, cost of a full-screen CPU fill; a second Embassy task logs a heartbeat |
@@ -50,6 +51,7 @@ an 8 MB app partition. Set a port with
 ```
 src/
 ├─ runtime.rs           Embassy executor on the main FreeRTOS task
+├─ clock.rs             system time from the RTC, Europe/Zurich, local time for the UI
 ├─ audio/
 │  ├─ uac.rs            USB Audio Class 1.0 output (Pebble) on ESP-IDF's host stack
 │  ├─ file.rs           WAV and AIFF/AIFC readers (PCM 8–32 bit, mono/stereo)
@@ -57,6 +59,7 @@ src/
 ├─ board/               PCB facts and bring-up order (Board::init)
 │  ├─ i2c.rs            system I2C (GPIO31/32), bus recovery
 │  ├─ ioexp.rs          PI4IOE5V6408 expanders 0x43/0x44: resets, rails
+│  ├─ rtc.rs            RX8130CE RTC 0x32: UTC time, alarm registers
 │  ├─ sd.rs             microSD: SD/MMC slot 0, 4-bit, FAT at /sdcard
 │  └─ touch.rs          ST7123 touch controller (I2C 0x55)
 ├─ display/             MIPI-DSI panel, frame buffers, flips
@@ -282,7 +285,32 @@ cause here. macOS `._*` metadata files are skipped.
 
 Open: power budget measurement at higher volumes, FLAC (`claxon`).
 
+## Time (RX8130 RTC)
+
+`board::rtc::Rx8130` (I2C 0x32) keeps UTC. `Board::init` configures it as
+M5Unified does: supercap charging and the nIRQ output on, the fixed-cycle
+timer off, no digital offset. `clock::init` reads it at boot, rejects
+nonsense (a fresh chip held non-BCD values with the power-loss flag clear),
+falls back to the firmware's build time (`BUILD_UNIX_TIME` from `build.rs`)
+and writes that back, then sets the system clock (`settimeofday`) and the
+time zone (`TZ=CET-1CEST,M3.5.0,M10.5.0/3`, newlib applies the DST rule, no
+tz database). `clock::now()` is `localtime_r` of `gettimeofday`. The alarm
+registers are wrapped (`set_alarm`, `alarm_flag`, …) for the power-off path
+later: the RTC interrupt goes to the PMS150 power controller, not to the
+P4.
+
+The `wakey` clock screen ticks on the second (a one-shot timer aligns a
+1 s repeating timer); each field is its own fixed-width `Text`, so a tick
+dirties 110 rows and renders in 1 ms.
+
+**Flash size:** Slint pre-renders every imported font face at every pixel
+size a `.slint` file uses, for the ASCII set. Two faces at 300 px were
+5 MB; the clock screen imports one face (Inter Medium) and uses 280 px,
+and `build.rs` compiles one `.slint` file per binary (each `include!`s its
+own `$OUT_DIR/<stem>.rs`) so the screens do not inherit each other's
+glyphs. The `wakey` image is 6.2 MB of the 8 MB app partition.
+
 ## Not done yet
 
 Touch is wired to Slint and the list layer, not to Buoyant. Also missing:
-RTC, Wi-Fi, sleep.
+alarms, NTP, Wi-Fi, sleep.

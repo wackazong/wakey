@@ -6,6 +6,7 @@
 
 pub mod i2c;
 pub mod ioexp;
+pub mod rtc;
 pub mod sd;
 pub mod touch;
 
@@ -25,6 +26,8 @@ const GT911_ADDR_BACKUP: u8 = 0x5D;
 pub struct Board {
     pub i2c: SharedI2c,
     pub ioexp: IoExpanders,
+    /// The RX8130 real-time clock (UTC).
+    pub rtc: rtc::Rx8130,
     pub display: Display,
     pub backlight: Backlight,
     /// The microSD card at `/sdcard`, if one is inserted and readable.
@@ -48,20 +51,24 @@ impl Board {
         FreeRtos::delay_ms(10);
         ioexp.release_display_resets()?;
 
-        // 3. Backlight PWM, dark until the first frame is on the panel.
+        // 3. RTC: supercap charging on, interrupt sources off.
+        let rtc = rtc::Rx8130::new(i2c.clone())
+            .unwrap_or_else(|e| panic!("RX8130 RTC at {:#04x} does not answer: {e}", rtc::ADDR));
+
+        // 4. Backlight PWM, dark until the first frame is on the panel.
         let mut backlight = Backlight::new(p.ledc.timer0, p.ledc.channel0, p.pins.gpio22)?;
         backlight.set_percent(0)?;
 
-        // 4. Panel variant from the touch controller. The ST712x touch
+        // 5. Panel variant from the touch controller. The ST712x touch
         //    controller needs a moment after reset before it answers.
         FreeRtos::delay_ms(300);
         let variant = detect_panel(&mut i2c::lock(&i2c));
         log::info!("board: panel variant {variant:?}");
 
-        // 5. Display: DSI PHY power, panel init, video mode streaming.
+        // 6. Display: DSI PHY power, panel init, video mode streaming.
         let display = Display::new(p.dsi, variant)?;
 
-        // 6. microSD (optional).
+        // 7. microSD (optional).
         let sd = match sd::mount(
             p.sdmmc0,
             sd::SdPins {
@@ -86,6 +93,7 @@ impl Board {
         Ok(Self {
             i2c,
             ioexp,
+            rtc,
             display,
             backlight,
             sd,

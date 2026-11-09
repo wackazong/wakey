@@ -12,7 +12,7 @@ use wakey::display::ppa::PpaRotator;
 use wakey::ui::list_layer::ListLayer;
 use wakey::ui::{slint_platform, stats};
 
-slint::include_modules!();
+include!(concat!(env!("OUT_DIR"), "/slint_test.rs"));
 
 /// Inject a synthetic swipe through the touch event queue.
 const SELF_TEST_SWIPE: bool = false;

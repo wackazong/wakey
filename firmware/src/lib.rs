@@ -13,6 +13,7 @@
 
 pub mod audio;
 pub mod board;
+pub mod clock;
 pub mod display;
 pub mod profiler;
 pub mod runtime;
