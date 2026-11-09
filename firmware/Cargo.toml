@@ -1,0 +1,72 @@
+[package]
+name = "wakey-firmware"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Tab5 alarm clock firmware: ESP-IDF (std) + Embassy"
+
+# The firmware is its own Cargo workspace: its target, build-std and
+# toolchain must not leak into host crates.
+[workspace]
+
+[lib]
+name = "wakey"
+path = "src/lib.rs"
+test = false
+bench = false
+
+# Applications live in src/bin/; `cargo run --release --bin <name>`.
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+mem_forget = "deny"
+large_stack_frames = "deny"
+
+[dependencies]
+esp-idf-svc = { version = "0.53", features = ["std", "binstart", "alloc", "embassy-time-driver", "embassy-sync", "critical-section"] }
+esp-idf-hal = "0.47"
+esp-idf-sys = "0.38.1"
+log = "0.4"
+anyhow = "1"
+
+# Async runtime: Embassy's executor on top of FreeRTOS (std platform),
+# time driver from esp-idf-svc.
+embassy-executor = { version = "0.10", features = ["platform-std", "executor-thread", "log"] }
+embassy-time = { version = "0.5.1", features = ["log"] }
+embassy-sync = "0.8"
+embassy-futures = "0.1"
+static_cell = "2.1"
+
+# GUI candidates under test.
+slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
+buoyant = "0.7.1"
+embedded-graphics = "0.8"
+u8g2-fonts = "0.8"
+heapless = "0.9"
+
+[build-dependencies]
+embuild = "0.33.7"
+slint-build = "1.18.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = 2          # symbols stay in the ELF only, not in the flashed image
+
+[profile.dev]
+# Unoptimized builds are far too slow for drawing.
+opt-level = "s"
+debug = 2
+
+# Extra ESP-IDF bindings (no extra component is built).
+[[package.metadata.esp-idf-sys.extra_components]]
+bindings_header = "bindings/extra.h"
+
+# Slint's software renderer with a glyph fast path (vendor/README.md).
+[patch.crates-io]
+i-slint-renderer-software = { path = "vendor/i-slint-renderer-software" }
+i-slint-core = { path = "vendor/i-slint-core" }

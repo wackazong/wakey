@@ -1,0 +1,21 @@
+[build]
+target = "riscv32imafc-esp-espidf"
+
+[target.riscv32imafc-esp-espidf]
+linker = "ldproxy"
+# `cargo run --release --bin <app>` flashes and opens the monitor.
+runner = "scripts/flash.sh"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32p4"
+# The Tab5's ESP32-P4 is chip revision v1.3. ESP-IDF 5.5 builds for
+# revisions < v3 by default (CONFIG_ESP32P4_SELECTS_REV_LESS_V3).
+ESP_IDF_VERSION = "v5.5.5"
+# Keep the ESP-IDF checkout and tools inside the workspace (gitignored),
+# so it is shared by all binaries and survives `cargo clean`.
+ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
+ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults"

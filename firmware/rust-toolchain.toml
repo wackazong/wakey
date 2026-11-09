@@ -1,0 +1,4 @@
+# ESP-IDF targets (riscv32imafc-esp-espidf) are tier 3: nightly + build-std.
+[toolchain]
+channel = "nightly-2026-10-15"
+components = ["rust-src", "rustfmt", "clippy"]

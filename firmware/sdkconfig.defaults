@@ -1,0 +1,36 @@
+# ── Chip ────────────────────────────────────────────────────────────────
+# Tab5 ships with ESP32-P4 revision v1.3 (checked with `espflash board-info`).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+# v1.x tops out at 360 MHz.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+
+# ── Flash (partition table: partitions.csv, applied by scripts/flash.sh) ──
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# ── PSRAM: 32 MB hex-mode at 200 MHz, holds the frame buffers ──────────
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# Allocations up to 16 KiB stay in internal RAM (fast); larger go to PSRAM.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# Bigger L2 cache and lines help the PSRAM-bound frame buffer traffic.
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+
+# ── Console on the USB-C port (USB Serial/JTAG) ────────────────────────
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ── Tasks ──────────────────────────────────────────────────────────────
+# The Embassy executor runs on the main task; Slint rendering lives there too.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=16384
+
+# ── Display ────────────────────────────────────────────────────────────
+# Keep the DPI ISR and its callbacks working while the flash cache is busy.
+CONFIG_LCD_DSI_ISR_HANDLER_IN_IRAM=y

@@ -1,0 +1,5 @@
+# Reserved for the future firmware workspace. Host spikes build independently.
+[workspace]
+members = []
+exclude = ["spikes/tidal-download", "firmware"]
+resolver = "3"

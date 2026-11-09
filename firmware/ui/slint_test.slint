@@ -1,0 +1,121 @@
+// GUI test from the architecture doc: large clock digits, a continuous
+// animation and a 200-row list that scrolls itself. Landscape 1280×720.
+//
+// The list is not part of `SlintTest`: its rows are rendered one at a time
+// by `TrackRow` in an offscreen window and composed by the firmware's list
+// layer (src/ui/list_layer.rs). `SlintTest` only leaves the area free.
+
+import "fonts/Inter-24pt-Regular.ttf";
+import "fonts/Inter-24pt-Medium.ttf";
+
+export component SlintTest inherits Window {
+    width: 1280px;
+    height: 720px;
+    background: #101418;
+    default-font-family: "Inter 24pt";
+
+    in property <string> hours: "--";
+    in property <string> minutes: "--";
+    in property <string> seconds: "--";
+    in property <string> stats: "";
+
+    // Left half: clock, stats, bouncing dot.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 640px;
+        height: parent.height;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 16px;
+            // One fixed-width item per field: a tick only dirties the
+            // seconds (not the whole row), and digit widths can't shift the
+            // layout.
+            HorizontalLayout {
+                alignment: center;
+                Text { text: root.hours; width: 176px; font-size: 140px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; }
+                Text { text: ":"; width: 44px; font-size: 140px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; }
+                Text { text: root.minutes; width: 176px; font-size: 140px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; }
+                Text { text: ":"; width: 44px; font-size: 140px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; }
+                Text { text: root.seconds; width: 176px; font-size: 140px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; }
+            }
+            Text {
+                text: "Wakey · Slint · Grüße aus Zürich";
+                font-size: 30px;
+                color: #8899aa;
+                horizontal-alignment: center;
+            }
+        }
+
+        // Frame stats: small fixed box in the corner, away from the
+        // animation, so its once-a-second update stays a small dirty area.
+        Text {
+            x: 16px;
+            y: 12px;
+            width: 520px;
+            height: 30px;
+            text: root.stats;
+            font-size: 24px;
+            color: #66cc88;
+        }
+
+        Rectangle {
+            width: 48px;
+            height: 48px;
+            border-radius: 24px;
+            background: #ffb020;
+            x: (parent.width - self.width) / 2 + (parent.width / 2 - 60px) * sin(animation-tick() / 3s * 360deg);
+            y: parent.height - 110px;
+        }
+    }
+
+    // Right half: reserved for the list layer. Never changes, so Slint never
+    // repaints it after the first frames.
+    Rectangle {
+        x: 640px;
+        y: 0;
+        width: 640px;
+        height: parent.height;
+        background: #141a20;
+    }
+}
+
+// One list row, rendered offscreen into the list layer.
+export component TrackRow inherits Window {
+    width: 640px;
+    height: 96px;
+    default-font-family: "Inter 24pt";
+
+    in property <string> track-title;
+    in property <string> artist;
+    in property <color> tint;
+    in property <int> index;
+
+    background: mod(root.index, 2) == 0 ? #182028 : #141a20;
+
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 20px;
+        Rectangle {
+            width: 64px;
+            height: 64px;
+            border-radius: 10px;
+            background: @linear-gradient(135deg, root.tint 0%, #000000 100%);
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+            Text {
+                text: root.track-title;
+                font-size: 28px;
+                color: #e8eef4;
+            }
+            Text {
+                text: root.artist;
+                font-size: 20px;
+                color: #8899aa;
+            }
+        }
+    }
+}

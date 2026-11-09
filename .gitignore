@@ -1,0 +1,4 @@
+.DS_Store
+target/
+# Secrets and downloads of the TIDAL spike are ignored in its own .gitignore
+# (spikes/tidal-download/.local/).
