@@ -1,0 +1,152 @@
+# Architecture
+
+Wakey is a bedside alarm clock on the M5Stack Tab5: a 1280×720 touch clock that plays a sound file from the microSD card on a USB speaker (Creative Pebble V3) at alarm time. This document describes the software as it is. Hardware facts are in [hardware.md](hardware.md), traps already hit in [pitfalls.md](pitfalls.md), what comes next in [roadmap.md](roadmap.md).
+
+## Platform
+
+| | |
+| --- | --- |
+| SoC | ESP32-P4 **rev v1.3** (2 × RISC-V 360 MHz, 32 MB PSRAM at 200 MHz, 16 MB flash) |
+| Radio | ESP32-C6 co-processor on SDIO (esp_hosted firmware by M5Stack) |
+| Framework | Rust std on **ESP-IDF 5.5.5** (`esp-idf-sys`/`-hal`/`-svc`) |
+| Async | Embassy executor (std platform) on one FreeRTOS task; `embassy-time` driver from `esp-idf-svc` |
+| UI | Slint 1.18 software renderer (vendored with two patches) |
+| Toolchain | nightly-2026-10-15, `build-std`, target `riscv32imafc-esp-espidf` |
+
+**Rust only:** the project contains no C or C++ of its own and no C board support package. ESP-IDF itself and Espressif's registry components for the Wi-Fi link (`esp_hosted`, `esp_wifi_remote`) are the only C. Panel init tables are ported to Rust; the USB audio class driver is written in Rust on ESP-IDF's USB host library.
+
+Not esp-hal: it supports only P4 rev ≥ v3.0.
+
+## Repository
+
+```
+README.md            overview and quick start
+docs/                architecture, hardware, pitfalls, roadmap, schematics
+wakey-core/          pure logic, host-tested (own Cargo workspace)
+firmware/            the firmware (own Cargo workspace, ESP target)
+spikes/tidal-download/  host tool: download a track from TIDAL (V2 groundwork)
+```
+
+## Crates and layers
+
+```mermaid
+flowchart TD
+    BIN["src/bin: wakey · ui_bench · audio_test"] --> APP
+    APP["app: wiring, clock screen view model"] --> UI & AUDIO & NET & CLOCK & CONFIG
+    UI["ui: Slint platform, render loop, list layer, touch input"] --> DISPLAY & BOARD
+    AUDIO["audio: USB speaker (uac), file player"] --> BOARD
+    NET["net: Wi-Fi via C6, NTP"] --> BOARD
+    CLOCK["clock: local time, RTC sync"] --> BOARD
+    CONFIG["config: config.json"] --> BOARD
+    BOARD["board: pins, I2C chips, power switches, Board::init"]
+    DISPLAY["display: DSI panel, frame buffers, PPA, 2D-DMA, cache"]
+    APP & UI & AUDIO & CLOCK & CONFIG -.-> CORE["wakey-core: datetime, audio_file, resample, uac descriptors, config model, scroll physics"]
+```
+
+Each layer uses only the ones below it. Rules that keep it that way:
+
+- **`wakey-core`** has no ESP dependencies. Anything that can be computed without hardware goes there and gets host tests (`cd wakey-core && cargo test`).
+- **`board`** owns the hardware facts: pin numbers, I2C addresses, register maps, the bring-up order. `Board::init()` returns owned handles; required chips panic with their name, the SD card is optional.
+- **Services** (`ui`, `audio`, `net`, `clock`, `config`) get what they need as arguments: a power [`Switch`](../firmware/src/board/ioexp.rs) instead of the expander, a callback instead of the RTC (`net::start(…, on_time_synced)`).
+- **`app`** is the only place that knows the whole product: start-up order, which screen shows what, German UI texts.
+- **Binaries** are thin: `wakey` calls `app::main()`; the benches wire what they test.
+
+## Threads and cores
+
+| Task | Stack | Core / prio | Runs |
+| --- | --- | --- | --- |
+| `main` | 8 KiB | 0 / 1 | logger, starts `app`, then joins it |
+| `app` | 64 KiB (internal) | 0 / 1 | Embassy executor: app task (Slint, render loop), touch task |
+| `usb-lib` | 4 KiB | any / 5 | ESP-IDF USB host library daemon |
+| `uac` | 8 KiB | any / 5 | USB audio client; transfer callbacks call the sample source |
+| `decoder` | 8 KiB | any / 5 | player: file → 48 kHz → ring (while playing) |
+| `wifi` | 16 KiB | any / 5 | Wi-Fi connect/reconnect, SNTP |
+| esp_hosted tasks | PSRAM | – | SDIO transport to the C6 |
+
+The executor runs on its own task, not on `main`: esp_hosted allocates internal RAM in a C constructor before ESP-IDF creates the main task, and a 64 KiB main stack no longer fits then. The display ISRs are installed from the `app` task, so they run on core 0 with the render loop.
+
+Interrupts end in atomics or `HalIsrNotification`s: DPI frame done (wakes the render loop), PPA done, 2D-DMA done (counters polled by their users).
+
+Shared state: the system I2C bus is `Arc<Mutex<SysI2c>>` (`SharedI2c`), locked per transaction by the expanders, RTC and touch polling. Handles that cross threads (`UsbAudio`, `Wifi`, `IoExpanders`, `Rx8130`) are cheap clones over `Arc`s; commands go through `mpsc` channels, status through `Mutex`/atomics.
+
+## Start-up (`app::main`)
+
+1. `Board::init()`: I2C bus recovery (9 clocks + STOP; the RTC and expanders stay powered across resets) → expanders (rails off, LCD and touch in reset, then released) → RTC configuration → backlight PWM, dark → panel variant from the touch controller → display (DSI PHY LDO, panel init, DPI streaming) → microSD (optional).
+2. `clock::init`: time zone, system time from the RTC (or the build time).
+3. `config::load`: `config.json` from the card.
+4. `net::start`: `wifi` thread (C6 power, driver, connect, NTP → RTC).
+5. Touch task on the executor.
+6. `UsbAudio::start`: USB host, `uac` thread (VBUS, port power, device).
+7. Slint platform, clock screen, once-a-second view model update.
+8. Backlight on; the render loop runs forever.
+
+## Display pipeline
+
+```mermaid
+flowchart LR
+    S["Slint (landscape lines)"] --> STRIP["16-line strips, internal RAM"]
+    STRIP -->|PPA rotate 90°| FB["back frame buffer (PSRAM)"]
+    ROWS["list rows (offscreen Slint)"] -->|PPA rotate| RING["row ring (PSRAM)"]
+    RING -->|2D-DMA copy| FB
+    FB -->|flip| DPI["DPI video DMA → panel 66 Hz"]
+```
+
+- **Panel:** 720×1280 portrait, 2-lane MIPI-DSI, video mode. Two RGB565 frame buffers in PSRAM (1.8 MB each), streamed continuously by the DPI DMA. Timings from M5GFX: 80 MHz pixel clock, **66.1 Hz**.
+- **Flip:** `Display::present()` selects the back buffer for the next frame (the driver switches pointers, no copy). `back_buffer().await` returns after the frame-complete ISR, so rendering is tear-free and paced by the panel. Partial renderers repaint the union of the last two dirty regions (Slint: `RepaintBufferType::SwappedBuffers`).
+- **Orientation:** the UI is landscape 1280×720. Landscape `(x, y)` → panel column `y`, row `1279 − x`. Every path uses this mapping.
+- **Rendering:** Slint renders unrotated lines into 16-line strips in internal RAM ([`ui/platform.rs`](../firmware/src/ui/platform.rs)); the **PPA** rotates each strip into the frame buffer by DMA while the CPU renders the next ([`display/ppa.rs`](../firmware/src/display/ppa.rs)). The CPU never writes the frame buffer. One PPA transaction in flight, blocks ≤ 640 px wide, strips padded to ≥ 8 lines (chip limitations, see pitfalls).
+- **Render loop** ([`ui/render_loop.rs`](../firmware/src/ui/render_loop.rs)): route touch events, update Slint timers, wait for the back buffer, let the `FrameHook` start, render Slint's dirty region, let the hook finish, flip. When nothing animates: background work for the hook, then sleep until the next Slint timer or touch.
+- **List layer** ([`ui/list_layer.rs`](../firmware/src/ui/list_layer.rs)), a `FrameHook`: rows are rendered once by a Slint component in an offscreen window and rotated by the PPA into a 64-row ring in PSRAM; every frame the 2D-DMA copies the visible part into the frame buffer (7 ms for 640×720 px, 64 Mpx/s, three times the PPA's rate) while Slint renders the rest. The ring is filled around the scroll position in spare frame time. Scroll physics (drag, fling τ 0.35 s, rubber band, critically damped spring) are `wakey_core::scroll::Scroller`.
+- **Cache:** DMA engines read and write PSRAM, not the cache. [`display/cache.rs`](../firmware/src/display/cache.rs) writes back CPU writes before a DMA reads, and invalidates before the CPU reads DMA output.
+- **Touch** ([`ui/input.rs`](../firmware/src/ui/input.rs)): the ST7123's touch half is polled every 10 ms over I2C; a release counts after 3 empty readings. Events go to the hook first (the list takes drags that start in its area), otherwise to the main Slint window.
+
+Measured (ST7123, 360 MHz): clock screen tick 110 panel rows, ~1 ms; `ui_bench` scrolling a 300-row list next to Slint content **66 fps** at ~0.8–7 ms CPU per frame.
+
+**Slint and flash size:** Slint pre-renders every imported font face at every pixel size a `.slint` file uses (ASCII plus the characters of string literals). The clock screen therefore imports one face (Inter Medium), and `build.rs` compiles one `.slint` file per program; each program `include!`s its own generated module. Characters that only come from Rust strings (umlauts in dates) must appear in a literal in the `.slint` file (a hidden `Text` in `wakey.slint`).
+
+## Audio
+
+```mermaid
+flowchart LR
+    SD["WAV/AIFF on SD"] --> DEC["decoder thread: AudioFile → Converter (→ 48 kHz)"]
+    DEC --> RING["1 s ring (PSRAM)"]
+    RING --> SRC["Player::source()"]
+    SRC --> UAC["uac thread: 3 × 8 ms isochronous transfers"]
+    UAC --> PEB["Pebble V3 (USB-A)"]
+```
+
+- **USB** ([`audio/uac/`](../firmware/src/audio/uac)): ESP-IDF's USB host library on the high-speed port, switched to full-speed-only (`HCFG.FSLSSupp`) for the full-speed Pebble. The `uac` thread switches VBUS, powers the root port (power-cycling it if nothing enumerates), parses the descriptor (`wakey_core::uac`), claims 48 kHz / 16 bit / stereo, sends `SET_INTERFACE`, sets the sample rate, unmutes, sets the volume (−20 dB below max by default), and tears everything down when the device goes away. `UsbAudio` (`Clone`) controls it: `set_streaming`, `set_volume_db`, `set_mute`, `connected`.
+- **Stream:** 3 isochronous transfers × 8 packets × 192 bytes (1 ms of 48 kHz stereo each) in flight; each completion refills its transfer from the `Source` callback and resubmits. 1000 packets/s, no failures measured.
+- **Player** ([`audio/player.rs`](../firmware/src/audio/player.rs)): a decoder thread reads the file (`wakey_core::audio_file`), converts other rates with rubato's FFT resampler (`wakey_core::resample`; 44.1 kHz: 1029-frame blocks) into a one-second ring; the source drains it and plays silence (counted as underrun) when empty. 0 underruns measured for 48 kHz AIFF and 44.1 kHz WAV.
+
+## Time
+
+- The **RX8130 RTC** keeps UTC on a supercap (≈ 7 h). `Rx8130::get_time` rejects the power-loss flag, non-BCD values and implausible dates.
+- `clock::init` sets `TZ=CET-1CEST,M3.5.0,M10.5.0/3` (newlib applies the DST rule) and the system clock from the RTC; with no valid RTC time it uses the firmware build time (`BUILD_UNIX_TIME` from `build.rs`) and writes it back.
+- After an **NTP** sync on the `wifi` thread, the app's callback writes the system time to the RTC (`clock::store_system_time`).
+- The clock screen updates on the second: a one-shot timer to the next full second, then a 1 s repeating timer.
+
+## Network
+
+The C6 behaves as the normal `esp_wifi` driver through `esp_wifi_remote`, so `EspWifi`/`BlockingWifi` work unchanged. `net::start` runs the `wifi` thread: C6 power (expander WLAN_PWR_EN), driver up (~2.8 s including the C6 reset), connect with back-off (5 s doubling to 5 min), SNTP while connected, status for the UI (`net::Status`: starting, not configured with networks in range, connecting, connected with IP/RSSI/NTP, failed). Without credentials it scans once and switches the radio off.
+
+## Memory
+
+| | Internal RAM | PSRAM |
+| --- | --- | --- |
+| Frame buffers | – | 2 × 1.8 MB |
+| PPA strips | 4 × 40 KiB | – |
+| `app` stack | 64 KiB | – |
+| List ring (`ui_bench`) | – | 7.5 MB |
+| Player ring | – | 192 KiB |
+| esp_hosted pools, task stacks | – | yes |
+| Free while running `wakey` | ~160 KiB | ~17 MB |
+
+`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384`: allocations up to 16 KiB stay internal, larger ones go to PSRAM. Lints `large_stack_frames` and `mem_forget` are denied.
+
+## Build
+
+- `firmware/.cargo/config.toml`: target, `build-std`, runner `scripts/flash.sh` (flashes with ESP-IDF's bootloader, built for rev < v3, and `partitions.csv`: 12 MB app, NVS).
+- `esp-idf-sys` builds ESP-IDF 5.5.5 into `firmware/.embuild/` (first build ~10 min; every `sdkconfig.defaults` change rebuilds much of it). `[package.metadata.esp-idf-sys]` adds bindings (`bindings/extra.h`: PPA) and the registry components `esp_hosted` 2.13.1 and `esp_wifi_remote` 1.6.5.
+- `build.rs`: compiles `ui/wakey.slint` and `ui/ui_bench.slint` (fonts pre-rendered for the software renderer, style `fluent-dark`), exports `BUILD_UNIX_TIME`.
+- Vendored crates (`firmware/vendor/`, `[patch.crates-io]`): Slint's renderer (glyph fast path), `i-slint-core` (16 dirty rectangles instead of 3) and `esp-idf-svc` (one impl compiled out to avoid a rustc ICE). See [vendor/README.md](../firmware/vendor/README.md).
