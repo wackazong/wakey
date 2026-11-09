@@ -16,7 +16,7 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use wakey::board::Board;
-use wakey::board::i2c::SysI2c;
+use wakey::board::i2c::{self, SharedI2c, SysI2c};
 use wakey::board::ioexp::Pin;
 use wakey::display;
 use wakey::ui::{UI_HEIGHT, UI_WIDTH, canvas::Canvas};
@@ -32,15 +32,15 @@ async fn app() {
     let Board {
         mut display,
         mut backlight,
-        mut i2c,
-        mut ioexp,
+        i2c,
+        ioexp,
         ..
     } = Board::init().expect("board init");
 
     backlight.set_percent(100).expect("backlight");
     log::info!("panel_test: static picture, backlight 100 %");
 
-    let ina = i2c.probe(INA226);
+    let ina = i2c::lock(&i2c).probe(INA226);
     if !ina {
         log::warn!("panel_test: INA226 (0x41) does not answer, no supply readings");
     }
@@ -66,7 +66,7 @@ async fn app() {
             let phase_end = Instant::now() + Duration::from_secs(10);
             while Instant::now() < phase_end {
                 if ina {
-                    log_supply_for_one_second(&mut i2c, &mut ioexp).await;
+                    log_supply_for_one_second(&i2c, &ioexp).await;
                 } else {
                     Timer::after(Duration::from_secs(1)).await;
                 }
@@ -86,7 +86,7 @@ fn draw_phase(canvas: &mut Canvas<'_>, n: u32) {
 
 /// Samples battery voltage and current every 20 ms for one second and logs
 /// min/max. Shunt 5 mΩ: 2.5 µV/LSB → 0.5 mA/LSB. Bus: 1.25 mV/LSB.
-async fn log_supply_for_one_second(i2c: &mut SysI2c, ioexp: &mut wakey::board::ioexp::IoExpanders) {
+async fn log_supply_for_one_second(i2c: &SharedI2c, ioexp: &wakey::board::ioexp::IoExpanders) {
     let (mut v_min, mut v_max) = (i32::MAX, i32::MIN);
     let (mut i_min, mut i_max) = (i32::MAX, i32::MIN);
     for _ in 0..50 {
@@ -95,7 +95,11 @@ async fn log_supply_for_one_second(i2c: &mut SysI2c, ioexp: &mut wakey::board::i
             i2c.write_read(INA226, &[reg], &mut b).ok()?;
             Some(i16::from_be_bytes(b))
         };
-        if let (Some(shunt), Some(bus)) = (read(i2c, 0x01), read(i2c, 0x02)) {
+        let (shunt, bus) = {
+            let mut b = i2c::lock(i2c);
+            (read(&mut b, 0x01), read(&mut b, 0x02))
+        };
+        if let (Some(shunt), Some(bus)) = (shunt, bus) {
             let mv = bus as i32 * 125 / 100;
             let ma = shunt as i32 / 2;
             v_min = v_min.min(mv);
@@ -105,10 +109,7 @@ async fn log_supply_for_one_second(i2c: &mut SysI2c, ioexp: &mut wakey::board::i
         }
         Timer::after(Duration::from_millis(20)).await;
     }
-    let charging = ioexp
-        .get(i2c, Pin::ChgStat)
-        .map(|high| !high)
-        .unwrap_or(false);
+    let charging = ioexp.get(Pin::ChgStat).map(|high| !high).unwrap_or(false);
     log::info!(
         "supply: battery {v_min}..{v_max} mV, current {i_min}..{i_max} mA (+ = into battery?), CHG_STAT {}",
         if charging { "charging" } else { "not charging" }

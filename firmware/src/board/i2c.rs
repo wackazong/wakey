@@ -1,8 +1,8 @@
 //! The system I2C bus (GPIO31 SDA / GPIO32 SCL, 400 kHz).
 //!
 //! Expanders, RTC, INA226, touch, codecs and IMU all share it. The firmware
-//! owns the only driver on these pins; drivers for the individual chips take
-//! `&mut SysI2c` for each transaction.
+//! owns the only driver on these pins; chip drivers and tasks hold a
+//! [`SharedI2c`] and lock it per transaction.
 
 use esp_idf_svc::hal::delay::{Ets, TickType};
 use esp_idf_svc::hal::gpio::{AnyIOPin, PinDriver, Pull};
@@ -13,8 +13,16 @@ use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_millis(50);
 
+/// The bus, shared between chip drivers and tasks.
+pub type SharedI2c = std::sync::Arc<std::sync::Mutex<SysI2c>>;
+
 pub struct SysI2c {
     driver: I2cDriver<'static>,
+}
+
+/// Locks a [`SharedI2c`] (a poisoned lock is still a usable bus).
+pub fn lock(bus: &SharedI2c) -> std::sync::MutexGuard<'_, SysI2c> {
+    bus.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl SysI2c {

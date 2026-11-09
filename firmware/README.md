@@ -9,8 +9,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5
 | `ppa_probe` | With the display streaming: PPA and 2D-DMA throughput (rotate and copy a 640×720 window), and a sweep of strip heights that reports the first PPA stall (the < 8-line limitation) |
 | `display_test` | Panel bring-up, tear-free double buffering, cost of a full-screen CPU fill; a second Embassy task logs a heartbeat |
 | `slint_test` | Slint: clock digits, a continuous animation, and a 300-row list you drag and fling by touch, composed by the list layer at 66 fps |
-| `audio_test` | Switches on USB-A 5 V, enumerates a USB Audio Class 1.0 speaker (Creative Pebble V3) and plays a quiet 440 Hz sine; logs the audio descriptors, mute/volume and packet counters |
-| `player_test` | Mounts the microSD, writes a 44.1 kHz test tone if missing, then plays every WAV/AIFF in the root and `sounds/` on the USB speaker (48 kHz, sample-rate converted with rubato) |
+| `audio_test` | USB Audio Class 1.0 speaker (Creative Pebble V3) on USB-A: plays every WAV/AIFF in the microSD root and `sounds/` in a loop (writes a 44.1 kHz test tone first; sample-rate converted with rubato), or a quiet 440 Hz sine without a card. Survives unplugging and re-plugging the speaker; logs packet and underrun counters |
 | `buoyant_test` | Buoyant (SwiftUI-like, embedded-graphics): clock digits, animated toggle, sliding bar, changing rows |
 
 Each logs frame statistics once per second, for example:
@@ -234,12 +233,19 @@ Open ends:
 ## USB audio (Creative Pebble V3 on USB-A)
 
 `src/audio/uac.rs` is a UAC 1.0 speaker driver in Rust on top of ESP-IDF's
-USB host library (no C class driver). It parses the configuration
-descriptor, selects the 48 kHz / 16 bit / stereo alternate setting, sets
-the sample rate, unmutes and sets the volume (feature unit), and keeps
-3 isochronous transfers of 8 × 1 ms packets in flight. Each is refilled
-from a sample source in its completion callback. Measured: 1000 packets/s,
-no failures; the tone plays.
+USB host library (no C class driver). `UsbAudio::start(vbus, source)`
+installs the host and runs the client thread, which owns the whole
+lifecycle: VBUS and root-port power (with retries), waiting for a device,
+parsing its configuration descriptor, selecting the 48 kHz / 16 bit /
+stereo alternate setting, setting the sample rate, unmuting and setting the
+volume (feature unit), and tearing everything down when the device goes
+away (transfers drained and freed, interface released, device closed) to
+wait for the next one. The handle is `Clone`: `set_streaming(on)` switches
+the streaming interface between alt 0 and the playing alternate setting
+and keeps 3 isochronous transfers of 8 × 1 ms packets in flight, each
+refilled from the sample source in its completion callback; a re-plugged
+device resumes a wanted stream. `set_volume_db` / `set_mute` go to the
+feature unit. Measured: 1000 packets/s, no failures.
 
 What it took on the Tab5 (each was needed):
 
@@ -274,10 +280,9 @@ is switched on for the SD pins as the BSP does. If the card never answers
 (`send_op_cond` timeout), check that it is fully inserted: that was the
 cause here. macOS `._*` metadata files are skipped.
 
-Open: unplug/replug handling, stopping the stream, volume control from the
-UI, power budget measurement at higher volumes, FLAC (`claxon`).
+Open: power budget measurement at higher volumes, FLAC (`claxon`).
 
 ## Not done yet
 
 Touch is wired to Slint and the list layer, not to Buoyant. Also missing:
-RTC, the audio player (files, decoding), Wi-Fi, sleep.
+RTC, Wi-Fi, sleep.

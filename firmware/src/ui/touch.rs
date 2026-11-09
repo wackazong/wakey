@@ -5,7 +5,7 @@
 //! Down/Move/Up events in UI (landscape) coordinates, queued in [`EVENTS`].
 //! The render loop drains the queue once per frame.
 
-use crate::board::i2c::SysI2c;
+use crate::board::i2c::{self, SharedI2c};
 use crate::board::touch;
 use crate::display;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -43,9 +43,9 @@ fn to_landscape(px: u16, py: u16) -> (f32, f32) {
     (x, y)
 }
 
-/// Polls the touch controller forever. Owns the system I2C bus.
+/// Polls the touch controller forever (shares the system I2C bus).
 #[embassy_executor::task]
-pub async fn touch_task(mut i2c: SysI2c) {
+pub async fn touch_task(bus: SharedI2c) {
     let mut down = false;
     let mut last = (0.0, 0.0);
     let mut errors = 0u32;
@@ -54,7 +54,8 @@ pub async fn touch_task(mut i2c: SysI2c) {
     // few empty readings in a row count as lifting the finger.
     let mut empty = 0u8;
     loop {
-        match touch::read_point(&mut i2c) {
+        let read = touch::read_point(&mut i2c::lock(&bus));
+        match read {
             Ok(Some((px, py))) => {
                 empty = 0;
                 let (x, y) = to_landscape(px, py);

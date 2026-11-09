@@ -14,7 +14,7 @@ use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver, Resolution, config::TimerConfig};
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::hal::units::Hertz;
-use i2c::SysI2c;
+use i2c::{SharedI2c, SysI2c};
 use ioexp::IoExpanders;
 
 /// Touch controller addresses, used to tell the panel variants apart.
@@ -23,7 +23,7 @@ const GT911_ADDR_PRIMARY: u8 = 0x14; // INT pulled high during reset (Tab5 defau
 const GT911_ADDR_BACKUP: u8 = 0x5D;
 
 pub struct Board {
-    pub i2c: SysI2c,
+    pub i2c: SharedI2c,
     pub ioexp: IoExpanders,
     pub display: Display,
     pub backlight: Backlight,
@@ -36,17 +36,17 @@ impl Board {
         let p = Peripherals::take()?;
 
         // 1. I2C with bus recovery.
-        let mut i2c = SysI2c::new(
+        let i2c: SharedI2c = std::sync::Arc::new(std::sync::Mutex::new(SysI2c::new(
             p.i2c0,
             p.pins.gpio31.degrade_input_output(),
             p.pins.gpio32.degrade_input_output(),
-        )?;
+        )?));
 
         // 2. Expanders: rails off, LCD and touch in reset. Then release the
         //    resets after the 10 ms minimum pulse width.
-        let mut ioexp = IoExpanders::new(&mut i2c)?;
+        let ioexp = IoExpanders::new(i2c.clone())?;
         FreeRtos::delay_ms(10);
-        ioexp.release_display_resets(&mut i2c)?;
+        ioexp.release_display_resets()?;
 
         // 3. Backlight PWM, dark until the first frame is on the panel.
         let mut backlight = Backlight::new(p.ledc.timer0, p.ledc.channel0, p.pins.gpio22)?;
@@ -55,7 +55,7 @@ impl Board {
         // 4. Panel variant from the touch controller. The ST712x touch
         //    controller needs a moment after reset before it answers.
         FreeRtos::delay_ms(300);
-        let variant = detect_panel(&mut i2c);
+        let variant = detect_panel(&mut i2c::lock(&i2c));
         log::info!("board: panel variant {variant:?}");
 
         // 5. Display: DSI PHY power, panel init, video mode streaming.
