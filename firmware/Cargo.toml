@@ -26,6 +26,9 @@ mem_forget = "deny"
 large_stack_frames = "deny"
 
 [dependencies]
+# Hardware-independent logic (dates, audio files, resampling, descriptors,
+# config, scroll physics), tested on the host.
+wakey-core = { path = "../wakey-core" }
 esp-idf-svc = { version = "0.53", features = ["std", "binstart", "alloc", "embassy-time-driver", "embassy-sync", "critical-section"] }
 esp-idf-hal = "0.47"
 esp-idf-sys = "0.38.1"
@@ -40,13 +43,6 @@ embassy-sync = "0.8"
 embassy-futures = "0.1"
 static_cell = "2.1"
 
-# Audio: sample-rate conversion to the speaker's 48 kHz (FFT based, for the
-# fixed ratios of file rates).
-rubato = "0.16"
-
-# config.json on the SD card.
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 
 slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 heapless = "0.9"

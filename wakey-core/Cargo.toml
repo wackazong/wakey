@@ -1,0 +1,20 @@
+[package]
+name = "wakey-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Hardware-independent logic of the Tab5 alarm clock, tested on the host"
+
+# Own workspace: `cargo test` here runs on the host with the default
+# toolchain; the firmware uses this crate as a path dependency.
+[workspace]
+
+[dependencies]
+# Sample-rate conversion (FFT based, exact for fixed ratios like 44.1 → 48 kHz).
+rubato = "0.16"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"

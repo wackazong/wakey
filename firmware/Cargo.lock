@@ -5140,6 +5140,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wakey-core"
+version = "0.1.0"
+dependencies = [
+ "rubato",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "wakey-firmware"
 version = "0.1.0"
 dependencies = [
@@ -5154,12 +5163,10 @@ dependencies = [
  "esp-idf-sys",
  "heapless",
  "log",
- "rubato",
- "serde",
- "serde_json",
  "slint",
  "slint-build",
  "static_cell",
+ "wakey-core",
 ]
 
 [[package]]

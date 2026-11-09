@@ -1,18 +1,19 @@
-//! Slint GUI test (see `ui/slint_test.slint`): clock digits, a continuous
-//! animation and a 300-row list scrolled by touch (drag and fling). The
-//! list is composed by the list layer (rows pre-rendered into a ring,
-//! scrolled by 2D-DMA), everything else by Slint. Frame statistics are logged once per second and shown on screen.
+//! UI bench (`ui/ui_bench.slint`): clock digits, a continuous animation
+//! and a 300-row list scrolled by touch (drag, fling, overscroll). The list
+//! is composed by the list layer (rows pre-rendered into a ring, scrolled
+//! by 2D-DMA), everything else by Slint. Frame statistics are logged once
+//! per second and shown on screen. Target: 66 fps while scrolling.
 //!
-//! `cargo run --release --bin slint_test`
+//! `cargo run --release --bin ui_bench`
 
 use embassy_time::Instant;
 use slint::{Color, SharedString, Timer, TimerMode};
 use wakey::board::Board;
 use wakey::display::ppa::PpaRotator;
 use wakey::ui::list_layer::ListLayer;
-use wakey::ui::{slint_platform, stats};
+use wakey::ui::{platform, render_loop, stats};
 
-include!(concat!(env!("OUT_DIR"), "/slint_test.rs"));
+include!(concat!(env!("OUT_DIR"), "/ui_bench.rs"));
 
 /// Inject a synthetic swipe through the touch event queue.
 const SELF_TEST_SWIPE: bool = false;
@@ -20,7 +21,7 @@ const SELF_TEST_SWIPE: bool = false;
 #[embassy_executor::task]
 async fn swipe() {
     use embassy_time::{Duration, Timer};
-    use wakey::ui::touch::{EVENTS, Phase, TouchEvent};
+    use wakey::ui::input::{EVENTS, Phase, TouchEvent};
     let ev = |phase, y: f32| TouchEvent {
         phase,
         x: 960.0,
@@ -66,18 +67,17 @@ async fn app(spawner: embassy_executor::Spawner) {
         i2c,
         ..
     } = Board::init().expect("board init");
-    // The touch task owns the system I2C bus from here on.
-    spawner.spawn(wakey::ui::touch::touch_task(i2c).unwrap());
+    spawner.spawn(wakey::ui::input::touch_task(i2c).unwrap());
     let variant = display.variant();
     let mut rot = PpaRotator::new().expect("PPA");
 
-    let window = slint_platform::init();
-    let ui = SlintTest::new().expect("Slint UI");
+    let window = platform::init();
+    let ui = UiBench::new().expect("Slint UI");
     ui.show().expect("show");
 
     // The list: one row component in an offscreen window, re-rendered for
     // each row that scrolls into view.
-    let row_window = slint_platform::offscreen_window(640, ROW_H as u32);
+    let row_window = platform::offscreen_window(640, ROW_H as u32);
     let row = TrackRow::new().expect("Slint row");
     row.show().expect("show row");
     let artists = [
@@ -105,7 +105,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     let mut list = ListLayer::new(640, 640, ROW_H, ROWS, row_window, set_row, LIST_BACKGROUND);
     list.prerender(&mut rot);
 
-    // Once per second: uptime as the clock (no RTC yet) and the frame stats.
+    // Once per second: uptime as the clock and the frame stats.
     let weak = ui.as_weak();
     let clock = Timer::default();
     clock.start(
@@ -150,5 +150,5 @@ async fn app(spawner: embassy_executor::Spawner) {
     }
 
     backlight.set_percent(100).expect("backlight");
-    slint_platform::run(window, display, &mut rot, Some(&mut list)).await
+    render_loop::run(window, display, &mut rot, Some(&mut list)).await
 }

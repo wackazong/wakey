@@ -1,7 +1,8 @@
 //! Two PI4IOE5V6408 8-bit IO expanders on the system I2C bus.
 //!
-//! Pin meanings from the Tab5 schematic; power-on values from M5Unified
-//! (`Power_Class.inl`), see the hardware tables in the architecture doc.
+//! Pin meanings from the Tab5 schematic (`docs/hardware.md`); power-on
+//! values from M5Unified (`Power_Class.inl`). Rails that services switch
+//! themselves are handed out as [`Switch`]es.
 
 use super::i2c::{self, SharedI2c, SysI2c};
 use esp_idf_svc::sys::EspError;
@@ -66,6 +67,10 @@ impl Pin {
         }
     }
 }
+
+/// A power switch on an expander pin, for services that manage their own
+/// supply (the USB-A 5 V, the C6's 3.3 V).
+pub type Switch = Box<dyn Fn(bool) -> Result<(), EspError> + Send>;
 
 /// Register image of one expander. The firmware is the only writer, so the
 /// cached copies stay in sync and every change is a single register write.
@@ -158,6 +163,12 @@ impl IoExpanders {
             }
             bus.write_reg(addr, reg::OUTPUT, img.out)
         })
+    }
+
+    /// A [`Switch`] driving `pin`.
+    pub fn switch(&self, pin: Pin) -> Switch {
+        let this = self.clone();
+        Box::new(move |on| this.set(pin, on))
     }
 
     /// Makes a pin an output (`true`) or an input (`false`, pull as configured).

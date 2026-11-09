@@ -1,9 +1,9 @@
 //! Touch input as landscape pointer events.
 //!
-//! [`touch_task`] polls the touch controller every 10 ms (interrupt-driven
-//! waiting comes with the sleep work) and turns readings into
-//! Down/Move/Up events in UI (landscape) coordinates, queued in [`EVENTS`].
-//! The render loop drains the queue once per frame.
+//! [`touch_task`] polls the touch controller every 10 ms (the touch
+//! interrupt pin is not used yet) and turns readings into Down/Move/Up
+//! events in UI (landscape) coordinates, queued in [`EVENTS`]. The render
+//! loop drains the queue once per frame.
 
 use crate::board::i2c::{self, SharedI2c};
 use crate::board::touch;
@@ -35,7 +35,7 @@ pub static EVENTS: Channel<CriticalSectionRawMutex, TouchEvent, 32> = Channel::n
 
 /// Touch panel coordinates → landscape UI coordinates. The touch
 /// controller's origin is rotated 180° against the display memory (whose
-/// mapping is in the `ui` module docs): landscape x = touch y, landscape
+/// mapping is in the [`crate::ui`] docs): landscape x = touch y, landscape
 /// y = WIDTH-1 - touch x. Checked on the device (drag direction, list area).
 fn to_landscape(px: u16, py: u16) -> (f32, f32) {
     let x = (py as usize).min(display::HEIGHT - 1) as f32;

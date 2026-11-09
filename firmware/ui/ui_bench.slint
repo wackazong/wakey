@@ -1,14 +1,15 @@
-// GUI test from the architecture doc: large clock digits, a continuous
-// animation and a 200-row list that scrolls itself. Landscape 1280×720.
+// UI bench (src/bin/ui_bench.rs): large clock digits, a continuous
+// animation and frame statistics on the left; a scrolling list on the
+// right. Landscape 1280×720.
 //
-// The list is not part of `SlintTest`: its rows are rendered one at a time
-// by `TrackRow` in an offscreen window and composed by the firmware's list
-// layer (src/ui/list_layer.rs). `SlintTest` only leaves the area free.
+// The list is not part of `UiBench`: its rows are rendered one at a time by
+// `TrackRow` in an offscreen window and composed by the firmware's list
+// layer (src/ui/list_layer.rs). `UiBench` only leaves the area free.
 
 import "fonts/Inter-24pt-Regular.ttf";
 import "fonts/Inter-24pt-Medium.ttf";
 
-export component SlintTest inherits Window {
+export component UiBench inherits Window {
     width: 1280px;
     height: 720px;
     background: #101418;
@@ -41,7 +42,7 @@ export component SlintTest inherits Window {
                 Text { text: root.seconds; width: 176px; font-size: 140px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; }
             }
             Text {
-                text: "Wakey · Slint · Grüße aus Zürich";
+                text: "Wakey · UI bench · Grüße aus Zürich";
                 font-size: 30px;
                 color: #8899aa;
                 horizontal-alignment: center;

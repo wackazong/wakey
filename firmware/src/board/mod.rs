@@ -1,20 +1,24 @@
-//! Facts about the Tab5 PCB and the bring-up order.
+//! The Tab5 PCB: pins, chips on the system I2C bus, power switches, and
+//! the bring-up order.
 //!
-//! Applications call [`Board::init`] once and get handles back. Required
-//! chips panic with their name; the panel variant is detected at run time
-//! (three LCD/touch combinations exist across Tab5 production runs).
+//! Applications call [`Board::init`] once and get owned handles back.
+//! Required chips panic with their name; the microSD card is optional. The
+//! panel variant is detected at run time (three LCD/touch combinations
+//! exist across Tab5 production runs).
 
+mod backlight;
 pub mod i2c;
 pub mod ioexp;
 pub mod rtc;
 pub mod sd;
 pub mod touch;
 
+pub use backlight::Backlight;
+
 use crate::display::{Display, PanelVariant};
 use esp_idf_svc::hal::delay::FreeRtos;
-use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver, Resolution, config::TimerConfig};
+use esp_idf_svc::hal::modem::Modem;
 use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::hal::units::Hertz;
 use i2c::{SharedI2c, SysI2c};
 use ioexp::IoExpanders;
 
@@ -24,16 +28,19 @@ const GT911_ADDR_PRIMARY: u8 = 0x14; // INT pulled high during reset (Tab5 defau
 const GT911_ADDR_BACKUP: u8 = 0x5D;
 
 pub struct Board {
+    /// The system I2C bus (touch polling uses it directly).
     pub i2c: SharedI2c,
+    /// Power switches and resets on the two IO expanders.
     pub ioexp: IoExpanders,
     /// The RX8130 real-time clock (UTC).
     pub rtc: rtc::Rx8130,
     pub display: Display,
     pub backlight: Backlight,
-    /// The microSD card at `/sdcard`, if one is inserted and readable.
+    /// The microSD card at [`sd::MOUNT_POINT`], if one is inserted and
+    /// readable. Unmounted when dropped.
     pub sd: Option<sd::SdCard>,
-    /// Wi-Fi (the ESP32-C6 behind esp_wifi_remote), for `net::start`.
-    pub modem: esp_idf_svc::hal::modem::Modem<'static>,
+    /// Wi-Fi through the ESP32-C6, for [`crate::net::start`].
+    pub modem: Modem<'static>,
 }
 
 impl Board {
@@ -125,36 +132,4 @@ fn detect_panel(i2c: &mut SysI2c) -> PanelVariant {
     panic!(
         "touch controller (ST712x 0x55 / GT911 0x14/0x5D) does not answer: unknown panel variant"
     );
-}
-
-/// LCD backlight: GPIO22 drives the enable of the ME2212 boost converter.
-/// 44.1 kHz PWM as in M5GFX (Espressif's BSP uses 5 kHz).
-pub struct Backlight {
-    channel: LedcDriver<'static>,
-}
-
-impl Backlight {
-    fn new(
-        timer: impl esp_idf_svc::hal::ledc::LedcTimer<SpeedMode = esp_idf_svc::hal::ledc::LowSpeed>
-        + 'static,
-        channel: impl esp_idf_svc::hal::ledc::LedcChannel<SpeedMode = esp_idf_svc::hal::ledc::LowSpeed>
-        + 'static,
-        pin: impl esp_idf_svc::hal::gpio::OutputPin + 'static,
-    ) -> anyhow::Result<Self> {
-        let timer = LedcTimerDriver::new(
-            timer,
-            &TimerConfig::new()
-                .frequency(Hertz(44_100))
-                .resolution(Resolution::Bits10),
-        )?;
-        let channel = LedcDriver::new(channel, timer, pin)?;
-        Ok(Self { channel })
-    }
-
-    pub fn set_percent(&mut self, percent: u8) -> anyhow::Result<()> {
-        let max = self.channel.get_max_duty();
-        self.channel
-            .set_duty(max * u32::from(percent.min(100)) / 100)?;
-        Ok(())
-    }
 }

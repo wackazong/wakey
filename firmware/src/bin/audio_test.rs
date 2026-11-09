@@ -132,9 +132,7 @@ async fn app() {
     } else {
         player.source()
     };
-    let vbus = ioexp.clone();
-    let usb =
-        UsbAudio::start(Box::new(move |on| vbus.set(Pin::Usb5vEn, on)), source).expect("USB host");
+    let usb = UsbAudio::start(ioexp.switch(Pin::Usb5vEn), source).expect("USB host");
     usb.set_streaming(true);
 
     let mut stats = embassy_time::Ticker::every(Duration::from_secs(2));

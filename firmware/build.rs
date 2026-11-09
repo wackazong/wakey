@@ -1,9 +1,10 @@
 fn main() {
-    // One Slint file per binary, so each embeds only its own pre-rendered
-    // glyphs (a 300 px digit set is megabytes). The generated code lands in
-    // `$OUT_DIR/<stem>.rs`; binaries `include!` their own instead of
-    // `slint::include_modules!()`, which only knows the last compiled file.
-    for ui in ["ui/slint_test.slint", "ui/wakey.slint"] {
+    // One Slint file per program, so each embeds only its own pre-rendered
+    // glyphs (Slint renders every imported font face at every pixel size a
+    // file uses; the clock's 280 px digits are megabytes). The generated
+    // code lands in `$OUT_DIR/<stem>.rs` and is `include!`d by its user
+    // (`slint::include_modules!()` only knows the last compiled file).
+    for ui in ["ui/wakey.slint", "ui/ui_bench.slint"] {
         slint_build::compile_with_config(
             ui,
             slint_build::CompilerConfiguration::new()

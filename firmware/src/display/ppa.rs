@@ -19,7 +19,7 @@
 //! - [`PpaRotator::finish`] must be called before the frame is presented. It
 //!   waits for the queue to drain.
 
-use super::{HEIGHT, PIXELS, WIDTH};
+use super::{HEIGHT, PIXELS, WIDTH, cache};
 use core::ffi::c_void;
 use core::ops::Range;
 use core::ptr;
@@ -49,26 +49,6 @@ const MAX_BLOCK_W: usize = 640;
 /// the unrotated block). Shorter strips are padded with lines read back from
 /// the frame buffer.
 const MIN_LINES: usize = 8;
-
-// `esp_cache.h` is not in esp-idf-sys's default bindings.
-const ESP_CACHE_MSYNC_FLAG_UNALIGNED: i32 = 1 << 1;
-const ESP_CACHE_MSYNC_FLAG_DIR_C2M: i32 = 1 << 2;
-const ESP_CACHE_MSYNC_FLAG_DIR_M2C: i32 = 1 << 3;
-unsafe extern "C" {
-    fn esp_cache_msync(addr: *mut c_void, size: usize, flags: i32) -> sys::esp_err_t;
-}
-
-/// Writes CPU-written pixels back from the cache to PSRAM, so DMA engines
-/// (which read PSRAM, not the cache) see them.
-pub fn cache_writeback(buf: *mut u16, pixels: usize) {
-    unsafe {
-        esp_cache_msync(
-            buf.cast(),
-            pixels * 2,
-            ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED,
-        );
-    }
-}
 
 /// Microseconds the CPU spent waiting for the PPA (diagnostics).
 pub static WAIT_US: AtomicU32 = AtomicU32::new(0);
@@ -319,13 +299,7 @@ impl PpaRotator {
             // columns range.start..range.end. Drop any cached copy so the
             // reads see what the PPA wrote.
             let row0 = t.row_ref + 1 - o.range.end;
-            let first = t.buf.add(row0 * t.pic_w) as usize & !127;
-            let last = t.buf.add((row0 + w) * t.pic_w) as usize;
-            esp_cache_msync(
-                first as *mut c_void,
-                (last - first).next_multiple_of(128),
-                ESP_CACHE_MSYNC_FLAG_DIR_M2C,
-            );
+            cache::invalidate(t.buf.add(row0 * t.pic_w), w * t.pic_w);
             // Move the rendered lines to their place in the padded strip.
             if shift > 0 {
                 core::ptr::copy(buf, buf.add(shift * w), o.lines * w);

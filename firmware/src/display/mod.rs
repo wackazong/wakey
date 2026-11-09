@@ -23,6 +23,7 @@
 //! The ISR and the render loop must run on the same core (the ISR is
 //! installed on the core that creates the panel), see [`Display::present`].
 
+pub mod cache;
 pub mod dma2d;
 mod init_tables;
 pub mod ppa;

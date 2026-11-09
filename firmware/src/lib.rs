@@ -1,16 +1,22 @@
-//! Tab5 alarm clock firmware: ESP-IDF (std) + Embassy.
+//! Firmware of the Tab5 alarm clock: Rust (std) on ESP-IDF with the Embassy
+//! executor. See `docs/architecture.md` for the overall design.
 //!
-//! Layers (see `architecture/developtment concept.md`):
-//! - [`board`]: facts about the PCB (pins, I2C bus, IO expanders, panel
-//!   variant) and the bring-up order in [`board::Board::init`].
-//! - [`display`]: the MIPI-DSI panel, its PSRAM frame buffers and tear-free
-//!   buffer swapping. No UI toolkit knowledge.
-//! - [`ui`]: glue between the display and the UI toolkits under test
-//!   (Slint, Buoyant), plus frame statistics.
-//! - [`runtime`]: starting the Embassy executor on top of FreeRTOS.
+//! Layers, top to bottom; each uses only the ones below it:
 //!
-//! Applications live in `src/bin/` and only use these handles.
+//! - [`app`]: the alarm clock application (screens, wiring).
+//! - Services: [`ui`] (Slint, touch, list layer), [`audio`] (USB speaker,
+//!   file playback), [`net`] (Wi-Fi, NTP), [`clock`] (local time, RTC),
+//!   [`config`] (`config.json`).
+//! - Hardware: [`board`] (pins, chips, power switches, bring-up) and
+//!   [`display`] (panel, frame buffers, PPA, 2D-DMA).
+//! - [`runtime`]: starting the Embassy executor; [`profiler`]: a sampling
+//!   profiler for performance work.
+//!
+//! Pure logic (dates, file formats, resampling, descriptors, config model,
+//! scroll physics) is in the `wakey_core` crate and tested on the host.
+//! Binaries in `src/bin/` are thin: the product (`wakey`) and two benches.
 
+pub mod app;
 pub mod audio;
 pub mod board;
 pub mod clock;

@@ -1,19 +1,16 @@
 //! File playback: a decoder thread reads an [`AudioFile`], converts it to
-//! 48 kHz stereo i16 and fills a ring buffer (in PSRAM); the USB audio
-//! stream takes from the ring through [`Player::source`]. When the ring runs
-//! empty the stream plays silence and counts an underrun.
-//!
-//! Files at other sample rates (44.1 kHz most of all) are converted to
-//! 48 kHz with `rubato`'s FFT resampler (`FftFixedInOut`: a windowed-sinc
-//! anti-aliasing filter, exact for fixed ratios).
+//! 48 kHz stereo i16 ([`Converter`] for other rates, mostly 44.1 kHz) and
+//! fills a one-second ring buffer in PSRAM; the USB audio stream takes from
+//! the ring through [`Player::source`]. When the ring runs empty the stream
+//! plays silence and counts an underrun.
 
-use super::file::AudioFile;
 use super::uac::{self, Source};
-use rubato::{FftFixedInOut, Resampler};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use wakey_core::audio_file::AudioFile;
+use wakey_core::resample::Converter;
 
 /// Ring capacity: one second of 48 kHz stereo.
 const RING_SAMPLES: usize = uac::SAMPLE_RATE as usize * 2;
@@ -55,7 +52,7 @@ impl Player {
         }
     }
 
-    /// The sample source for the USB stream (`uac::play`).
+    /// The sample source for the USB stream ([`uac::UsbAudio::start`]).
     pub fn source(&self) -> Source {
         let ring = self.ring.clone();
         Box::new(move |buf: &mut [i16]| {
@@ -124,12 +121,12 @@ fn decode(path: &std::path::Path, ring: &Ring) -> std::io::Result<()> {
         f.duration_s()
     );
     let mut resampler = if f.sample_rate != uac::SAMPLE_RATE {
-        let c = Converter::new(f.sample_rate, uac::SAMPLE_RATE)?;
+        let c = Converter::new(f.sample_rate, uac::SAMPLE_RATE).map_err(std::io::Error::other)?;
         log::info!(
             "player: converting {} Hz → {} Hz ({} frames per block)",
             f.sample_rate,
             uac::SAMPLE_RATE,
-            c.in_frames
+            c.block_frames()
         );
         Some(c)
     } else {
@@ -174,52 +171,6 @@ fn push(ring: &Ring, mut samples: &[i16]) {
         // Half a buffer of lead before underruns count.
         if q.len() >= RING_SAMPLES / 2 {
             ring.armed.store(true, Ordering::Release);
-        }
-    }
-}
-
-/// Sample-rate converter for interleaved stereo i16, on top of rubato.
-struct Converter {
-    r: FftFixedInOut<f32>,
-    /// Input frames rubato wants per call.
-    in_frames: usize,
-    /// Decoded frames not yet converted (interleaved).
-    pending: Vec<i16>,
-    planar_in: Vec<Vec<f32>>,
-}
-
-impl Converter {
-    fn new(from: u32, to: u32) -> std::io::Result<Self> {
-        // ~1024 input frames per block; rubato rounds to the ratio.
-        let r = FftFixedInOut::<f32>::new(from as usize, to as usize, 1024, 2)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        let in_frames = r.input_frames_next();
-        Ok(Self {
-            r,
-            in_frames,
-            pending: Vec::with_capacity(in_frames * 4),
-            planar_in: vec![vec![0.0; in_frames]; 2],
-        })
-    }
-
-    fn process(&mut self, input: &[i16], out: &mut Vec<i16>) {
-        self.pending.extend_from_slice(input);
-        while self.pending.len() >= self.in_frames * 2 {
-            for (i, frame) in self.pending[..self.in_frames * 2]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .enumerate()
-            {
-                self.planar_in[0][i] = f32::from(frame[0]) / 32768.0;
-                self.planar_in[1][i] = f32::from(frame[1]) / 32768.0;
-            }
-            self.pending.drain(..self.in_frames * 2);
-            let res = self.r.process(&self.planar_in, None).expect("resample");
-            for (l, r) in res[0].iter().zip(res[1].iter()) {
-                out.push((l * 32767.0).clamp(-32768.0, 32767.0) as i16);
-                out.push((r * 32767.0).clamp(-32768.0, 32767.0) as i16);
-            }
         }
     }
 }
