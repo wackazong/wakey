@@ -6,7 +6,6 @@
 //! (Slint's `RenderingRotation::Rotate270`; the PPA rotates 90°
 //! counter-clockwise). The landscape top edge is the panel's left edge.
 
-pub mod canvas;
 pub mod list_layer;
 pub mod slint_platform;
 pub mod stats;
