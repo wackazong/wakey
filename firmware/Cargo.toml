@@ -40,6 +40,10 @@ embassy-sync = "0.8"
 embassy-futures = "0.1"
 static_cell = "2.1"
 
+# Audio: sample-rate conversion to the speaker's 48 kHz (FFT based, for the
+# fixed ratios of file rates).
+rubato = "0.16"
+
 # GUI candidates under test.
 slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 buoyant = "0.7.1"

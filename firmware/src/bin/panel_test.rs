@@ -34,6 +34,7 @@ async fn app() {
         mut backlight,
         mut i2c,
         mut ioexp,
+        ..
     } = Board::init().expect("board init");
 
     backlight.set_percent(100).expect("backlight");

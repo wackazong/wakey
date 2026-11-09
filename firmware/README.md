@@ -10,6 +10,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5
 | `display_test` | Panel bring-up, tear-free double buffering, cost of a full-screen CPU fill; a second Embassy task logs a heartbeat |
 | `slint_test` | Slint: clock digits, a continuous animation, and a 300-row list you drag and fling by touch, composed by the list layer at 66 fps |
 | `audio_test` | Switches on USB-A 5 V, enumerates a USB Audio Class 1.0 speaker (Creative Pebble V3) and plays a quiet 440 Hz sine; logs the audio descriptors, mute/volume and packet counters |
+| `player_test` | Mounts the microSD, writes a 44.1 kHz test tone if missing, then plays every WAV/AIFF in the root and `sounds/` on the USB speaker (48 kHz, sample-rate converted with rubato) |
 | `buoyant_test` | Buoyant (SwiftUI-like, embedded-graphics): clock digits, animated toggle, sliding bar, changing rows |
 
 Each logs frame statistics once per second, for example:
@@ -50,10 +51,14 @@ an 8 MB app partition. Set a port with
 ```
 src/
 ├─ runtime.rs           Embassy executor on the main FreeRTOS task
-├─ audio/uac.rs         USB Audio Class 1.0 output (Pebble) on ESP-IDF's host stack
+├─ audio/
+│  ├─ uac.rs            USB Audio Class 1.0 output (Pebble) on ESP-IDF's host stack
+│  ├─ file.rs           WAV and AIFF/AIFC readers (PCM 8–32 bit, mono/stereo)
+│  └─ player.rs         decoder thread → PSRAM ring → USB stream; rubato to 48 kHz
 ├─ board/               PCB facts and bring-up order (Board::init)
 │  ├─ i2c.rs            system I2C (GPIO31/32), bus recovery
 │  ├─ ioexp.rs          PI4IOE5V6408 expanders 0x43/0x44: resets, rails
+│  ├─ sd.rs             microSD: SD/MMC slot 0, 4-bit, FAT at /sdcard
 │  └─ touch.rs          ST7123 touch controller (I2C 0x55)
 ├─ display/             MIPI-DSI panel, frame buffers, flips
 │  ├─ mod.rs            Display: back_buffer().await, present(rows)
@@ -257,9 +262,20 @@ What it took on the Tab5 (each was needed):
   endpoint. Its LED: solid green = USB audio (low gain), flashing green =
   Bluetooth pairing (USB set-up failed).
 
-Open: unplug/replug handling, a ring buffer fed by the player (decoder,
-resampler) instead of a callback, stopping the stream, power budget
-measurement at higher volumes.
+**Player** (`audio::player`): a decoder thread reads WAV/AIFF from the SD
+card (`audio::file`), converts other sample rates to 48 kHz with rubato's
+FFT resampler (44.1 kHz: blocks of 1029 frames) and fills a one-second
+ring in PSRAM; the USB stream takes from the ring and plays silence on
+underrun. Measured: 48 kHz AIFF and a 44.1 kHz WAV play with 0 underruns.
+
+**microSD** (`board::sd`): SD/MMC slot 0 (IO_MUX pins 43/44/39–42), 4 bit,
+FAT with long file names (`CONFIG_FATFS_LFN_HEAP`). On-chip LDO channel 4
+is switched on for the SD pins as the BSP does. If the card never answers
+(`send_op_cond` timeout), check that it is fully inserted: that was the
+cause here. macOS `._*` metadata files are skipped.
+
+Open: unplug/replug handling, stopping the stream, volume control from the
+UI, power budget measurement at higher volumes, FLAC (`claxon`).
 
 ## Not done yet
 

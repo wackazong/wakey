@@ -6,6 +6,7 @@
 
 pub mod i2c;
 pub mod ioexp;
+pub mod sd;
 pub mod touch;
 
 use crate::display::{Display, PanelVariant};
@@ -26,6 +27,8 @@ pub struct Board {
     pub ioexp: IoExpanders,
     pub display: Display,
     pub backlight: Backlight,
+    /// The microSD card at `/sdcard`, if one is inserted and readable.
+    pub sd: Option<sd::SdCard>,
 }
 
 impl Board {
@@ -58,11 +61,34 @@ impl Board {
         // 5. Display: DSI PHY power, panel init, video mode streaming.
         let display = Display::new(p.dsi, variant)?;
 
+        // 6. microSD (optional).
+        let sd = match sd::mount(
+            p.sdmmc0,
+            sd::SdPins {
+                clk: p.pins.gpio43,
+                cmd: p.pins.gpio44,
+                d0: p.pins.gpio39,
+                d1: p.pins.gpio40,
+                d2: p.pins.gpio41,
+                d3: p.pins.gpio42,
+            },
+        ) {
+            Ok(card) => {
+                log::info!("board: microSD mounted at {}", sd::MOUNT_POINT);
+                Some(card)
+            }
+            Err(e) => {
+                log::warn!("board: no microSD ({e})");
+                None
+            }
+        };
+
         Ok(Self {
             i2c,
             ioexp,
             display,
             backlight,
+            sd,
         })
     }
 }
