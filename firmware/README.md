@@ -5,7 +5,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5
 
 | Binary | What it shows |
 | --- | --- |
-| `wakey` | The alarm clock itself (work in progress): clock screen with the real time from the RX8130 RTC in Europe/Zurich time, touch, USB speaker set up and idle |
+| `wakey` | The alarm clock itself (work in progress): clock screen with the real time from the RX8130 RTC in Europe/Zurich time, Wi-Fi status (connects with the credentials from `config.json`, syncs the clock by NTP), touch, USB speaker set up and idle |
 | `panel_test` | One static picture in both frame buffers, no flips; the backlight steps 100 / 50 / 20 % every 10 s (1–3 white squares show the step); logs the INA226 battery readings. Separates panel or backlight flicker from rendering problems |
 | `ppa_probe` | With the display streaming: PPA and 2D-DMA throughput (rotate and copy a 640×720 window), and a sweep of strip heights that reports the first PPA stall (the < 8-line limitation) |
 | `display_test` | Panel bring-up, tear-free double buffering, cost of a full-screen CPU fill; a second Embassy task logs a heartbeat |
@@ -52,6 +52,8 @@ an 8 MB app partition. Set a port with
 src/
 ├─ runtime.rs           Embassy executor on the main FreeRTOS task
 ├─ clock.rs             system time from the RTC, Europe/Zurich, local time for the UI
+├─ config.rs            config.json on the SD card (Wi-Fi credentials so far)
+├─ net.rs               Wi-Fi station via the ESP32-C6, reconnects, NTP → RTC
 ├─ audio/
 │  ├─ uac.rs            USB Audio Class 1.0 output (Pebble) on ESP-IDF's host stack
 │  ├─ file.rs           WAV and AIFF/AIFC readers (PCM 8–32 bit, mono/stereo)
@@ -310,7 +312,55 @@ and `build.rs` compiles one `.slint` file per binary (each `include!`s its
 own `$OUT_DIR/<stem>.rs`) so the screens do not inherit each other's
 glyphs. The `wakey` image is 6.2 MB of the 8 MB app partition.
 
+## Wi-Fi (ESP32-C6 over SDIO)
+
+The P4 has no radio. The on-board ESP32-C6 runs Espressif's esp_hosted
+slave firmware (flashed by M5Stack) and is connected over SDIO slot 1
+(GPIO 8–13, 4 bit, 40 MHz). Two ESP-IDF components from Espressif's
+registry, pulled in by `esp-idf-sys` (`[package.metadata.esp-idf-sys]`
+in `Cargo.toml`), make it look like the normal `esp_wifi` driver:
+`esp_hosted` 2.13.1 (transport) and `esp_wifi_remote` 1.6.5 (API shim).
+`EspWifi` then works unchanged. No project C code.
+
+`net::start` runs a `wifi` thread: WLAN_PWR_EN on (expander B.P0), driver
+up (~2.8 s, includes the C6 reset), connect with back-off, then SNTP; the
+synced time is written to the RTC. `Wifi::status()` feeds the clock
+screen's status line and signal bars. Without credentials it scans once
+and shows the number of networks in range.
+
+Credentials: `config.json` in the SD card root (format from the
+architecture doc):
+
+```json
+{ "wifi": { "ssid": "MeinNetz", "password": "geheim" } }
+```
+
+or, for development, `WAKEY_WIFI_SSID` / `WAKEY_WIFI_PASSWORD` in the build
+environment.
+
+What it took (each was needed):
+
+- **C6 reset polarity:** GPIO15 drives the C6's EN through 1 kΩ (low =
+  reset). esp_hosted's Tab5 preset assumes active-low and keeps the C6 in
+  reset (`sdmmc send_op_cond 0x107`); `CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH`.
+- **Internal RAM before `main`:** esp_hosted initialises in a C
+  constructor. Its allocations left too little for a 64 KiB main task:
+  boot loop at `esp_startup_start_app` (`res == pdTRUE`). The executor now
+  runs on its own 64 KiB task `app` (core 0, priority 1, created from a
+  small main task once the start-up stack is free, `src/runtime.rs`), and
+  esp_hosted's pools and task stacks go to PSRAM with smaller queues
+  (`sdkconfig.defaults`). Slint still reaches 66 fps; 160 KiB internal RAM
+  stays free.
+- **rustc ICE:** with Wi-Fi enabled, nightly-2026-10-15 panics compiling
+  one async trait impl in esp-idf-svc; that impl is compiled out in a
+  vendored copy (`vendor/README.md`).
+- **Versions:** host 2.x (not 3.x) talks to the factory C6 firmware. The
+  C6 reports protocol version 0.0.0 and no transport size; esp_hosted
+  warns and falls back to dynamic RX buffers. Updating the C6 to esp_hosted
+  slave ≥ 2.13.1 (as discussed in m5stack/M5Tab5-UserDemo#20) would remove
+  the warnings and a known RX stall under memory pressure.
+
 ## Not done yet
 
 Touch is wired to Slint and the list layer, not to Buoyant. Also missing:
-alarms, NTP, Wi-Fi, sleep.
+alarms, sleep, a settings screen (Wi-Fi setup on the device).

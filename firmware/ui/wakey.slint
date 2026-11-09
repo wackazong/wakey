@@ -25,6 +25,17 @@ export component ClockScreen inherits Window {
     // Next alarm, or why there is none.
     in property <string> alarm: "";
     in property <bool> speaker-connected: false;
+    // Wi-Fi: one line of text, a state for its colour (0 off, 1 busy,
+    // 2 connected, 3 error) and signal bars (0–4).
+    in property <string> wifi-text: "";
+    in property <int> wifi-state: 0;
+    in property <int> wifi-bars: 0;
+
+    // Never shown: makes the compiler embed glyphs that only appear in
+    // strings set from Rust (dates, Wi-Fi errors). Slint embeds ASCII plus
+    // the characters of string literals.
+    Text { visible: false; text: "ÄÖÜäöüß…·"; font-size: 24px; }
+    Text { visible: false; text: "ÄÖÜäöüß"; font-size: 40px; }
 
     // Time: HH:MM large, seconds small to the right, on the same baseline.
     HorizontalLayout {
@@ -67,7 +78,7 @@ export component ClockScreen inherits Window {
         vertical-alignment: center;
     }
 
-    // Bottom bar: alarm on the left, speaker state on the right.
+    // Bottom bar: alarm on the left; Wi-Fi and speaker state on the right.
     Text {
         x: 40px;
         y: parent.height - 70px;
@@ -77,6 +88,26 @@ export component ClockScreen inherits Window {
         font-size: 30px;
         color: #66727f;
         vertical-alignment: center;
+    }
+    Text {
+        x: parent.width - 640px;
+        y: parent.height - 110px;
+        width: 560px;
+        height: 36px;
+        text: root.wifi-text;
+        font-size: 24px;
+        color: root.wifi-state == 2 ? #8899aa : root.wifi-state == 1 ? #b08a3a : root.wifi-state == 3 ? #b0574a : #4a5560;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    // Signal bars, right of the Wi-Fi text.
+    for i in 4: Rectangle {
+        x: parent.width - 66px + i * 7px;
+        y: parent.height - 80px - (i + 1) * 5px;
+        width: 5px;
+        height: (i + 1) * 5px;
+        border-radius: 1px;
+        background: i < root.wifi-bars ? (root.wifi-state == 2 ? #8899aa : #b08a3a) : #262d35;
     }
     Text {
         x: parent.width - 440px;

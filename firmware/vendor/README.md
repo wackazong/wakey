@@ -25,3 +25,15 @@ the left and right halves into full-screen repaints: two 50 ms frames
 (both buffers) every second, a visible stutter. The renderer's
 `PhysicalRegion` follows the constant (its `== 3` assertion, only needed
 for the C++ API, is removed in the vendored renderer).
+
+## esp-idf-svc 0.53.0
+
+Unchanged except one `#[cfg(any())]` in `src/wifi.rs` (marked "wakey"):
+the `embedded_svc::wifi::asynch::Wifi` impl for `AsyncWifi` is compiled
+out. With Wi-Fi enabled (esp_wifi_remote on the P4) rustc
+nightly-2026-10-15 panics type-checking it (`compare_impl_item`,
+"DefId::expect_local … `scan_n::N` isn't local", an ICE on a const generic
+in an async trait method from another crate). The firmware uses the
+blocking `EspWifi`/`BlockingWifi` API. Drop the vendored copy once the
+toolchain is bumped past the bug (check by building with the registry
+crate).

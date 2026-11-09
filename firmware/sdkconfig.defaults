@@ -27,8 +27,10 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # ── Tasks ──────────────────────────────────────────────────────────────
-# The Embassy executor runs on the main task; Slint rendering lives there too.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+# The Embassy executor (and Slint rendering) runs on its own 64 KiB task
+# (src/runtime.rs); the main task only starts it. It is created after the
+# C constructors (esp_hosted allocates in one), so it stays small.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=16384
 
 # ── Display ────────────────────────────────────────────────────────────
@@ -44,3 +46,29 @@ CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 # Long file names on the SD card (buffers on the heap).
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+
+# ── Wi-Fi via the ESP32-C6 (esp_hosted over SDIO) ──────────────────────
+# The Tab5 preset sets SDIO slot 1 on GPIO 8–13 (4 bit) and the C6 reset on
+# GPIO15. The SD card uses slot 0; both share the SDMMC host.
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP32P4_TAB5_C6_BOARD=y
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+# GPIO15 (SOC_EXTRF_RST) drives the C6's EN through 1 kΩ (schematic p. 2):
+# low = reset, high = run, which esp_hosted calls "active high". The Tab5
+# preset defaults to active low and then holds the C6 in reset for good
+# (sdmmc send_op_cond 0x107). ESPHome's Tab5 config also uses active high.
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
+# esp_hosted runs from a C constructor before app_main. With its defaults
+# (internal-RAM transport pools, 20-deep queues, RX double buffering, CLI)
+# the 64 KiB main task no longer fit in internal RAM: boot loop with
+# "assert failed: esp_startup_start_app ... (res == pdTRUE)".
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
+CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=10
+CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=10
+CONFIG_ESP_HOSTED_SDIO_RX_DOUBLE_BUFFERING=n
+CONFIG_ESP_HOSTED_CLI_ENABLED=n
+CONFIG_ESP_HOSTED_MEM_MONITOR=n
+CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y

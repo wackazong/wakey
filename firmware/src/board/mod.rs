@@ -32,6 +32,8 @@ pub struct Board {
     pub backlight: Backlight,
     /// The microSD card at `/sdcard`, if one is inserted and readable.
     pub sd: Option<sd::SdCard>,
+    /// Wi-Fi (the ESP32-C6 behind esp_wifi_remote), for `net::start`.
+    pub modem: esp_idf_svc::hal::modem::Modem<'static>,
 }
 
 impl Board {
@@ -97,6 +99,7 @@ impl Board {
             display,
             backlight,
             sd,
+            modem: p.modem,
         })
     }
 }

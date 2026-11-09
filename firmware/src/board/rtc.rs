@@ -39,6 +39,8 @@ const CTRL1_CHGEN: u8 = 1 << 5; // supercap charging
 /// Alarm enable bit in the alarm registers (set = the field is ignored).
 const ALARM_AE: u8 = 1 << 7;
 
+/// Cheap to clone (the bus is shared).
+#[derive(Clone)]
 pub struct Rx8130 {
     bus: SharedI2c,
 }

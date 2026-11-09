@@ -44,6 +44,10 @@ static_cell = "2.1"
 # fixed ratios of file rates).
 rubato = "0.16"
 
+# config.json on the SD card.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 # GUI candidates under test.
 slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 buoyant = "0.7.1"
@@ -70,7 +74,18 @@ debug = 2
 [[package.metadata.esp-idf-sys.extra_components]]
 bindings_header = "bindings/extra.h"
 
+# Wi-Fi through the on-board ESP32-C6 (SDIO): Espressif's esp_hosted
+# transport and the esp_wifi_remote API shim, so esp_wifi (and EspWifi)
+# work on the radio-less P4. Host 2.x talks to the Tab5's factory C6
+# firmware (esp_hosted slave 1.4.1); 3.x is a different protocol.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_hosted", version = "==2.13.1" }
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_wifi_remote", version = "==1.6.5" }
+
 # Slint's software renderer with a glyph fast path (vendor/README.md).
 [patch.crates-io]
 i-slint-renderer-software = { path = "vendor/i-slint-renderer-software" }
 i-slint-core = { path = "vendor/i-slint-core" }
+# One impl disabled to dodge a rustc ICE (vendor/README.md).
+esp-idf-svc = { path = "vendor/esp-idf-svc" }

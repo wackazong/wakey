@@ -10,7 +10,9 @@ use wakey::audio::uac::UsbAudio;
 use wakey::board::Board;
 use wakey::board::ioexp::Pin;
 use wakey::clock;
+use wakey::config::Config;
 use wakey::display::ppa::PpaRotator;
+use wakey::net::{self, Status};
 use wakey::ui::slint_platform;
 
 include!(concat!(env!("OUT_DIR"), "/wakey.rs"));
@@ -27,9 +29,15 @@ async fn app(spawner: embassy_executor::Spawner) {
         i2c,
         ioexp,
         rtc,
+        modem,
+        sd,
         ..
     } = Board::init().expect("board init");
     clock::init(&rtc);
+    let config = Config::load();
+    // The card stays mounted (config writes, sounds).
+    let _sd = sd;
+    let wifi = net::start(modem, ioexp.clone(), rtc.clone(), config.wifi.clone());
     spawner.spawn(wakey::ui::touch::touch_task(i2c).unwrap());
 
     // Speaker: powered and set up now, stream off until an alarm rings.
@@ -73,6 +81,14 @@ async fn app(spawner: embassy_executor::Spawner) {
             if ui.get_speaker_connected() != usb.connected() {
                 ui.set_speaker_connected(usb.connected());
             }
+            let (text, state, bars) = wifi_line(&wifi.status());
+            set(ui.get_wifi_text(), text, &|v| ui.set_wifi_text(v));
+            if ui.get_wifi_state() != state {
+                ui.set_wifi_state(state);
+            }
+            if ui.get_wifi_bars() != bars {
+                ui.set_wifi_bars(bars);
+            }
         }
     };
     tick();
@@ -98,4 +114,36 @@ async fn app(spawner: embassy_executor::Spawner) {
 
     backlight.set_percent(100).expect("backlight");
     slint_platform::run(window, display, &mut rot, None).await
+}
+
+/// Status line text, colour state (0 off, 1 busy, 2 connected, 3 error) and
+/// signal bars for the clock screen.
+fn wifi_line(s: &Status) -> (String, i32, i32) {
+    match s {
+        Status::NotConfigured { networks: Some(n) } => (
+            format!("WLAN nicht eingerichtet · {n} Netze in Reichweite"),
+            0,
+            0,
+        ),
+        Status::NotConfigured { networks: None } => ("WLAN nicht eingerichtet".into(), 0, 0),
+        Status::Starting => ("WLAN startet…".into(), 1, 0),
+        Status::Connecting { ssid } => (format!("Verbinde mit {ssid}…"), 1, 0),
+        Status::Connected {
+            ssid,
+            ip,
+            rssi,
+            time_synced,
+        } => {
+            let bars = match rssi {
+                Some(r) if *r >= -55 => 4,
+                Some(r) if *r >= -65 => 3,
+                Some(r) if *r >= -75 => 2,
+                Some(_) => 1,
+                None => 4,
+            };
+            let ntp = if *time_synced { " · Zeit via NTP" } else { "" };
+            (format!("{ssid} · {ip}{ntp}"), 2, bars)
+        }
+        Status::Failed { ssid, reason } => (format!("{ssid}: {reason}"), 3, 0),
+    }
 }

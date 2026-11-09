@@ -56,6 +56,23 @@ pub fn init(rtc: &Rx8130) -> DateTime {
     t
 }
 
+/// Writes the system time (after an NTP sync) to the RTC.
+pub fn store_system_time(rtc: &Rx8130) {
+    let mut tv = sys::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    unsafe { sys::gettimeofday(&mut tv, core::ptr::null_mut()) };
+    let t = DateTime::from_unix(tv.tv_sec);
+    match rtc.set_time(&t) {
+        Ok(()) => log::info!(
+            "clock: NTP time {t:?} UTC written to the RTC, local {}",
+            now().hms()
+        ),
+        Err(e) => log::error!("clock: RTC write failed: {e}"),
+    }
+}
+
 fn set_system_time(unix: i64) {
     let tv = sys::timeval {
         tv_sec: unix,
