@@ -1,2 +1,4 @@
 /target
 /.embuild
+# ESP-IDF component manager lock, written by esp-idf-sys builds
+components_*.lock

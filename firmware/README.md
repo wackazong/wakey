@@ -9,6 +9,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5
 | `ppa_probe` | With the display streaming: PPA and 2D-DMA throughput (rotate and copy a 640×720 window), and a sweep of strip heights that reports the first PPA stall (the < 8-line limitation) |
 | `display_test` | Panel bring-up, tear-free double buffering, cost of a full-screen CPU fill; a second Embassy task logs a heartbeat |
 | `slint_test` | Slint: clock digits, a continuous animation, and a 300-row list you drag and fling by touch, composed by the list layer at 66 fps |
+| `audio_test` | Switches on USB-A 5 V, enumerates a USB Audio Class 1.0 speaker (Creative Pebble V3) and plays a quiet 440 Hz sine; logs the audio descriptors, mute/volume and packet counters |
 | `buoyant_test` | Buoyant (SwiftUI-like, embedded-graphics): clock digits, animated toggle, sliding bar, changing rows |
 
 Each logs frame statistics once per second, for example:
@@ -49,6 +50,7 @@ an 8 MB app partition. Set a port with
 ```
 src/
 ├─ runtime.rs           Embassy executor on the main FreeRTOS task
+├─ audio/uac.rs         USB Audio Class 1.0 output (Pebble) on ESP-IDF's host stack
 ├─ board/               PCB facts and bring-up order (Board::init)
 │  ├─ i2c.rs            system I2C (GPIO31/32), bus recovery
 │  ├─ ioexp.rs          PI4IOE5V6408 expanders 0x43/0x44: resets, rails
@@ -224,7 +226,42 @@ Open ends:
   large dirty areas.
 - PPA fills for Buoyant's full-screen clears (18 ms of its 48 ms frame).
 
+## USB audio (Creative Pebble V3 on USB-A)
+
+`src/audio/uac.rs` is a UAC 1.0 speaker driver in Rust on top of ESP-IDF's
+USB host library (no C class driver). It parses the configuration
+descriptor, selects the 48 kHz / 16 bit / stereo alternate setting, sets
+the sample rate, unmutes and sets the volume (feature unit), and keeps
+3 isochronous transfers of 8 × 1 ms packets in flight. Each is refilled
+from a sample source in its completion callback. Measured: 1000 packets/s,
+no failures; the tone plays.
+
+What it took on the Tab5 (each was needed):
+
+- **Full-speed-only host:** `HCFG.FSLSSupp` is set on the high-speed
+  controller after `usb_host_install`, before the root port is powered.
+  Without it the full-speed Pebble never enumerated on the USB-A port
+  ("Root port reset failed"; same symptom as m5stack/M5Stack#344). The
+  first two resets still fail; the host stack's root-port recovery then
+  enumerates the device about 1 s after the port is powered. Newer
+  `espressif/usb` releases call this `fsls_only`, but it needs a newer
+  ESP-IDF HAL than 5.5.5.
+- **Order:** install the host with the root port unpowered, switch on
+  USB5V_EN, wait 1 s, then power the root port (retries by power cycling).
+- **`SET_INTERFACE`:** ESP-IDF's `usb_host_interface_claim` does not send
+  it. Without it the Pebble acknowledges every packet but stays silent.
+- The Pebble's real descriptors: VID 041e / PID 3272, control interface 1,
+  feature unit 9 (volume −60…0 dB in 0.6 dB steps, persists across
+  power cycles), streaming interface 2 alt 1, isochronous OUT endpoint
+  0x02, 192 bytes per 1 ms, 48 kHz only, sample-rate control on the
+  endpoint. Its LED: solid green = USB audio (low gain), flashing green =
+  Bluetooth pairing (USB set-up failed).
+
+Open: unplug/replug handling, a ring buffer fed by the player (decoder,
+resampler) instead of a callback, stopping the stream, power budget
+measurement at higher volumes.
+
 ## Not done yet
 
 Touch is wired to Slint and the list layer, not to Buoyant. Also missing:
-RTC, audio, Wi-Fi, sleep.
+RTC, the audio player (files, decoding), Wi-Fi, sleep.

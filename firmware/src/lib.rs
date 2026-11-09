@@ -11,6 +11,7 @@
 //!
 //! Applications live in `src/bin/` and only use these handles.
 
+pub mod audio;
 pub mod board;
 pub mod display;
 pub mod profiler;
