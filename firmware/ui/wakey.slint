@@ -1,176 +1,34 @@
-// The alarm clock's screens. Landscape 1280×720, dark: the display is the
-// room's night light, so no large bright areas.
-//
-// Text fields that change at different rates are separate, fixed-width
-// items: the once-a-second update dirties only the seconds, the big digits
-// only when they change, and digit widths cannot shift the layout.
+// The alarm clock's UI: one landscape 1280×720 window showing one page at a
+// time. Pages talk to Rust through globals (`Clock`, `AlarmEditor`); the
+// view models are in `src/app/`.
 //
 // One font face only: Slint pre-renders every imported face at every pixel
-// size used in this file (ASCII set), and the 280 px digits alone are
-// about 2 MB of flash per face.
+// size used in this program (ASCII plus the characters of string
+// literals), and the 280 px digits alone are about 2 MB of flash per face.
+// Sizes in use: 24, 30, 40, 64, 140, 280 px; reuse them.
 
 import "fonts/Inter-24pt-Medium.ttf";
+import { Theme } from "wakey/theme.slint";
+import { Clock, ClockPage } from "wakey/clock_page.slint";
+import { AlarmEditor, AlarmPage } from "wakey/alarm_page.slint";
 
-export component ClockScreen inherits Window {
+export { Clock, AlarmEditor }
+
+export component AppWindow inherits Window {
     width: 1280px;
     height: 720px;
-    background: #0b0e12;
+    background: Theme.background;
     default-font-family: "Inter 24pt";
 
-    in property <string> hours: "--";
-    in property <string> minutes: "--";
-    in property <string> seconds: "--";
-    // "Montag, 9. November 2026"
-    in property <string> date: "";
-    // Next alarm, or why there is none.
-    in property <string> alarm: "";
-    in property <bool> speaker-connected: false;
-    // Wi-Fi: one line of text, a state for its colour (0 off, 1 busy,
-    // 2 connected, 3 error) and signal bars (0–4).
-    in property <string> wifi-text: "";
-    in property <int> wifi-state: 0;
-    in property <int> wifi-bars: 0;
-    // Alarm: 0 idle, 1 ringing, 2 snoozed; snoozes still allowed.
-    in property <int> alarm-phase: 0;
-    in property <int> snoozes-left: 0;
-
-    // Ringing: a tap anywhere snoozes (while snoozes are left); stopping
-    // takes holding the button in the top-right corner for 1.5 s.
-    callback snooze();
-    callback stop();
+    // 0 clock, 1 alarm settings.
+    in-out property <int> page: 0;
 
     // Never shown: makes the compiler embed glyphs that only appear in
-    // strings set from Rust (dates, Wi-Fi errors). Slint embeds ASCII plus
-    // the characters of string literals.
-    Text { visible: false; text: "ÄÖÜäöüß…·"; font-size: 24px; }
+    // strings set from Rust (dates, Wi-Fi errors, alarm texts).
+    Text { visible: false; text: "ÄÖÜäöüß…·–"; font-size: 24px; }
+    Text { visible: false; text: "ÄÖÜäöüß·×–"; font-size: 30px; }
     Text { visible: false; text: "ÄÖÜäöüß"; font-size: 40px; }
-    Text { visible: false; text: "ÄÖÜäöüß·×"; font-size: 30px; }
 
-    property <bool> ringing: root.alarm-phase == 1;
-    property <color> digits: root.ringing ? #ffb347 : #f0f4f8;
-
-    // Snooze: the whole screen, under everything else.
-    TouchArea {
-        enabled: root.ringing && root.snoozes-left > 0;
-        clicked => { root.snooze(); }
-    }
-
-    // Time: HH:MM large, seconds small to the right, on the same baseline.
-    HorizontalLayout {
-        x: 0;
-        y: 150px;
-        width: parent.width;
-        height: 360px;
-        alignment: center;
-        spacing: 0;
-
-        Text { text: root.hours; width: 380px; font-size: 280px; font-weight: 500; color: root.digits; horizontal-alignment: center; vertical-alignment: center; }
-        Text { text: ":"; width: 90px; font-size: 280px; font-weight: 500; color: #4a5560; horizontal-alignment: center; vertical-alignment: center; }
-        Text { text: root.minutes; width: 380px; font-size: 280px; font-weight: 500; color: root.digits; horizontal-alignment: center; vertical-alignment: center; }
-        Rectangle {
-            width: 120px;
-            Text {
-                x: 10px;
-                y: 212px;
-                width: 110px;
-                height: 72px;
-                text: root.seconds;
-                font-size: 64px;
-                font-weight: 500;
-                color: #66727f;
-                horizontal-alignment: left;
-                vertical-alignment: center;
-            }
-        }
-    }
-
-    Text {
-        x: 0;
-        y: 510px;
-        width: parent.width;
-        height: 56px;
-        text: !root.ringing ? root.date
-            : root.snoozes-left > 0 ? "Tippen zum Schlummern · noch \{root.snoozes-left}×"
-            : "Zum Ausschalten oben rechts halten";
-        font-size: 40px;
-        color: root.ringing ? #ffb347 : #8899aa;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    // Bottom bar: alarm on the left; Wi-Fi and speaker state on the right.
-    Text {
-        x: 40px;
-        y: parent.height - 70px;
-        width: 800px;
-        height: 44px;
-        text: root.alarm;
-        font-size: 30px;
-        color: root.alarm-phase == 0 ? #66727f : #b08a3a;
-        vertical-alignment: center;
-    }
-    Text {
-        x: parent.width - 640px;
-        y: parent.height - 110px;
-        width: 560px;
-        height: 36px;
-        text: root.wifi-text;
-        font-size: 24px;
-        color: root.wifi-state == 2 ? #8899aa : root.wifi-state == 1 ? #b08a3a : root.wifi-state == 3 ? #b0574a : #4a5560;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-    }
-    // Signal bars, right of the Wi-Fi text.
-    for i in 4: Rectangle {
-        x: parent.width - 66px + i * 7px;
-        y: parent.height - 80px - (i + 1) * 5px;
-        width: 5px;
-        height: (i + 1) * 5px;
-        border-radius: 1px;
-        background: i < root.wifi-bars ? (root.wifi-state == 2 ? #8899aa : #b08a3a) : #262d35;
-    }
-    Text {
-        x: parent.width - 440px;
-        y: parent.height - 70px;
-        width: 400px;
-        height: 44px;
-        text: root.speaker-connected ? "Lautsprecher verbunden" : "Kein Lautsprecher";
-        font-size: 24px;
-        color: root.speaker-connected ? #4f9a6c : #4a5560;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-    }
-
-    // Stop: hold until the bar has filled.
-    if root.alarm-phase != 0: Rectangle {
-        x: parent.width - 400px;
-        y: 30px;
-        width: 360px;
-        height: 96px;
-        border-radius: 48px;
-        clip: true;
-        background: #1c232b;
-        border-width: 2px;
-        border-color: #3a4450;
-
-        Rectangle {
-            x: 0;
-            width: stop-area.pressed ? parent.width : 0;
-            animate width { duration: stop-area.pressed ? 1500ms : 0ms; }
-            background: #7a4a2a;
-        }
-        Text {
-            text: "Halten: Wecker aus";
-            font-size: 30px;
-            color: #f0f4f8;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-        stop-area := TouchArea { }
-        Timer {
-            interval: 1500ms;
-            running: stop-area.pressed;
-            triggered => { root.stop(); }
-        }
-    }
+    if root.page == 0: ClockPage { }
+    if root.page == 1: AlarmPage { }
 }

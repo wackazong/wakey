@@ -39,6 +39,21 @@ impl Config {
         Ok(c)
     }
 
+    /// The file's text with its `alarm` section replaced by `alarm`, every
+    /// other field kept. `json` is the current text, `None` if there is no
+    /// file; text that is not a JSON object is replaced by the defaults
+    /// plus `alarm`.
+    pub fn with_alarm(json: Option<&str>, alarm: &AlarmConfig) -> String {
+        let mut value = json
+            .and_then(|t| serde_json::from_str::<Value>(t).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| serde_json::to_value(Self::default()).expect("config JSON"));
+        value["alarm"] = serde_json::to_value(alarm).expect("alarm JSON");
+        let mut text = serde_json::to_string_pretty(&value).expect("JSON value");
+        text.push('\n');
+        text
+    }
+
     /// `json` with every missing field added at its default, pretty-printed;
     /// `None` if nothing is missing (or `json` is not an object). Values
     /// already there, unknown fields included, stay as they are.
@@ -119,6 +134,32 @@ mod tests {
         assert_eq!(Config::fill_in_defaults(&filled), None);
         assert_eq!(Config::fill_in_defaults("[]"), None);
         assert_eq!(Config::fill_in_defaults("not json"), None);
+    }
+
+    #[test]
+    fn alarm_written_into_the_file() {
+        let alarm = AlarmConfig {
+            enabled: true,
+            hour: 5,
+            minute: 45,
+            weekdays: [0, 0, 0, 0, 0, 1, 1],
+            ..AlarmConfig::default()
+        };
+        let text = r#"{ "wifi": { "ssid": "Netz" }, "alarm": { "sound": "a.wav" }, "x": [1] }"#;
+        let out = Config::with_alarm(Some(text), &alarm);
+        let c = Config::parse(&out).unwrap();
+        assert_eq!(c.alarm, alarm);
+        assert_eq!(c.wifi.unwrap().ssid, "Netz");
+        assert_eq!(serde_json::from_str::<Value>(&out).unwrap()["x"][0], 1);
+        // No file or a broken one: defaults plus the alarm.
+        for json in [None, Some("kaputt")] {
+            assert_eq!(
+                Config::parse(&Config::with_alarm(json, &alarm))
+                    .unwrap()
+                    .alarm,
+                alarm
+            );
+        }
     }
 
     #[test]

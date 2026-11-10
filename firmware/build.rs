@@ -4,6 +4,7 @@ fn main() {
     // file uses; the clock's 280 px digits are megabytes). The generated
     // code lands in `$OUT_DIR/<stem>.rs` and is `include!`d by its user
     // (`slint::include_modules!()` only knows the last compiled file).
+    // `ui/wakey.slint` imports its pages from `ui/wakey/`.
     for ui in ["ui/wakey.slint", "ui/ui_bench.slint"] {
         slint_build::compile_with_config(
             ui,

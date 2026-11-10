@@ -3,10 +3,12 @@
 //! alarm ringing on the USB speaker.
 //!
 //! Start-up order: board → clock from the RTC → config from the SD card →
-//! Wi-Fi thread → touch task → USB audio thread → alarm → UI. The screens
-//! are defined in `ui/wakey.slint`.
+//! Wi-Fi thread → touch task → USB audio thread → alarm → UI. The UI is
+//! defined in `ui/wakey.slint` (one window, one page at a time); each page
+//! has its view model here.
 
 mod alarm;
+mod alarm_page;
 mod clock_screen;
 
 use crate::audio::player::Player;
@@ -26,6 +28,10 @@ use std::rc::Rc;
 mod screens {
     include!(concat!(env!("OUT_DIR"), "/wakey.rs"));
 }
+
+/// `AppWindow.page` values.
+const PAGE_CLOCK: i32 = 0;
+const PAGE_ALARM: i32 = 1;
 
 /// Entry point of the `wakey` binary.
 pub fn main() -> ! {
@@ -69,9 +75,10 @@ async fn app(spawner: embassy_executor::Spawner) {
 
     let mut rot = PpaRotator::new().expect("PPA");
     let window = platform::init();
-    let screen = screens::ClockScreen::new().expect("clock screen");
-    screen.show().expect("show");
-    let _ticker = clock_screen::start(&screen, speaker, wifi, alarm);
+    let ui = screens::AppWindow::new().expect("UI");
+    ui.show().expect("show");
+    let _alarm_page = alarm_page::start(&ui, alarm.clone());
+    let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
     backlight.set_percent(100).expect("backlight");
     render_loop::run(window, display, &mut rot, None).await

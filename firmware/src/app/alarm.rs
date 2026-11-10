@@ -10,7 +10,7 @@
 use crate::audio::player::{Player, Sound};
 use crate::audio::uac::UsbAudio;
 use crate::board::sd;
-use crate::clock;
+use crate::{clock, config};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use std::path::Path;
 use wakey_core::alarm::{Alarm, AlarmConfig, Input, Phase, State};
@@ -68,6 +68,22 @@ impl AlarmClock {
             speaker,
             sounding: false,
         }
+    }
+
+    pub fn config(&self) -> &AlarmConfig {
+        &self.cfg
+    }
+
+    /// New settings: written to `config.json`, then in effect. On a write
+    /// error nothing changes.
+    pub fn set_config(&mut self, mut cfg: AlarmConfig) -> std::io::Result<()> {
+        cfg.sanitize();
+        config::save_alarm(&cfg)?;
+        log::info!("alarm: new settings {cfg:?}");
+        self.alarm.reconfigured(&cfg, clock::now());
+        self.cfg = cfg;
+        self.follow();
+        Ok(())
     }
 
     pub fn tick(&mut self) {

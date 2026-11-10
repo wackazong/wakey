@@ -6,11 +6,11 @@ What the clock is meant to become, and the decisions already taken for the parts
 
 A bedside alarm clock: large clock face, one alarm that plays a sound file from the microSD card on the Creative Pebble V3 (one USB cable for power and audio, gain switch "L"), dims and sleeps at night, wakes instantly on touch.
 
-**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout).
+**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout); alarm settings page (on/off, time, weekdays).
 
 **V1 (next):**
 
-1. **Screens:** alarm settings (on/off, time, weekdays, sound, volume) written to `config.json`, sound list (the list layer).
+1. **Screens:** sound and volume on the alarm page, sound list (the list layer).
 2. **No speaker:** if the Pebble is not connected when the alarm rings, nothing is audible today; the internal ES8388 speaker as a fallback is the planned answer.
 3. **Config:** the remaining `config.json` fields (below).
 4. **Power states** (below), measured step by step.

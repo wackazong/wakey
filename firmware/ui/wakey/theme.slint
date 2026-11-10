@@ -1,0 +1,135 @@
+// Colours and the touch controls shared by the pages. Dark: the display is
+// the room's night light, so no large bright areas. Font sizes used
+// anywhere in the program cost flash (every size is pre-rendered), so the
+// controls stick to 30 and 64 px.
+
+export global Theme {
+    out property <color> background: #0b0e12;
+    out property <color> surface: #1c232b;
+    out property <color> surface-pressed: #2a333d;
+    out property <color> outline: #3a4450;
+    out property <color> text: #f0f4f8;
+    out property <color> text-dim: #8899aa;
+    out property <color> text-faint: #4a5560;
+    out property <color> accent: #ffb347;
+    out property <color> accent-dark: #7a4a2a;
+    out property <color> ok: #4f9a6c;
+    out property <color> warn: #b08a3a;
+    out property <color> error: #b0574a;
+}
+
+// A text button.
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 88px;
+    border-radius: 44px;
+    border-width: 2px;
+    border-color: !root.enabled ? Theme.surface : root.primary ? Theme.accent : Theme.outline;
+    background: !root.enabled ? Theme.background
+        : ta.pressed ? Theme.surface-pressed
+        : root.primary ? Theme.accent-dark : Theme.surface;
+
+    Text {
+        text: root.text;
+        font-size: 30px;
+        color: root.enabled ? Theme.text : Theme.text-faint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// "+" / "−": steps once on touch, then repeats while held.
+export component StepButton inherits Rectangle {
+    in property <string> text;
+    callback step();
+    property <bool> repeating: false;
+
+    height: 88px;
+    border-radius: 24px;
+    border-width: 2px;
+    border-color: Theme.outline;
+    background: ta.pressed ? Theme.surface-pressed : Theme.surface;
+
+    Text {
+        text: root.text;
+        font-size: 64px;
+        color: Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.repeating = false;
+                root.step();
+            }
+        }
+    }
+    Timer {
+        interval: 450ms;
+        running: ta.pressed && !root.repeating;
+        triggered => { root.repeating = true; }
+    }
+    Timer {
+        interval: 90ms;
+        running: ta.pressed && root.repeating;
+        triggered => { root.step(); }
+    }
+}
+
+// A toggle chip (weekdays). The owner flips `on` in `toggled`.
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> on;
+    callback toggled();
+
+    height: 88px;
+    border-radius: 44px;
+    border-width: 2px;
+    border-color: root.on ? Theme.accent : Theme.outline;
+    background: ta.pressed ? Theme.surface-pressed : root.on ? Theme.accent-dark : Theme.background;
+
+    Text {
+        text: root.text;
+        font-size: 30px;
+        color: root.on ? Theme.text : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        clicked => { root.toggled(); }
+    }
+}
+
+// An on/off switch.
+export component Switch inherits Rectangle {
+    in property <bool> on;
+    callback toggled();
+
+    width: 128px;
+    height: 72px;
+    border-radius: 36px;
+    background: root.on ? Theme.accent-dark : Theme.surface;
+    border-width: 2px;
+    border-color: root.on ? Theme.accent : Theme.outline;
+
+    Rectangle {
+        x: root.on ? parent.width - self.width - 8px : 8px;
+        y: 8px;
+        width: 56px;
+        height: 56px;
+        border-radius: 28px;
+        background: root.on ? Theme.accent : Theme.text-faint;
+    }
+    TouchArea {
+        clicked => { root.toggled(); }
+    }
+}

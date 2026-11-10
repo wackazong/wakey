@@ -265,6 +265,19 @@ impl Alarm {
         }
     }
 
+    /// Call after the settings changed (`cfg` is the new one). An alarm
+    /// already finished today rings again today if its new time is still
+    /// ahead; one moved to a time already past stays done, so a reboot does
+    /// not catch it up.
+    pub fn reconfigured(&mut self, cfg: &AlarmConfig, now: DateTime) {
+        if self.state.phase == Phase::Idle
+            && self.state.done_on == Some(now.date())
+            && cfg.second_of_day() > now.second_of_day()
+        {
+            self.state.done_on = None;
+        }
+    }
+
     /// The next regular alarm after `now` (local time), not counting a
     /// snooze; `None` if the alarm is off.
     pub fn next(&self, cfg: &AlarmConfig, now: DateTime) -> Option<DateTime> {
@@ -285,6 +298,38 @@ impl Alarm {
                 ..day
             })
     }
+}
+
+/// German short form of a weekday selection (Monday first), with runs of
+/// three or more days joined: "Mo–Fr", "Sa, So", "Mo, Mi–Fr", "täglich",
+/// "" for none.
+pub fn weekdays_de(days: &[u8; 7]) -> String {
+    const SHORT: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+    if days.iter().all(|&d| d != 0) {
+        return "täglich".into();
+    }
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < 7 {
+        if days[i] == 0 {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i + 1 < 7 && days[i + 1] != 0 {
+            i += 1;
+        }
+        match i - start {
+            0 => parts.push(SHORT[start].to_string()),
+            1 => {
+                parts.push(SHORT[start].to_string());
+                parts.push(SHORT[i].to_string());
+            }
+            _ => parts.push(format!("{}–{}", SHORT[start], SHORT[i])),
+        }
+        i += 1;
+    }
+    parts.join(", ")
 }
 
 /// Whether an idle alarm starts ringing at `now`.
@@ -605,6 +650,39 @@ mod tests {
         c.weekdays = [1; 7];
         c.enabled = false;
         assert!(a.next(&c, winter(11, 9, 5, 0, 0).local).is_none());
+    }
+
+    #[test]
+    fn reconfigured_to_later_today_rings_again() {
+        let c = cfg();
+        let mut a = Alarm::new(State::default());
+        run(&mut a, &c, ALARM - 1, ALARM);
+        a.input(&c, at_unix(ALARM + 5), Input::Stop);
+        // Moved to 06:20 (past): stays done, also across a reboot.
+        let mut earlier = c.clone();
+        earlier.minute = 20;
+        a.reconfigured(&earlier, at_unix(ALARM + 60).local);
+        let mut b = Alarm::new(a.state().clone());
+        run(&mut b, &earlier, ALARM + 60, ALARM + 120);
+        assert!(!b.is_ringing());
+        // Moved to 07:00: rings at 07:00.
+        let mut later = c.clone();
+        later.hour = 7;
+        later.minute = 0;
+        a.reconfigured(&later, at_unix(ALARM + 60).local);
+        assert_eq!(a.state().done_on, None);
+        run(&mut a, &later, ALARM + 60, ALARM + 1800);
+        assert!(a.is_ringing());
+    }
+
+    #[test]
+    fn weekday_summary() {
+        assert_eq!(weekdays_de(&[1, 1, 1, 1, 1, 0, 0]), "Mo–Fr");
+        assert_eq!(weekdays_de(&[0, 0, 0, 0, 0, 1, 1]), "Sa, So");
+        assert_eq!(weekdays_de(&[1, 0, 1, 1, 1, 0, 0]), "Mo, Mi–Fr");
+        assert_eq!(weekdays_de(&[0, 0, 1, 0, 0, 0, 0]), "Mi");
+        assert_eq!(weekdays_de(&[1; 7]), "täglich");
+        assert_eq!(weekdays_de(&[0; 7]), "");
     }
 
     #[test]

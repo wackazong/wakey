@@ -32,7 +32,7 @@ spikes/tidal-download/  host tool: download a track from TIDAL (V2 groundwork)
 ```mermaid
 flowchart TD
     BIN["src/bin: wakey · ui_bench · audio_test"] --> APP
-    APP["app: wiring, alarm, clock screen view model"] --> UI & AUDIO & NET & CLOCK & CONFIG
+    APP["app: wiring, alarm, page view models"] --> UI & AUDIO & NET & CLOCK & CONFIG
     UI["ui: Slint platform, render loop, list layer, touch input"] --> DISPLAY & BOARD
     AUDIO["audio: USB speaker (uac), file player"] --> BOARD
     NET["net: Wi-Fi via C6, NTP"] --> BOARD
@@ -103,7 +103,9 @@ flowchart LR
 
 Measured (ST7123, 360 MHz): clock screen tick 110 panel rows, ~1 ms; `ui_bench` scrolling a 300-row list next to Slint content **66 fps** at ~0.8–7 ms CPU per frame.
 
-**Slint and flash size:** Slint pre-renders every imported font face at every pixel size a `.slint` file uses (ASCII plus the characters of string literals). The clock screen therefore imports one face (Inter Medium), and `build.rs` compiles one `.slint` file per program; each program `include!`s its own generated module. Characters that only come from Rust strings (umlauts in dates) must appear in a literal in the `.slint` file (a hidden `Text` in `wakey.slint`).
+**UI structure:** `ui/wakey.slint` is one `AppWindow` showing one page at a time (`page`: clock, alarm settings); pages live in `ui/wakey/` with shared colours and controls in `theme.slint`. Pages and Rust talk through globals (`Clock`, `AlarmEditor`); each page has its view model in `src/app/`. Switching pages repaints the screen once (~45 ms); an edit repaints only what changed (5–12 ms).
+
+**Slint and flash size:** Slint pre-renders every imported font face at every pixel size a `.slint` file uses (ASCII plus the characters of string literals). The clock screen therefore imports one face (Inter Medium), and `build.rs` compiles one `.slint` file per program; each program `include!`s its own generated module. Characters that only come from Rust strings (umlauts in dates) must appear in a literal in the `.slint` file (a hidden `Text` in `wakey.slint`). Sizes in use: 24, 30, 40, 64, 140, 280 px.
 
 ## Audio
 
@@ -125,7 +127,8 @@ flowchart LR
 
 - **Logic** (`wakey_core::alarm`, host-tested): `Alarm::tick(cfg, now)` once a second, `Alarm::input(Snooze | Stop)`, `Alarm::is_ringing()`, `Alarm::next()` for the display. Phases: idle → ringing → (snoozed → ringing)* → idle. Rings on the configured weekdays at most once per day; snooze at most `max_snoozes` (3) times for `snooze_min`; stop ends the day, also while snoozed; unanswered it is silenced after `ring_timeout_min` for good. Local time decides when it is due, Unix time measures durations: an alarm in the skipped spring hour rings at 03:00, one in the repeated autumn hour rings once. After a boot it still rings if the alarm time is less than the ring timeout ago; an alarm time crossed by a large clock jump (NTP) does not ring.
 - **Device** ([`app/alarm.rs`](../firmware/src/app/alarm.rs)): `AlarmClock` runs the state machine on the UI thread, saves the state as JSON in NVS (namespace `wakey`, key `alarm`) whenever it changes, so a reboot neither rings a finished alarm again nor loses a snooze or a ringing alarm, and makes the speaker follow: ringing → `set_streaming(true)` + `Player::ring`, otherwise stop. If the speaker connects late, the remembered streaming request starts it.
-- **Screen** (`ClockScreen` in `wakey.slint`): while ringing the digits turn amber; a tap anywhere snoozes (while snoozes are left); stop is a smaller button in the top-right corner that has to be held for 1.5 s (a filling bar) — deliberately harder than snooze. While snoozed the bottom line shows until when, and the stop button stays. Idle, the bottom line shows the next alarm ("Wecker morgen 06:30").
+- **Settings** ([`app/alarm_page.rs`](../firmware/src/app/alarm_page.rs), `ui/wakey/alarm_page.slint`): tapping the alarm line on the clock page opens it. On/off, hours and minutes with + / − (repeating while held), weekday chips Monday to Sunday; Save needs at least one weekday and writes the `alarm` section of `config.json` (`config::save_alarm`: rest of the file kept, through a temporary file), then `AlarmClock::set_config` applies it (`Alarm::reconfigured`: an alarm already stopped today rings again today only if moved to a time still ahead). The page closes after 60 s without a change and when the alarm rings.
+- **Ringing screen** (clock page): while ringing the digits turn amber; a tap anywhere snoozes (while snoozes are left); stop is a smaller button in the top-right corner that has to be held for 1.5 s (a filling bar) — deliberately harder than snooze. While snoozed the bottom line shows until when, and the stop button stays. Idle, the bottom line shows the next alarm ("Wecker morgen 06:30").
 
 ## Time
 

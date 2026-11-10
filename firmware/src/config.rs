@@ -6,6 +6,7 @@
 //! override the alarm time (`WAKEY_ALARM=HH:MM`: enabled, every day).
 
 use crate::board::sd;
+use wakey_core::alarm::AlarmConfig;
 pub use wakey_core::config::{Config, WifiConfig};
 
 pub const FILE: &str = "config.json";
@@ -52,4 +53,21 @@ pub fn load() -> Config {
         cfg.alarm.sanitize();
     }
     cfg
+}
+
+/// Writes `alarm` into `config.json`, keeping the rest of the file. Through
+/// a temporary file, so a failed write leaves the old file intact.
+pub fn save_alarm(alarm: &AlarmConfig) -> std::io::Result<()> {
+    let path = format!("{}/{FILE}", sd::MOUNT_POINT);
+    let tmp = format!("{}/config.tmp", sd::MOUNT_POINT);
+    let old = std::fs::read_to_string(&path).ok();
+    std::fs::write(&tmp, Config::with_alarm(old.as_deref(), alarm))?;
+    // FAT cannot rename onto an existing file.
+    match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    std::fs::rename(&tmp, &path)?;
+    log::info!("config: alarm saved to {path}");
+    Ok(())
 }

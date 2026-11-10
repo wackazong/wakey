@@ -24,7 +24,8 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 
 - **Stutter every second:** with 3 dirty rectangles (Slint's default) a ticking clock plus a scrolling list merged into full-screen repaints. Vendored `i-slint-core` allows 16; every independently changing text is its own fixed-width item.
 - **Flicker in the list area at start:** Slint's first full repaints land over the list; the render loop composes the list again after Slint when their areas overlap (`FrameHook::overlaps`).
-- **Flash size explodes with big fonts:** every imported face × every pixel size × ASCII is pre-rendered. Two faces at 300 px overflowed the app partition. One face per screen file, one `.slint` file per program.
+- **Flash size explodes with big fonts:** every imported face × every pixel size × ASCII is pre-rendered. Two faces at 300 px overflowed the app partition. One face per program, one compiled `.slint` file per program (pages are imported). Each new size costs: adding 140 px (alarm page) grew `wakey` by 1.4 MB; reuse the sizes listed in `ui/wakey.slint`.
+- **Many dirty rectangles side by side are slow:** when several dirty items share the same lines (seven weekday chips), Slint hands out more line ranges than the PPA path keeps open strips (3); every strip is flushed after one line and padded from PSRAM. Seven chips took ~160 ms, a full-screen repaint ~40 ms. Keep an edit's repaint to the items that change: no binding shared by a row of items (the chips own their state), no `for` over an array literal built from changing values (it re-creates its children; use fixed components).
 - **Missing glyphs** for characters that only come from Rust strings (e.g. "März"): put them into a literal in the `.slint` file.
 
 ## Touch and I2C

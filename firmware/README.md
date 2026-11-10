@@ -6,7 +6,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5. Des
 
 | Binary | What it is |
 | --- | --- |
-| `wakey` | The alarm clock: clock screen (RTC time, Europe/Zurich, date, next alarm, Wi-Fi and speaker status), the alarm ringing on the USB speaker (snooze, stop), Wi-Fi + NTP, touch |
+| `wakey` | The alarm clock: clock page (RTC time, Europe/Zurich, date, next alarm, Wi-Fi and speaker status), alarm settings page (tap the alarm line), the alarm ringing on the USB speaker (snooze, stop), Wi-Fi + NTP, touch |
 | `ui_bench` | Slint and list-layer bench: clock digits, an animation and a 300-row list to drag and fling; frame statistics on screen and in the log (target 66 fps) |
 | `audio_test` | USB speaker test: plays every WAV/AIFF in the SD card root and `sounds/` in a loop (writes a 44.1 kHz test tone first), or a 440 Hz sine without a card; logs packets and underruns; survives re-plugging |
 
@@ -31,7 +31,7 @@ Before committing: `cargo fmt`, `cargo clippy --release --bins` (here and in `wa
 
 FAT, in the root:
 
-- `config.json`: `wifi` (`ssid`, `password`) and `alarm` (`enabled`, `hour`, `minute`, `weekdays` Monday to Sunday as 0/1, optional `sound` path such as `"sounds/morgen.wav"`, `volume` 0–100, `fade_in_s`, `snooze_min`, `max_snoozes`, `ring_timeout_min`). The firmware adds missing settings at their defaults (alarm off, 06:30 Monday to Friday, 3 snoozes of 9 min, 10 min ring timeout), so after the first boot the file lists everything. More fields are planned, see [docs/roadmap.md](../docs/roadmap.md).
+- `config.json`: `wifi` (`ssid`, `password`) and `alarm`, which the alarm page edits (`enabled`, `hour`, `minute`, `weekdays` Monday to Sunday as 0/1, optional `sound` path such as `"sounds/morgen.wav"`, `volume` 0–100, `fade_in_s`, `snooze_min`, `max_snoozes`, `ring_timeout_min`). The firmware adds missing settings at their defaults (alarm off, 06:30 Monday to Friday, 3 snoozes of 9 min, 10 min ring timeout), so after the first boot the file lists everything. More fields are planned, see [docs/roadmap.md](../docs/roadmap.md).
 - For development the build environment can provide Wi-Fi credentials (`WAKEY_WIFI_SSID=… WAKEY_WIFI_PASSWORD=…`) and a test alarm (`WAKEY_ALARM=07:38`: enabled, every day, overrides the file) to `cargo run --release --bin wakey`. Flash a build without `WAKEY_ALARM` afterwards, or it rings every day at that time.
 - Sound files (WAV or AIFF/AIFC, PCM 8–32 bit, mono or stereo, any sample rate) in the root or `sounds/`.
 
@@ -42,8 +42,9 @@ src/
 ├─ lib.rs              layer overview
 ├─ app/                the alarm clock
 │  ├─ mod.rs           start-up wiring (app::main)
-│  ├─ alarm.rs         the alarm: state machine, NVS, speaker
-│  └─ clock_screen.rs  clock screen view model (time, date, alarm, Wi-Fi, speaker)
+│  ├─ alarm.rs         the alarm: state machine, NVS, speaker, settings
+│  ├─ alarm_page.rs    alarm settings page view model
+│  └─ clock_screen.rs  clock page view model (time, date, alarm, Wi-Fi, speaker)
 ├─ ui/
 │  ├─ platform.rs      Slint platform, windows, rendering through the PPA
 │  ├─ render_loop.rs   frame loop, FrameHook
@@ -72,7 +73,7 @@ src/
 ├─ runtime.rs          Embassy executor on its own 64 KiB task
 ├─ profiler.rs         sampling profiler (core 0)
 └─ bin/                wakey, ui_bench, audio_test
-ui/                    .slint files (one per program), fonts (Inter, OFL)
+ui/                    wakey.slint (window) + wakey/ (pages, theme), ui_bench.slint, fonts (Inter, OFL)
 vendor/                patched Slint and esp-idf-svc (see vendor/README.md)
 scripts/               flash.sh (cargo runner), profile.sh
 sdkconfig.defaults     ESP-IDF configuration (commented)
@@ -80,7 +81,7 @@ sdkconfig.defaults     ESP-IDF configuration (commented)
 
 ## How to …
 
-**Add a screen.** Add the component to `ui/wakey.slint` (one font face, fixed-width `Text` items for values that change on their own), create it in `app/mod.rs`, and put its view model next to `app/clock_screen.rs`: set only properties that changed. Characters that only come from Rust strings need a literal in the `.slint` file, or they are not rendered. Check the image size: `cargo run` prints `App/part. size`.
+**Add a page.** A component in `ui/wakey/` with a global for its data and callbacks, using the controls in `theme.slint`; a `page` value and an `if` in `ui/wakey.slint` (export the global there); a view model in `app/` that fills the global and handles its callbacks, set up in `app/mod.rs`. Set only properties that changed, use fixed-width `Text` items for values that change on their own, and keep an edit's repaint small (see the dirty-rectangle entry in `docs/pitfalls.md`). Reuse the font sizes in use; characters that only come from Rust strings need a literal in a `.slint` file. Check the image size: `cargo run` prints `App/part. size`.
 
 **Test the alarm.** `WAKEY_ALARM=HH:MM cargo run --release --bin wakey` a few minutes ahead; the log shows `alarm: Ringing …`, `uac: stream on`, and `alarm: Idle` after the ring timeout. Unit tests for the rules are in `wakey-core/src/alarm.rs`.
 

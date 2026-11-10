@@ -5,7 +5,7 @@
 //! ~110 panel rows). The ringing controls are on this screen too.
 
 use super::alarm::{AlarmClock, View};
-use super::screens::ClockScreen;
+use super::screens::{AppWindow, Clock};
 use crate::audio::uac::UsbAudio;
 use crate::clock;
 use crate::net::{Failure, Status, Wifi};
@@ -22,33 +22,33 @@ pub struct Ticker {
 }
 
 /// Fills the screen now and then every second, and connects the ringing
-/// controls to `alarm`.
+/// controls to `alarm`. When the alarm rings, the clock page is shown.
 pub fn start(
-    screen: &ClockScreen,
+    window: &AppWindow,
     speaker: UsbAudio,
     wifi: Wifi,
     alarm: Rc<RefCell<AlarmClock>>,
 ) -> Ticker {
-    let weak = screen.as_weak();
+    let weak = window.as_weak();
     let refresh = {
         let alarm = alarm.clone();
         Rc::new(move || {
-            if let Some(screen) = weak.upgrade() {
-                update(&screen, &speaker, &wifi, &alarm.borrow());
+            if let Some(window) = weak.upgrade() {
+                update(&window, &speaker, &wifi, &alarm.borrow());
             }
         })
     };
-    for (input, register) in [
-        (Input::Snooze, ClockScreen::on_snooze as fn(&ClockScreen, _)),
-        (Input::Stop, ClockScreen::on_stop),
-    ] {
+    let on_input = |input: Input| {
         let alarm = alarm.clone();
         let refresh = refresh.clone();
-        register(screen, move || {
+        move || {
             alarm.borrow_mut().input(input);
             refresh();
-        });
-    }
+        }
+    };
+    let globals = window.global::<Clock>();
+    globals.on_snooze(on_input(Input::Snooze));
+    globals.on_stop(on_input(Input::Stop));
     let tick = move || {
         alarm.borrow_mut().tick();
         refresh();
@@ -76,7 +76,8 @@ pub fn start(
     }
 }
 
-fn update(screen: &ClockScreen, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmClock) {
+fn update(window: &AppWindow, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmClock) {
+    let screen = window.global::<Clock>();
     fn set_text(current: SharedString, new: String, set: impl Fn(SharedString)) {
         if current.as_str() != new {
             set(new.into());
@@ -98,6 +99,9 @@ fn update(screen: &ClockScreen, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmCl
     set_text(screen.get_alarm(), alarm_line(&view, &t), |v| {
         screen.set_alarm(v)
     });
+    if matches!(view, View::Ringing { .. }) && window.get_page() != super::PAGE_CLOCK {
+        window.set_page(super::PAGE_CLOCK);
+    }
     let (phase, snoozes_left) = match view {
         View::Idle { .. } => (0, 0),
         View::Ringing { snoozes_left } => (1, snoozes_left),

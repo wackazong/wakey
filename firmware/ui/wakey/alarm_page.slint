@@ -1,0 +1,187 @@
+// Alarm settings: on/off, time (hours and minutes with + / −, repeating
+// while held) and one or more weekdays. Saving needs at least one weekday.
+//
+// ┌ Abbrechen ─────────── Wecker ─────────── Speichern ┐
+// │            [+]                  [+]                │
+// │            06         :         30                 │
+// │            [−]                  [−]                │
+// │  (Mo)(Di)(Mi)(Do)(Fr)(Sa)(So)                      │
+// │  [on/off] Wecker an          Klingelt Mo–Fr um 06:30 │
+// └────────────────────────────────────────────────────┘
+
+import { Theme, Button, StepButton, Chip, Switch } from "theme.slint";
+
+// The values being edited; filled from Rust when the page opens
+// (`app/alarm_page.rs`), read back on save.
+export global AlarmEditor {
+    in-out property <bool> enabled;
+    in-out property <int> hour;
+    in-out property <int> minute;
+    // Monday to Sunday, read by the chips when the page opens. Each chip
+    // then keeps its own state and reports toggles (`day-toggled`); Rust
+    // holds the selection. A binding shared by all seven chips would
+    // repaint all of them on every toggle: seven side-by-side dirty
+    // rectangles cost ~160 ms (see docs/pitfalls.md), one chip ~5 ms.
+    in property <[bool]> days: [false, false, false, false, false, false, false];
+    // At least one day selected (set from Rust).
+    in property <bool> any-day;
+    // "Klingelt Mo–Fr um 06:30", set from Rust after every change.
+    in property <string> summary;
+    // Why saving failed, or empty.
+    in property <string> error;
+
+    // Any change (for the summary and the inactivity timeout).
+    callback edited();
+    callback day-toggled(int, bool);
+    callback save();
+    callback cancel();
+}
+
+// "+", the two-digit value, "−".
+component TimeColumn inherits Rectangle {
+    in property <int> value;
+    callback up();
+    callback down();
+
+    y: 136px;
+    width: 180px;
+    height: 340px;
+
+    StepButton {
+        y: 0;
+        width: parent.width;
+        text: "+";
+        step => { root.up(); }
+    }
+    Text {
+        x: -40px;
+        y: 88px;
+        width: parent.width + 80px;
+        height: 164px;
+        text: root.value < 10 ? "0\{root.value}" : "\{root.value}";
+        font-size: 140px;
+        font-weight: 500;
+        color: AlarmEditor.enabled ? Theme.text : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    StepButton {
+        y: parent.height - self.height;
+        width: parent.width;
+        text: "−";
+        step => { root.down(); }
+    }
+}
+
+export component AlarmPage inherits Rectangle {
+    width: 1280px;
+    height: 720px;
+    background: Theme.background;
+
+    property <bool> can-save: AlarmEditor.any-day;
+
+    // Swallows touches between the controls.
+    TouchArea { }
+
+    // Top bar.
+    Button {
+        x: 40px;
+        y: 24px;
+        width: 260px;
+        text: "Abbrechen";
+        clicked => { AlarmEditor.cancel(); }
+    }
+    Text {
+        x: 300px;
+        y: 24px;
+        width: parent.width - 600px;
+        height: 88px;
+        text: "Wecker";
+        font-size: 40px;
+        color: Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Button {
+        x: parent.width - 300px;
+        y: 24px;
+        width: 260px;
+        text: "Speichern";
+        primary: true;
+        enabled: root.can-save;
+        clicked => { AlarmEditor.save(); }
+    }
+
+    // Time.
+    TimeColumn {
+        x: 290px;
+        value: AlarmEditor.hour;
+        up => { AlarmEditor.hour = Math.mod(AlarmEditor.hour + 1, 24); AlarmEditor.edited(); }
+        down => { AlarmEditor.hour = Math.mod(AlarmEditor.hour + 23, 24); AlarmEditor.edited(); }
+    }
+    TimeColumn {
+        x: 810px;
+        value: AlarmEditor.minute;
+        up => { AlarmEditor.minute = Math.mod(AlarmEditor.minute + 1, 60); AlarmEditor.edited(); }
+        down => { AlarmEditor.minute = Math.mod(AlarmEditor.minute + 59, 60); AlarmEditor.edited(); }
+    }
+    Text {
+        x: 470px;
+        y: 224px;
+        width: 340px;
+        height: 164px;
+        text: ":";
+        font-size: 140px;
+        font-weight: 500;
+        color: Theme.text-faint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // Weekdays.
+    for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
+        x: 102px + i * 156px;
+        y: 504px;
+        width: 140px;
+        text: name;
+        on: AlarmEditor.days[i];
+        toggled => {
+            self.on = !self.on;
+            AlarmEditor.day-toggled(i, self.on);
+        }
+    }
+
+    // On/off and what it means.
+    Switch {
+        x: 102px;
+        y: 620px;
+        on: AlarmEditor.enabled;
+        toggled => {
+            AlarmEditor.enabled = !AlarmEditor.enabled;
+            AlarmEditor.edited();
+        }
+    }
+    Text {
+        x: 250px;
+        y: 620px;
+        width: 260px;
+        height: 72px;
+        text: AlarmEditor.enabled ? "Wecker an" : "Wecker aus";
+        font-size: 30px;
+        color: AlarmEditor.enabled ? Theme.text : Theme.text-dim;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 520px;
+        y: 620px;
+        width: parent.width - 520px - 102px;
+        height: 72px;
+        text: AlarmEditor.error != "" ? AlarmEditor.error
+            : !root.can-save ? "Mindestens einen Tag wählen"
+            : AlarmEditor.summary;
+        font-size: 30px;
+        color: AlarmEditor.error != "" ? Theme.error : !root.can-save ? Theme.warn : Theme.text-dim;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
