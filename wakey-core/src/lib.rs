@@ -10,6 +10,7 @@
 //! - [`resample`]: sample-rate conversion to the speaker's 48 kHz.
 //! - [`uac`]: USB Audio Class 1.0 configuration descriptor parsing.
 //! - [`config`]: the `config.json` model.
+//! - [`tone`]: the built-in alarm tone, volume curve and fade-in.
 //! - [`scroll`]: touch scrolling physics (drag, fling, rubber band, spring).
 
 pub mod alarm;
@@ -18,4 +19,5 @@ pub mod config;
 pub mod datetime;
 pub mod resample;
 pub mod scroll;
+pub mod tone;
 pub mod uac;

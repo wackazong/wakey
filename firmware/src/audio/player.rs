@@ -3,6 +3,11 @@
 //! fills a one-second ring buffer in PSRAM; the USB audio stream takes from
 //! the ring through [`Player::source`]. When the ring runs empty the stream
 //! plays silence and counts an underrun.
+//!
+//! [`Player::play`] plays a file once (tests); [`Player::ring`] is the
+//! alarm: a file in a loop, or the built-in [`Beeper`] tone if there is no
+//! file or it cannot be read, with a volume and a fade-in applied in
+//! [`Player::source`].
 
 use super::uac::{self, Source};
 use std::collections::VecDeque;
@@ -11,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use wakey_core::audio_file::AudioFile;
 use wakey_core::resample::Converter;
+use wakey_core::tone::{self, Beeper};
 
 /// Ring capacity: one second of 48 kHz stereo.
 const RING_SAMPLES: usize = uac::SAMPLE_RATE as usize * 2;
@@ -24,6 +30,18 @@ struct Ring {
     /// Set once the decoder has delivered data: underruns count from here.
     armed: AtomicBool,
     stop: AtomicBool,
+    /// Output gain (f32 bits) and fade-in length in frames.
+    gain: AtomicU32,
+    fade_frames: AtomicU32,
+    /// Set by `play`/`ring`: the source restarts the fade.
+    restart_fade: AtomicBool,
+}
+
+/// What [`Player::ring`] plays.
+pub enum Sound {
+    /// A file, repeated; the tone if it cannot be played.
+    File(PathBuf),
+    Tone,
 }
 
 /// Counters for logs.
@@ -48,6 +66,9 @@ impl Player {
                 playing: AtomicBool::new(false),
                 armed: AtomicBool::new(false),
                 stop: AtomicBool::new(false),
+                gain: AtomicU32::new(1f32.to_bits()),
+                fade_frames: AtomicU32::new(0),
+                restart_fade: AtomicBool::new(false),
             }),
         }
     }
@@ -55,12 +76,24 @@ impl Player {
     /// The sample source for the USB stream ([`uac::UsbAudio::start`]).
     pub fn source(&self) -> Source {
         let ring = self.ring.clone();
+        let mut frames: u64 = 0;
         Box::new(move |buf: &mut [i16]| {
+            if ring.restart_fade.swap(false, Ordering::AcqRel) {
+                frames = 0;
+            }
+            let full = f32::from_bits(ring.gain.load(Ordering::Relaxed));
+            let fade = u64::from(ring.fade_frames.load(Ordering::Relaxed));
+            let gain = tone::faded(full, frames, fade);
             let mut q = ring.samples.lock().unwrap();
             let n = buf.len().min(q.len());
             for (dst, s) in buf.iter_mut().zip(q.drain(..n)) {
-                *dst = s;
+                *dst = if gain == 1.0 {
+                    s
+                } else {
+                    (f32::from(s) * gain) as i16
+                };
             }
+            frames += (n / 2) as u64;
             drop(q);
             ring.space.notify_one();
             buf[n..].fill(0);
@@ -80,10 +113,45 @@ impl Player {
         self.ring.space.notify_all();
     }
 
-    /// Starts playing `path` on a decoder thread; returns at once.
+    /// Plays `path` once at full gain on a decoder thread; returns at once.
     pub fn play(&self, path: impl Into<PathBuf>) {
         let path = path.into();
+        self.start(1.0, 0, move |ring| {
+            if let Err(e) = decode(&path, ring, false) {
+                log::error!("player: {}: {e}", path.display());
+            }
+        });
+    }
+
+    /// Plays `sound` until [`stop`](Self::stop), at `gain` (linear) after a
+    /// fade-in of `fade_s` seconds.
+    pub fn ring(&self, sound: Sound, gain: f32, fade_s: u16) {
+        let fade_frames = u32::from(fade_s) * uac::SAMPLE_RATE;
+        self.start(gain, fade_frames, move |ring| {
+            if let Sound::File(path) = sound {
+                match decode(&path, ring, true) {
+                    Ok(()) => return,
+                    Err(e) => log::error!("player: {}: {e}; playing the tone", path.display()),
+                }
+            }
+            beep(ring);
+        });
+    }
+
+    /// Stops what is playing and starts `produce` on a new decoder thread.
+    fn start(&self, gain: f32, fade_frames: u32, produce: impl FnOnce(&Ring) + Send + 'static) {
         let ring = self.ring.clone();
+        // Let a previous decoder see the stop and clear the ring.
+        if self.is_playing() {
+            self.stop();
+            while self.is_playing() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        ring.samples.lock().unwrap().clear();
+        ring.gain.store(gain.to_bits(), Ordering::Relaxed);
+        ring.fade_frames.store(fade_frames, Ordering::Relaxed);
+        ring.restart_fade.store(true, Ordering::Release);
         ring.stop.store(false, Ordering::Release);
         ring.armed.store(false, Ordering::Release);
         ring.playing.store(true, Ordering::Release);
@@ -91,9 +159,7 @@ impl Player {
             .name("decoder".into())
             .stack_size(8192)
             .spawn(move || {
-                if let Err(e) = decode(&path, &ring) {
-                    log::error!("player: {}: {e}", path.display());
-                }
+                produce(&ring);
                 // Let the ring drain before reporting the end; the tail
                 // running dry is not an underrun.
                 ring.armed.store(false, Ordering::Release);
@@ -108,7 +174,9 @@ impl Player {
     }
 }
 
-fn decode(path: &std::path::Path, ring: &Ring) -> std::io::Result<()> {
+/// Decodes `path` into the ring, from the start again at its end if
+/// `repeat`.
+fn decode(path: &std::path::Path, ring: &Ring, repeat: bool) -> std::io::Result<()> {
     let mut file = AudioFile::open(path)?;
     let f = file.format.clone();
     log::info!(
@@ -141,6 +209,10 @@ fn decode(path: &std::path::Path, ring: &Ring) -> std::io::Result<()> {
         }
         let frames = file.read(&mut input)?;
         if frames == 0 {
+            if repeat && f.frames > 0 {
+                file.rewind()?;
+                continue;
+            }
             return Ok(());
         }
         let out: &[i16] = match resampler.as_mut() {
@@ -153,6 +225,18 @@ fn decode(path: &std::path::Path, ring: &Ring) -> std::io::Result<()> {
         };
         push(ring, out);
     }
+}
+
+/// The built-in tone until stopped.
+fn beep(ring: &Ring) {
+    log::info!("player: built-in tone");
+    let mut beeper = Beeper::new(uac::SAMPLE_RATE);
+    let mut buf = vec![0i16; CHUNK_FRAMES * 2];
+    while !ring.stop.load(Ordering::Acquire) {
+        beeper.fill(&mut buf);
+        push(ring, &buf);
+    }
+    ring.samples.lock().unwrap().clear();
 }
 
 /// Appends `samples`, waiting for space.

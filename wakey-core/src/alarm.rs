@@ -125,6 +125,17 @@ pub struct State {
     pub phase: Phase,
 }
 
+impl State {
+    /// For storage (NVS).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("alarm state JSON")
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
     #[default]
@@ -470,8 +481,7 @@ mod tests {
         let mut a = Alarm::new(State::default());
         run(&mut a, &c, ALARM - 1, ALARM);
         a.input(&c, at_unix(ALARM + 1), Input::Stop);
-        let saved: State =
-            serde_json::from_str(&serde_json::to_string(a.state()).unwrap()).unwrap();
+        let saved = State::from_json(&a.state().to_json()).unwrap();
         // Rebooted a minute later: does not ring again.
         let mut b = Alarm::new(saved);
         b.tick(&c, at_unix(ALARM + 60));

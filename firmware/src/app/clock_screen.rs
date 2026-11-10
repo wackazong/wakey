@@ -1,14 +1,19 @@
 //! The clock screen's view model: once a second, aligned to the clock's
-//! second, the time, date, Wi-Fi and speaker state go into the
-//! `ClockScreen` properties. Only fields that changed are set, so Slint
-//! repaints only those (a seconds tick dirties ~110 panel rows).
+//! second, the alarm is advanced and the time, date, alarm, Wi-Fi and
+//! speaker state go into the `ClockScreen` properties. Only fields that
+//! changed are set, so Slint repaints only those (a seconds tick dirties
+//! ~110 panel rows). The ringing controls are on this screen too.
 
+use super::alarm::{AlarmClock, View};
 use super::screens::ClockScreen;
 use crate::audio::uac::UsbAudio;
 use crate::clock;
 use crate::net::{Failure, Status, Wifi};
 use slint::{ComponentHandle, SharedString, Timer, TimerMode};
+use std::cell::RefCell;
 use std::rc::Rc;
+use wakey_core::alarm::Input;
+use wakey_core::datetime::{DateTime, WEEKDAYS_DE};
 
 /// Keeps the screen updating while alive.
 pub struct Ticker {
@@ -16,13 +21,37 @@ pub struct Ticker {
     _every_second: Rc<Timer>,
 }
 
-/// Fills the screen now and then every second.
-pub fn start(screen: &ClockScreen, speaker: UsbAudio, wifi: Wifi) -> Ticker {
+/// Fills the screen now and then every second, and connects the ringing
+/// controls to `alarm`.
+pub fn start(
+    screen: &ClockScreen,
+    speaker: UsbAudio,
+    wifi: Wifi,
+    alarm: Rc<RefCell<AlarmClock>>,
+) -> Ticker {
     let weak = screen.as_weak();
+    let refresh = {
+        let alarm = alarm.clone();
+        Rc::new(move || {
+            if let Some(screen) = weak.upgrade() {
+                update(&screen, &speaker, &wifi, &alarm.borrow());
+            }
+        })
+    };
+    for (input, register) in [
+        (Input::Snooze, ClockScreen::on_snooze as fn(&ClockScreen, _)),
+        (Input::Stop, ClockScreen::on_stop),
+    ] {
+        let alarm = alarm.clone();
+        let refresh = refresh.clone();
+        register(screen, move || {
+            alarm.borrow_mut().input(input);
+            refresh();
+        });
+    }
     let tick = move || {
-        if let Some(screen) = weak.upgrade() {
-            update(&screen, &speaker, &wifi);
-        }
+        alarm.borrow_mut().tick();
+        refresh();
     };
     tick();
     // A one-shot timer to the next full second, then a repeating one.
@@ -47,7 +76,7 @@ pub fn start(screen: &ClockScreen, speaker: UsbAudio, wifi: Wifi) -> Ticker {
     }
 }
 
-fn update(screen: &ClockScreen, speaker: &UsbAudio, wifi: &Wifi) {
+fn update(screen: &ClockScreen, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmClock) {
     fn set_text(current: SharedString, new: String, set: impl Fn(SharedString)) {
         if current.as_str() != new {
             set(new.into());
@@ -64,9 +93,22 @@ fn update(screen: &ClockScreen, speaker: &UsbAudio, wifi: &Wifi) {
         screen.set_seconds(v)
     });
     set_text(screen.get_date(), t.date_de(), |v| screen.set_date(v));
-    set_text(screen.get_alarm(), "Kein Wecker gestellt".into(), |v| {
+
+    let view = alarm.view();
+    set_text(screen.get_alarm(), alarm_line(&view, &t), |v| {
         screen.set_alarm(v)
     });
+    let (phase, snoozes_left) = match view {
+        View::Idle { .. } => (0, 0),
+        View::Ringing { snoozes_left } => (1, snoozes_left),
+        View::Snoozed { snoozes_left, .. } => (2, snoozes_left),
+    };
+    if screen.get_alarm_phase() != phase {
+        screen.set_alarm_phase(phase);
+    }
+    if screen.get_snoozes_left() != i32::from(snoozes_left) {
+        screen.set_snoozes_left(snoozes_left.into());
+    }
 
     if screen.get_speaker_connected() != speaker.connected() {
         screen.set_speaker_connected(speaker.connected());
@@ -81,6 +123,38 @@ fn update(screen: &ClockScreen, speaker: &UsbAudio, wifi: &Wifi) {
     }
     if screen.get_wifi_bars() != line.bars {
         screen.set_wifi_bars(line.bars);
+    }
+}
+
+/// The bottom-left line: the next alarm, or the snooze.
+fn alarm_line(view: &View, now: &DateTime) -> String {
+    match view {
+        View::Idle { next: None } => "Kein Wecker gestellt".into(),
+        View::Idle { next: Some(t) } => {
+            let day = if t.date() == now.date() {
+                "heute"
+            } else if t.date() == now.add_days(1).date() {
+                "morgen"
+            } else {
+                &WEEKDAYS_DE[usize::from(t.weekday) % 7][..2]
+            };
+            format!("Wecker {day} {:02}:{:02}", t.hour, t.minute)
+        }
+        View::Ringing { .. } => "Wecker klingelt".into(),
+        View::Snoozed {
+            until,
+            snoozes_left: 0,
+        } => format!(
+            "Schlummern bis {:02}:{:02} · letztes Mal",
+            until.hour, until.minute
+        ),
+        View::Snoozed {
+            until,
+            snoozes_left,
+        } => format!(
+            "Schlummern bis {:02}:{:02} · noch {snoozes_left}×",
+            until.hour, until.minute
+        ),
     }
 }
 

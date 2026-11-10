@@ -32,7 +32,7 @@ spikes/tidal-download/  host tool: download a track from TIDAL (V2 groundwork)
 ```mermaid
 flowchart TD
     BIN["src/bin: wakey · ui_bench · audio_test"] --> APP
-    APP["app: wiring, clock screen view model"] --> UI & AUDIO & NET & CLOCK & CONFIG
+    APP["app: wiring, alarm, clock screen view model"] --> UI & AUDIO & NET & CLOCK & CONFIG
     UI["ui: Slint platform, render loop, list layer, touch input"] --> DISPLAY & BOARD
     AUDIO["audio: USB speaker (uac), file player"] --> BOARD
     NET["net: Wi-Fi via C6, NTP"] --> BOARD
@@ -40,7 +40,7 @@ flowchart TD
     CONFIG["config: config.json"] --> BOARD
     BOARD["board: pins, I2C chips, power switches, Board::init"]
     DISPLAY["display: DSI panel, frame buffers, PPA, 2D-DMA, cache"]
-    APP & UI & AUDIO & CLOCK & CONFIG -.-> CORE["wakey-core: datetime, audio_file, resample, uac descriptors, config model, scroll physics"]
+    APP & UI & AUDIO & CLOCK & CONFIG -.-> CORE["wakey-core: alarm state machine, datetime, audio_file, resample, tone, uac descriptors, config model, scroll physics"]
 ```
 
 Each layer uses only the ones below it. Rules that keep it that way:
@@ -59,7 +59,7 @@ Each layer uses only the ones below it. Rules that keep it that way:
 | `app` | 64 KiB (internal) | 0 / 1 | Embassy executor: app task (Slint, render loop), touch task |
 | `usb-lib` | 4 KiB | any / 5 | ESP-IDF USB host library daemon |
 | `uac` | 8 KiB | any / 5 | USB audio client; transfer callbacks call the sample source |
-| `decoder` | 8 KiB | any / 5 | player: file → 48 kHz → ring (while playing) |
+| `decoder` | 8 KiB | any / 5 | player: file or tone → 48 kHz → ring (while playing) |
 | `wifi` | 16 KiB | any / 5 | Wi-Fi connect/reconnect, SNTP |
 | esp_hosted tasks | PSRAM | – | SDIO transport to the C6 |
 
@@ -73,12 +73,13 @@ Shared state: the system I2C bus is `Arc<Mutex<SysI2c>>` (`SharedI2c`), locked p
 
 1. `Board::init()`: I2C bus recovery (9 clocks + STOP; the RTC and expanders stay powered across resets) → expanders (rails off, LCD and touch in reset, then released) → RTC configuration → backlight PWM, dark → panel variant from the touch controller → display (DSI PHY LDO, panel init, DPI streaming) → microSD (optional).
 2. `clock::init`: time zone, system time from the RTC (or the build time).
-3. `config::load`: `config.json` from the card.
-4. `net::start`: `wifi` thread (C6 power, driver, connect, NTP → RTC).
+3. `config::load`: `config.json` from the card (missing settings are added to the file at their defaults).
+4. `net::start`: `wifi` thread (C6 power, driver, connect, NTP → RTC); NVS is taken once here and shared with the alarm.
 5. Touch task on the executor.
 6. `UsbAudio::start`: USB host, `uac` thread (VBUS, port power, device).
-7. Slint platform, clock screen, once-a-second view model update.
-8. Backlight on; the render loop runs forever.
+7. `AlarmClock::new`: alarm state from NVS.
+8. Slint platform, clock screen, once-a-second tick (alarm, then view model).
+9. Backlight on; the render loop runs forever.
 
 ## Display pipeline
 
@@ -117,14 +118,21 @@ flowchart LR
 
 - **USB** ([`audio/uac/`](../firmware/src/audio/uac)): ESP-IDF's USB host library on the high-speed port, switched to full-speed-only (`HCFG.FSLSSupp`) for the full-speed Pebble. The `uac` thread switches VBUS, powers the root port (power-cycling it if nothing enumerates), parses the descriptor (`wakey_core::uac`), claims 48 kHz / 16 bit / stereo, sends `SET_INTERFACE`, sets the sample rate, unmutes, sets the volume (−20 dB below max by default), and tears everything down when the device goes away. `UsbAudio` (`Clone`) controls it: `set_streaming`, `set_volume_db`, `set_mute`, `connected`.
 - **Stream:** 3 isochronous transfers × 8 packets × 192 bytes (1 ms of 48 kHz stereo each) in flight; each completion refills its transfer from the `Source` callback and resubmits. 1000 packets/s, no failures measured.
-- **Player** ([`audio/player.rs`](../firmware/src/audio/player.rs)): a decoder thread reads the file (`wakey_core::audio_file`), converts other rates with rubato's FFT resampler (`wakey_core::resample`; 44.1 kHz: 1029-frame blocks) into a one-second ring; the source drains it and plays silence (counted as underrun) when empty. 0 underruns measured for 48 kHz AIFF and 44.1 kHz WAV.
+- **Player** ([`audio/player.rs`](../firmware/src/audio/player.rs)): a decoder thread reads the file (`wakey_core::audio_file`), converts other rates with rubato's FFT resampler (`wakey_core::resample`; 44.1 kHz: 1029-frame blocks) into a one-second ring; the source drains it and plays silence (counted as underrun) when empty. 0 underruns measured for 48 kHz AIFF and 44.1 kHz WAV. `Player::play` plays a file once; `Player::ring` loops a file, or the built-in double beep (`wakey_core::tone`) when there is no file or it cannot be read, and the source applies the gain and a squared fade-in.
+- **Volume:** the device volume (−20 dB below its maximum) is the cap; the alarm's `volume` (0–100 %) is a digital gain below it (`tone::volume_gain`: −40 dB at 1 %, 0 dB at 100 %).
+
+## Alarm
+
+- **Logic** (`wakey_core::alarm`, host-tested): `Alarm::tick(cfg, now)` once a second, `Alarm::input(Snooze | Stop)`, `Alarm::is_ringing()`, `Alarm::next()` for the display. Phases: idle → ringing → (snoozed → ringing)* → idle. Rings on the configured weekdays at most once per day; snooze at most `max_snoozes` (3) times for `snooze_min`; stop ends the day, also while snoozed; unanswered it is silenced after `ring_timeout_min` for good. Local time decides when it is due, Unix time measures durations: an alarm in the skipped spring hour rings at 03:00, one in the repeated autumn hour rings once. After a boot it still rings if the alarm time is less than the ring timeout ago; an alarm time crossed by a large clock jump (NTP) does not ring.
+- **Device** ([`app/alarm.rs`](../firmware/src/app/alarm.rs)): `AlarmClock` runs the state machine on the UI thread, saves the state as JSON in NVS (namespace `wakey`, key `alarm`) whenever it changes, so a reboot neither rings a finished alarm again nor loses a snooze or a ringing alarm, and makes the speaker follow: ringing → `set_streaming(true)` + `Player::ring`, otherwise stop. If the speaker connects late, the remembered streaming request starts it.
+- **Screen** (`ClockScreen` in `wakey.slint`): while ringing the digits turn amber; a tap anywhere snoozes (while snoozes are left); stop is a smaller button in the top-right corner that has to be held for 1.5 s (a filling bar) — deliberately harder than snooze. While snoozed the bottom line shows until when, and the stop button stays. Idle, the bottom line shows the next alarm ("Wecker morgen 06:30").
 
 ## Time
 
 - The **RX8130 RTC** keeps UTC on a supercap (≈ 7 h). `Rx8130::get_time` rejects the power-loss flag, non-BCD values and implausible dates.
 - `clock::init` sets `TZ=CET-1CEST,M3.5.0,M10.5.0/3` (newlib applies the DST rule) and the system clock from the RTC; with no valid RTC time it uses the firmware build time (`BUILD_UNIX_TIME` from `build.rs`) and writes it back.
 - After an **NTP** sync on the `wifi` thread, the app's callback writes the system time to the RTC (`clock::store_system_time`).
-- The clock screen updates on the second: a one-shot timer to the next full second, then a 1 s repeating timer.
+- The clock screen updates on the second: a one-shot timer to the next full second, then a 1 s repeating timer. `clock::moment()` gives local and Unix time of the same instant (for the alarm).
 
 ## Network
 

@@ -6,17 +6,16 @@ What the clock is meant to become, and the decisions already taken for the parts
 
 A bedside alarm clock: large clock face, one alarm that plays a sound file from the microSD card on the Creative Pebble V3 (one USB cable for power and audio, gain switch "L"), dims and sleeps at night, wakes instantly on touch.
 
-**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi).
+**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout).
 
 **V1 (next):**
 
-1. **Alarm logic** in `wakey-core` (host-tested): one alarm time with a weekday mask, snooze (minutes, maximum count), ring timeout, "done today". Pure state machine: `next_trigger(cfg, now_local)` and `step(state, cfg, now, input) → (state, actions)`; inputs Tick / Stop / Snooze; actions start ring, stop ring, arm timer, mark done.
-2. **Screens:** alarm settings (time, weekdays, sound, volume), ringing (stop, snooze), sound list (the list layer).
-3. **Ringing:** `UsbAudio::set_streaming(true)`, player on the chosen file, fade-in, capped volume. If the speaker does not connect within a timeout or the file is missing: embedded fallback tone (internal ES8388 speaker as a later option).
-4. **Config:** the remaining `config.json` fields (below), defaults filled in and written back; snooze count and "done today" in NVS so a reboot does not ring twice.
-5. **Power states** (below), measured step by step.
-6. **Wi-Fi only when needed:** sync at most every 24 h while the display is on, then C6 unpowered (`WLAN_PWR_EN` off).
-7. FLAC playback (`claxon`), sound list scan of `sounds/`.
+1. **Screens:** alarm settings (on/off, time, weekdays, sound, volume) written to `config.json`, sound list (the list layer).
+2. **No speaker:** if the Pebble is not connected when the alarm rings, nothing is audible today; the internal ES8388 speaker as a fallback is the planned answer.
+3. **Config:** the remaining `config.json` fields (below).
+4. **Power states** (below), measured step by step.
+5. **Wi-Fi only when needed:** sync at most every 24 h while the display is on, then C6 unpowered (`WLAN_PWR_EN` off).
+6. FLAC playback (`claxon`), sound list scan of `sounds/`.
 
 **V2: TIDAL.** Songs are chosen in the TIDAL app in a playlist ("Wecker"); the device syncs that playlist, shows it with covers (160×160 RGB565, decoded once) and downloads tracks as FLAC to `sounds/`. Groundwork: [`spikes/tidal-download`](../spikes/tidal-download) (host tool, working login and download). On the device: HTTP via `esp_idf_svc::http::client`, login code shown on the display, token in the config.
 
@@ -42,7 +41,7 @@ Estimates (5 V input, factor-2 uncertainty; only measurements count): active 400
 
 ## `config.json` (planned fields)
 
-Only `wifi` is read today. Missing fields get defaults and are written back.
+`wifi` and `alarm` are read today (see [architecture.md](architecture.md#alarm)); `alarm.sound` is optional (the built-in tone without it). Missing fields get defaults and are written back.
 
 ```json
 {

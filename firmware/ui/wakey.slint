@@ -30,12 +30,30 @@ export component ClockScreen inherits Window {
     in property <string> wifi-text: "";
     in property <int> wifi-state: 0;
     in property <int> wifi-bars: 0;
+    // Alarm: 0 idle, 1 ringing, 2 snoozed; snoozes still allowed.
+    in property <int> alarm-phase: 0;
+    in property <int> snoozes-left: 0;
+
+    // Ringing: a tap anywhere snoozes (while snoozes are left); stopping
+    // takes holding the button in the top-right corner for 1.5 s.
+    callback snooze();
+    callback stop();
 
     // Never shown: makes the compiler embed glyphs that only appear in
     // strings set from Rust (dates, Wi-Fi errors). Slint embeds ASCII plus
     // the characters of string literals.
     Text { visible: false; text: "ÄÖÜäöüß…·"; font-size: 24px; }
     Text { visible: false; text: "ÄÖÜäöüß"; font-size: 40px; }
+    Text { visible: false; text: "ÄÖÜäöüß·×"; font-size: 30px; }
+
+    property <bool> ringing: root.alarm-phase == 1;
+    property <color> digits: root.ringing ? #ffb347 : #f0f4f8;
+
+    // Snooze: the whole screen, under everything else.
+    TouchArea {
+        enabled: root.ringing && root.snoozes-left > 0;
+        clicked => { root.snooze(); }
+    }
 
     // Time: HH:MM large, seconds small to the right, on the same baseline.
     HorizontalLayout {
@@ -46,9 +64,9 @@ export component ClockScreen inherits Window {
         alignment: center;
         spacing: 0;
 
-        Text { text: root.hours; width: 380px; font-size: 280px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; vertical-alignment: center; }
+        Text { text: root.hours; width: 380px; font-size: 280px; font-weight: 500; color: root.digits; horizontal-alignment: center; vertical-alignment: center; }
         Text { text: ":"; width: 90px; font-size: 280px; font-weight: 500; color: #4a5560; horizontal-alignment: center; vertical-alignment: center; }
-        Text { text: root.minutes; width: 380px; font-size: 280px; font-weight: 500; color: #f0f4f8; horizontal-alignment: center; vertical-alignment: center; }
+        Text { text: root.minutes; width: 380px; font-size: 280px; font-weight: 500; color: root.digits; horizontal-alignment: center; vertical-alignment: center; }
         Rectangle {
             width: 120px;
             Text {
@@ -71,9 +89,11 @@ export component ClockScreen inherits Window {
         y: 510px;
         width: parent.width;
         height: 56px;
-        text: root.date;
+        text: !root.ringing ? root.date
+            : root.snoozes-left > 0 ? "Tippen zum Schlummern · noch \{root.snoozes-left}×"
+            : "Zum Ausschalten oben rechts halten";
         font-size: 40px;
-        color: #8899aa;
+        color: root.ringing ? #ffb347 : #8899aa;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -86,7 +106,7 @@ export component ClockScreen inherits Window {
         height: 44px;
         text: root.alarm;
         font-size: 30px;
-        color: #66727f;
+        color: root.alarm-phase == 0 ? #66727f : #b08a3a;
         vertical-alignment: center;
     }
     Text {
@@ -119,5 +139,38 @@ export component ClockScreen inherits Window {
         color: root.speaker-connected ? #4f9a6c : #4a5560;
         horizontal-alignment: right;
         vertical-alignment: center;
+    }
+
+    // Stop: hold until the bar has filled.
+    if root.alarm-phase != 0: Rectangle {
+        x: parent.width - 400px;
+        y: 30px;
+        width: 360px;
+        height: 96px;
+        border-radius: 48px;
+        clip: true;
+        background: #1c232b;
+        border-width: 2px;
+        border-color: #3a4450;
+
+        Rectangle {
+            x: 0;
+            width: stop-area.pressed ? parent.width : 0;
+            animate width { duration: stop-area.pressed ? 1500ms : 0ms; }
+            background: #7a4a2a;
+        }
+        Text {
+            text: "Halten: Wecker aus";
+            font-size: 30px;
+            color: #f0f4f8;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        stop-area := TouchArea { }
+        Timer {
+            interval: 1500ms;
+            running: stop-area.pressed;
+            triggered => { root.stop(); }
+        }
     }
 }

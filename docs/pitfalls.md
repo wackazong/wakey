@@ -8,6 +8,8 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 - **`sdkconfig.defaults` changes rebuild much of ESP-IDF** (~10 min). Changes to `[package.metadata.esp-idf-sys]` in `Cargo.toml` may need `cargo clean --release -p esp-idf-sys`.
 - **rustc ICE with Wi-Fi enabled:** nightly-2026-10-15 panics compiling esp-idf-svc's async `Wifi` impl for `AsyncWifi`. Vendored esp-idf-svc with that impl compiled out; use the blocking API.
 - **Internal RAM before `main`:** esp_hosted initialises in a C constructor. With its defaults a 64 KiB main task no longer fitted: boot loop with `assert failed: esp_startup_start_app … (res == pdTRUE)`. The executor runs on its own task (`runtime.rs`), the main task is 8 KiB, esp_hosted's pools and stacks are in PSRAM.
+- **No 64-bit atomics:** the target (`riscv32imafc`) has no `AtomicU64`; use `AtomicU32` (or a `Mutex`). `wakey-core` builds on the host, where it exists, so the error shows only in the firmware build.
+- **`NVS` partition can be taken once:** `EspDefaultNvsPartition::take()` happens in `app` and is cloned into `net::start` and the alarm; a second `take()` fails.
 - **Flashing is interrupted by a short timeout** → "invalid segment length" and no bootable app. The 7 MB image takes ~30 s to write; allow ≥ 90 s when wrapping `cargo run` in a timeout.
 
 ## Display

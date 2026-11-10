@@ -2,7 +2,7 @@
 
 A bedside alarm clock on the M5Stack Tab5 (ESP32-P4, 5" 1280×720 touch panel) that plays sound files from its microSD card on a Creative Pebble V3 USB speaker. Written in Rust (std) on ESP-IDF with the Embassy executor. **Rust only:** no project-authored C/C++ and no C board support packages.
 
-Working today: clock screen with the RTC time (Europe/Zurich), Wi-Fi and NTP through the on-board ESP32-C6, touch, USB audio with file playback, and a list layer that scrolls at the panel's 66 fps. Alarms come next ([roadmap](docs/roadmap.md)).
+Working today: clock screen with the RTC time (Europe/Zurich), one alarm (weekdays, snooze, fade-in, set in `config.json`) ringing on the speaker, Wi-Fi and NTP through the on-board ESP32-C6, touch, and a list layer that scrolls at the panel's 66 fps. Next: the alarm settings screen ([roadmap](docs/roadmap.md)).
 
 ## Repository
 

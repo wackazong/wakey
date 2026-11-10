@@ -10,6 +10,7 @@
 use crate::board::rtc::{DateTime, Rx8130};
 use esp_idf_svc::sys;
 use std::time::Duration;
+use wakey_core::alarm::Now;
 
 /// Europe/Zurich: CET, CEST from the last Sunday of March to the last
 /// Sunday of October (03:00).
@@ -80,9 +81,22 @@ fn system_time() -> sys::timeval {
 
 /// The current local date and time.
 pub fn now() -> DateTime {
-    let tv = system_time();
+    local(system_time().tv_sec)
+}
+
+/// Local and Unix time of this instant (for the alarm).
+pub fn moment() -> Now {
+    let unix = system_time().tv_sec;
+    Now {
+        local: local(unix),
+        unix,
+    }
+}
+
+/// The local date and time of a Unix time.
+pub fn local(unix: i64) -> DateTime {
     let mut tm: sys::tm = unsafe { core::mem::zeroed() };
-    unsafe { sys::localtime_r(&tv.tv_sec, &mut tm) };
+    unsafe { sys::localtime_r(&unix, &mut tm) };
     DateTime {
         year: (tm.tm_year + 1900) as u16,
         month: (tm.tm_mon + 1) as u8,

@@ -92,11 +92,13 @@ impl Wifi {
 }
 
 /// Starts the `wifi` thread. `power` switches the C6's 3.3 V (expander pin
-/// WLAN_PWR_EN); `on_time_synced` runs (on the `wifi` thread) after each
-/// successful NTP sync.
+/// WLAN_PWR_EN); the driver keeps its calibration in `nvs`;
+/// `on_time_synced` runs (on the `wifi` thread) after each successful NTP
+/// sync.
 pub fn start(
     modem: Modem<'static>,
     power: Switch,
+    nvs: EspDefaultNvsPartition,
     cfg: Option<WifiConfig>,
     on_time_synced: impl Fn() + Send + 'static,
 ) -> Wifi {
@@ -108,7 +110,7 @@ pub fn start(
         .spawn(move || {
             let set = |s: Status| *shared.lock().unwrap_or_else(|e| e.into_inner()) = s;
             let ssid = cfg.as_ref().map_or("WLAN".into(), |c| c.ssid.clone());
-            let result = bring_up(modem, &power).and_then(|wifi| match &cfg {
+            let result = bring_up(modem, &power, nvs).and_then(|wifi| match &cfg {
                 Some(cfg) => stay_connected(wifi, cfg, &set, &on_time_synced),
                 None => scan_once(wifi, &set),
             });
@@ -129,11 +131,11 @@ pub fn start(
 fn bring_up(
     modem: Modem<'static>,
     power: &Switch,
+    nvs: EspDefaultNvsPartition,
 ) -> anyhow::Result<BlockingWifi<EspWifi<'static>>> {
     power(true)?;
     std::thread::sleep(Duration::from_millis(500));
     let sysloop = EspSystemEventLoop::take()?;
-    let nvs = EspDefaultNvsPartition::take()?;
     let t = Instant::now();
     let wifi = BlockingWifi::wrap(EspWifi::new(modem, sysloop.clone(), Some(nvs))?, sysloop)?;
     log::info!("wifi: driver up after {} ms", t.elapsed().as_millis());

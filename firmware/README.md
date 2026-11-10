@@ -6,7 +6,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5. Des
 
 | Binary | What it is |
 | --- | --- |
-| `wakey` | The alarm clock: clock screen (RTC time, Europe/Zurich, date, Wi-Fi and speaker status), Wi-Fi + NTP, touch, USB speaker ready |
+| `wakey` | The alarm clock: clock screen (RTC time, Europe/Zurich, date, next alarm, Wi-Fi and speaker status), the alarm ringing on the USB speaker (snooze, stop), Wi-Fi + NTP, touch |
 | `ui_bench` | Slint and list-layer bench: clock digits, an animation and a 300-row list to drag and fling; frame statistics on screen and in the log (target 66 fps) |
 | `audio_test` | USB speaker test: plays every WAV/AIFF in the SD card root and `sounds/` in a loop (writes a 44.1 kHz test tone first), or a 440 Hz sine without a card; logs packets and underruns; survives re-plugging |
 
@@ -31,7 +31,8 @@ Before committing: `cargo fmt`, `cargo clippy --release --bins` (here and in `wa
 
 FAT, in the root:
 
-- `config.json`: `{ "wifi": { "ssid": "…", "password": "…" } }` (more fields planned, see [docs/roadmap.md](../docs/roadmap.md)). For development the build environment can provide Wi-Fi credentials instead: `WAKEY_WIFI_SSID=… WAKEY_WIFI_PASSWORD=… cargo run --release --bin wakey`.
+- `config.json`: `wifi` (`ssid`, `password`) and `alarm` (`enabled`, `hour`, `minute`, `weekdays` Monday to Sunday as 0/1, optional `sound` path such as `"sounds/morgen.wav"`, `volume` 0–100, `fade_in_s`, `snooze_min`, `max_snoozes`, `ring_timeout_min`). The firmware adds missing settings at their defaults (alarm off, 06:30 Monday to Friday, 3 snoozes of 9 min, 10 min ring timeout), so after the first boot the file lists everything. More fields are planned, see [docs/roadmap.md](../docs/roadmap.md).
+- For development the build environment can provide Wi-Fi credentials (`WAKEY_WIFI_SSID=… WAKEY_WIFI_PASSWORD=…`) and a test alarm (`WAKEY_ALARM=07:38`: enabled, every day, overrides the file) to `cargo run --release --bin wakey`. Flash a build without `WAKEY_ALARM` afterwards, or it rings every day at that time.
 - Sound files (WAV or AIFF/AIFC, PCM 8–32 bit, mono or stereo, any sample rate) in the root or `sounds/`.
 
 ## Layout
@@ -41,7 +42,8 @@ src/
 ├─ lib.rs              layer overview
 ├─ app/                the alarm clock
 │  ├─ mod.rs           start-up wiring (app::main)
-│  └─ clock_screen.rs  clock screen view model (time, date, Wi-Fi, speaker)
+│  ├─ alarm.rs         the alarm: state machine, NVS, speaker
+│  └─ clock_screen.rs  clock screen view model (time, date, alarm, Wi-Fi, speaker)
 ├─ ui/
 │  ├─ platform.rs      Slint platform, windows, rendering through the PPA
 │  ├─ render_loop.rs   frame loop, FrameHook
@@ -50,7 +52,7 @@ src/
 │  └─ stats.rs         frame statistics
 ├─ audio/
 │  ├─ uac/             USB Audio Class 1.0 speaker: handle, host, device
-│  └─ player.rs        file playback: decoder thread → ring → stream
+│  └─ player.rs        file / tone playback: decoder thread → ring → stream
 ├─ net.rs              Wi-Fi via the C6, reconnect, NTP
 ├─ clock.rs            system time from the RTC, local time, RTC sync
 ├─ config.rs           config.json from the SD card
@@ -79,6 +81,8 @@ sdkconfig.defaults     ESP-IDF configuration (commented)
 ## How to …
 
 **Add a screen.** Add the component to `ui/wakey.slint` (one font face, fixed-width `Text` items for values that change on their own), create it in `app/mod.rs`, and put its view model next to `app/clock_screen.rs`: set only properties that changed. Characters that only come from Rust strings need a literal in the `.slint` file, or they are not rendered. Check the image size: `cargo run` prints `App/part. size`.
+
+**Test the alarm.** `WAKEY_ALARM=HH:MM cargo run --release --bin wakey` a few minutes ahead; the log shows `alarm: Ringing …`, `uac: stream on`, and `alarm: Idle` after the ring timeout. Unit tests for the rules are in `wakey-core/src/alarm.rs`.
 
 **Add a service.** A module (or directory) below `src/`, owning its thread or Embassy task, taking `board` handles or `Switch`es as arguments and returning a cheap `Clone` handle. Put anything computable without hardware into `wakey-core` with tests.
 
