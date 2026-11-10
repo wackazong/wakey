@@ -62,6 +62,18 @@ const DEBUG_TOUCH: bool = false;
 /// Log the dirty rectangles of frames that take longer than 35 ms.
 const DEBUG_SLOW_FRAMES: bool = true;
 
+/// Where the render loop is (for the stall report): see [`stage`].
+pub static STAGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Loop iterations since boot.
+pub static ITERATIONS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+fn stage(s: u32) {
+    STAGE.store(s, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Stage names, indexed by [`STAGE`].
+pub const STAGES: [&str; 7] = ["start", "touch", "timers", "back buffer", "render", "present", "sleep"];
+
 /// Renders the main window, plus `hook`, forever.
 pub async fn run(
     window: Rc<MinimalSoftwareWindow>,
@@ -73,6 +85,8 @@ pub async fn run(
     // An event that woke the idle loop, handled in the next iteration.
     let mut woken_by: Option<TouchEvent> = None;
     loop {
+        ITERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        stage(1);
         // Touch: route each event to the hook (e.g. list drags), or Slint.
         while let Some(ev) = woken_by.take().or_else(|| input::EVENTS.try_receive().ok()) {
             let consumed = hook.as_mut().is_some_and(|h| h.pointer(&ev));
@@ -89,6 +103,7 @@ pub async fn run(
                 dispatch(&window, &ev);
             }
         }
+        stage(2);
         slint::platform::update_timers_and_animations();
         let hook_active = hook.as_ref().is_some_and(|h| h.active());
         if hook_active {
@@ -98,8 +113,10 @@ pub async fn run(
         }
 
         // Waits for the previous flip, so this paces to the panel refresh.
+        stage(3);
         let target = Target::frame_buffer(display.back_buffer().await);
 
+        stage(4);
         let t0 = Instant::now();
         let mut hook_started = false;
         if hook_active && let Some(h) = hook.as_mut() {
@@ -147,6 +164,7 @@ pub async fn run(
         }
 
         if slint_drawn || hook_started {
+            stage(5);
             let render_time = t0.elapsed();
             // Always flip after a render, even an empty one (see above). The
             // CPU never wrote the frame buffer (PPA/DMA did): nothing to
@@ -163,6 +181,7 @@ pub async fn run(
             if hook.as_mut().is_some_and(|h| h.idle_work(rot)) {
                 continue;
             }
+            stage(6);
             let wait = slint::platform::duration_until_next_timer_update()
                 .map(|d| Duration::from_micros(d.as_micros() as u64))
                 .unwrap_or(Duration::from_millis(100))

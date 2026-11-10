@@ -61,7 +61,7 @@ async fn app(spawner: embassy_executor::Spawner) {
         config.wifi,
         move || clock::store_system_time(&rtc),
     );
-    spawner.spawn(input::touch_task(i2c).unwrap());
+    spawner.spawn(input::touch_task(i2c, ioexp.clone()).unwrap());
 
     // Speaker: powered and set up now, streaming while the alarm rings.
     let player = Player::new();
@@ -81,5 +81,39 @@ async fn app(spawner: embassy_executor::Spawner) {
     let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
     backlight.set_percent(100).expect("backlight");
+    watch_render_loop();
     render_loop::run(window, display, &mut rot, None).await
 }
+
+/// Logs when the render loop has not gone round for 2 s, and where it is.
+fn watch_render_loop() {
+    use core::sync::atomic::Ordering::Relaxed;
+    std::thread::Builder::new()
+        .name("ui-watch".into())
+        .stack_size(4096)
+        .spawn(|| {
+            let mut last = render_loop::ITERATIONS.load(Relaxed);
+            let mut still = 0u32;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let now = render_loop::ITERATIONS.load(Relaxed);
+                if now != last {
+                    last = now;
+                    still = 0;
+                    continue;
+                }
+                still += 1;
+                if still == 2 || still % 10 == 0 {
+                    let stage = render_loop::STAGE.load(Relaxed) as usize;
+                    log::error!(
+                        "ui: render loop stuck for {still} s in '{}', panel frames {}, touch read {}",
+                        render_loop::STAGES.get(stage).unwrap_or(&"?"),
+                        crate::display::Display::frames_scanned(),
+                        if input::READING.load(Relaxed) { "busy" } else { "idle" },
+                    );
+                }
+            }
+        })
+        .expect("ui-watch thread");
+}
+

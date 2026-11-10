@@ -50,3 +50,10 @@ pub fn read_point(i2c: &mut SysI2c) -> Result<Option<(u16, u16)>, EspError> {
             (x, y)
         }))
 }
+
+/// Firmware version (register 0x0000): 3 on the ST7123, 1 on the ST7121.
+pub fn firmware(i2c: &mut SysI2c) -> Result<u8, EspError> {
+    let mut fw = [0u8];
+    read(i2c, 0x0000, &mut fw)?;
+    Ok(fw[0])
+}

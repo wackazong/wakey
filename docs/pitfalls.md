@@ -31,6 +31,7 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 ## Touch and I2C
 
 - **SDA held low after a reset** (a slave mid-byte): `SysI2c::new` clocks the bus free on every boot.
+- **Touch lagged, then stopped, while touched quickly:** reads of the ST7123 timed out (`ESP_ERR_TIMEOUT`, then NACKs) and the app looked hung. The legacy I2C driver sets the hardware's clock-stretch timeout to 2^10 clock cycles (~26 µs); the touch controller stretches SCL longer while it processes a touch. `SysI2c::new` sets ~13 ms. As a safety net, the touch task releases a held press when reads fail and pulses `TP_RST` after 5 failed reads within a second.
 - **Drags broke off** because the touch controller skips readings or times out mid-drag: a release needs 3 empty polls.
 
 ## USB audio

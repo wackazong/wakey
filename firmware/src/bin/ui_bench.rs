@@ -65,9 +65,10 @@ async fn app(spawner: embassy_executor::Spawner) {
         display,
         mut backlight,
         i2c,
+        ioexp,
         ..
     } = Board::init().expect("board init");
-    spawner.spawn(wakey::ui::input::touch_task(i2c).unwrap());
+    spawner.spawn(wakey::ui::input::touch_task(i2c, ioexp).unwrap());
     let variant = display.variant();
     let mut rot = PpaRotator::new().expect("PPA");
 

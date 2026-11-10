@@ -36,7 +36,13 @@ impl SysI2c {
         // driver takes the pins.
         unsafe { recover(sda.reborrow(), scl.reborrow())? };
 
+        // The hardware gives up when a device holds SCL low (clock
+        // stretching) longer than this. The driver's default is 2^10 clock
+        // cycles, ~26 µs: the touch controller stretches longer while it
+        // processes a touch, and every such read timed out (touch lagged,
+        // then stopped). 10 ms rounds up to 2^19 cycles, ~13 ms.
         let config = I2cConfig::new()
+            .timeout(Duration::from_millis(10).into())
             .baudrate(Hertz(400_000))
             .sda_enable_pullup(true)
             .scl_enable_pullup(true);
