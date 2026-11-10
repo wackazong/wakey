@@ -56,7 +56,7 @@ component CardRow inherits Rectangle {
     Text {
         x: 32px;
         text: root.label;
-        font-size: 30px;
+        font-size: 40px;
         color: Theme.text;
         vertical-alignment: center;
     }
@@ -168,7 +168,7 @@ export component AlarmPage inherits Rectangle {
                 x: 200px;
                 width: parent.width - 200px - 80px;
                 text: AlarmEditor.name != "" ? AlarmEditor.name : "optional";
-                font-size: 30px;
+                font-size: 40px;
                 color: AlarmEditor.name != "" ? Theme.text : Theme.text-faint;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -180,13 +180,13 @@ export component AlarmPage inherits Rectangle {
             y: 124px;
             height: 56px;
             text: "Tage";
-            font-size: 30px;
+            font-size: 40px;
             color: Theme.text;
             vertical-alignment: center;
         }
         for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
-            x: 32px + i * 80px;
-            y: 196px;
+            x: 24px + i * 82px;
+            y: 192px;
             text: name;
             on: AlarmEditor.days[i];
             toggled => {
@@ -203,7 +203,7 @@ export component AlarmPage inherits Rectangle {
                 x: 200px;
                 width: parent.width - 200px - 80px;
                 text: AlarmEditor.sound;
-                font-size: 30px;
+                font-size: 40px;
                 color: Theme.text-dim;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -224,7 +224,7 @@ export component AlarmPage inherits Rectangle {
                 }
                 Text {
                     text: "· " + AlarmEditor.fade;
-                    font-size: 30px;
+                    font-size: 40px;
                     color: Theme.text-dim;
                     vertical-alignment: center;
                 }

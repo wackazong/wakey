@@ -54,7 +54,7 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         let random_sub = if files.is_empty() {
             "keine Dateien in sounds/"
         } else {
-            "jeden Morgen eine andere Datei"
+            "wechselt jeden Tag"
         };
         let mut rows = vec![
             row("Eingebauter Ton", "Piepen", &Sound::Beep, 0),

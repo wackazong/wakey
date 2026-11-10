@@ -189,26 +189,43 @@ fn main() {
     ])));
     ui.set_page(1);
     p.shot("1-list");
-    // Swipe the fourth row left and let go: the delete button stays.
-    p.press(1000.0, 580.0);
-    for x in (700..1000).rev().step_by(20) {
-        p.move_to(x as f32, 582.0);
-        p.run(16);
-    }
-    p.release(700.0, 582.0);
-    p.run(300);
-    p.shot("1-list-swiped");
-    // Swipe the first row all the way, quickly (16 ms per step).
     list.on_delete(|id| println!("delete {id}"));
     list.on_open(|id| println!("open {id}"));
-    p.press(1000.0, 190.0);
-    for k in 1..=20 {
-        p.move_to(1000.0 - k as f32 * 45.0, 190.0);
+    list.on_toggle(|id, on| println!("toggle {id} {on}"));
+    // Swipe the second row left and let go: the delete button stays.
+    p.press(1000.0, 369.0);
+    for x in (700..1000).rev().step_by(20) {
+        p.move_to(x as f32, 371.0);
         p.run(16);
     }
-    p.release(100.0, 190.0);
+    p.release(700.0, 371.0);
     p.run(300);
-    p.shot("1-list-swiped-away");
+    p.shot("1-list-swiped");
+    // Tap elsewhere: closes it.
+    p.press(600.0, 207.0);
+    p.release(600.0, 207.0);
+    p.run(300);
+    // Flick up: the list scrolls on by itself.
+    p.press(600.0, 600.0);
+    for k in 1..=6 {
+        p.move_to(600.0, 600.0 - k as f32 * 30.0);
+        p.run(16);
+    }
+    p.release(600.0, 420.0);
+    p.run(800);
+    p.shot("1-list-scrolled");
+    // Swipe a row of the scrolled list all the way: deleted.
+    p.press(1000.0, 400.0);
+    for k in 1..=20 {
+        p.move_to(1000.0 - k as f32 * 45.0, 402.0);
+        p.run(16);
+    }
+    p.release(100.0, 402.0);
+    p.run(300);
+    // Tap a switch and a row.
+    p.press(1150.0, 207.0);
+    p.release(1150.0, 207.0);
+    p.run(50);
     ui.set_page(0);
     list.set_rows(ModelRc::new(VecModel::from(Vec::<AlarmRow>::new())));
     ui.set_page(1);
@@ -251,7 +268,7 @@ fn main() {
     let sp = ui.global::<SoundPicker>();
     sp.set_rows(ModelRc::new(VecModel::from(vec![
         sound("Eingebauter Ton", "Piepen", false, 0),
-        sound("Zufällig", "jeden Morgen eine andere Datei", false, 1),
+        sound("Zufällig", "wechselt jeden Tag", false, 1),
         sound("Morgenlicht", "", true, 2),
         sound("Vogelstimmen", "", false, 2),
         sound("Kirchenglocken", "", false, 2),

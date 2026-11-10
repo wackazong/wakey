@@ -1,8 +1,10 @@
 // Colours, icons and the touch controls shared by the pages. Dark: the
 // display is the room's night light, so no large bright areas. Flat: fills
-// mark controls, no outlines. Font sizes used anywhere in the program cost
-// flash (every size is pre-rendered), so the controls stick to 24, 30 and
-// 64 px.
+// mark controls, no outlines.
+//
+// Four font sizes in the whole program (every size costs flash, it is
+// pre-rendered): 30 px secondary text, 40 px primary text and buttons,
+// 64 px numbers, 280 px the clock face.
 
 export global Theme {
     out property <color> background: #0b0e12;
@@ -63,16 +65,19 @@ export component Button inherits Rectangle {
     HorizontalLayout {
         alignment: center;
         spacing: 16px;
-        if root.icon >= 0: Icon {
-            kind: root.icon;
-            width: 30px;
-            height: 30px;
-            y: (parent.height - self.height) / 2;
-            color: label.color;
+        if root.icon >= 0: Rectangle {
+            width: 36px;
+            Icon {
+                kind: root.icon;
+                y: (parent.height - self.height) / 2;
+                width: 36px;
+                height: 36px;
+                color: label.color;
+            }
         }
         label := Text {
             text: root.text;
-            font-size: 30px;
+            font-size: 40px;
             color: !root.enabled ? Theme.text-faint
                 : root.kind == 1 ? Theme.accent
                 : root.kind == 2 ? Theme.text-dim : Theme.text;
@@ -104,7 +109,7 @@ export component BackButton inherits Rectangle {
     Text {
         x: 64px;
         text: root.text;
-        font-size: 30px;
+        font-size: 40px;
         color: Theme.text-dim;
         vertical-alignment: center;
     }
@@ -119,14 +124,15 @@ export component Chip inherits Rectangle {
     in-out property <bool> on;
     callback toggled();
 
-    width: 64px;
-    height: 64px;
-    border-radius: 32px;
+    width: 76px;
+    height: 76px;
+    border-radius: 38px;
     background: ta.pressed ? Theme.surface-pressed : root.on ? Theme.accent-dark : Theme.surface;
+    animate background { duration: 120ms; }
 
     Text {
         text: root.text;
-        font-size: 24px;
+        font-size: 30px;
         color: root.on ? Theme.text : Theme.text-dim;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -145,6 +151,7 @@ export component Switch inherits Rectangle {
     height: 72px;
     border-radius: 36px;
     background: root.on ? Theme.accent-dark : Theme.surface;
+    animate background { duration: 200ms; }
 
     Rectangle {
         x: root.on ? parent.width - self.width - 8px : 8px;
@@ -153,8 +160,12 @@ export component Switch inherits Rectangle {
         height: 56px;
         border-radius: 28px;
         background: root.on ? Theme.accent : Theme.text-dim;
+        animate x { duration: 200ms; easing: ease-in-out; }
+        animate background { duration: 200ms; }
     }
-    TouchArea {
+    // Off where the owner handles touches itself (the alarm list).
+    in property <bool> touchable: true;
+    if root.touchable: TouchArea {
         clicked => { root.toggled(); }
     }
 }
@@ -189,7 +200,7 @@ export component Pills inherits Rectangle {
             background: ta.pressed ? Theme.surface-pressed : i == root.selected ? Theme.accent-dark : Theme.surface;
             Text {
                 text: item;
-                font-size: 24px;
+                font-size: 30px;
                 color: i == root.selected ? Theme.text : Theme.text-dim;
                 horizontal-alignment: center;
                 vertical-alignment: center;

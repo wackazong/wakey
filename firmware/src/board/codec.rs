@@ -3,7 +3,8 @@
 //! MCLK GPIO30, BCLK GPIO27, LRCK GPIO29, data to the codec GPIO26.
 //!
 //! Register values from M5Unified's Tab5 speaker setup (DAC only, I2S
-//! slave, 16-bit Philips, MCLK = 128 × sample rate, ADC powered down).
+//! slave, 16-bit Philips, ADC powered down). Clock as M5Unified: MCLK =
+//! 256 × sample rate, although register 24 says 128.
 
 use super::i2c::{self, SharedI2c};
 use esp_idf_svc::hal::gpio::AnyIOPin;
@@ -47,10 +48,10 @@ const INIT: [(u8, u8); 30] = [
     (42, 0xB8), // right mixer: DAC
     (43, 0x08),
     (45, 0x00),
-    (46, 0x1E), // LOUT1 0 dB
-    (47, 0x1E), // ROUT1 0 dB
-    (48, 0x1E), // LOUT2 0 dB
-    (49, 0x1E), // ROUT2 0 dB
+    (46, 0x21), // LOUT1 +4.5 dB (the amplifier takes LOUT1 only)
+    (47, 0x21), // ROUT1
+    (48, 0x21), // LOUT2
+    (49, 0x21), // ROUT2
     (25, 0x20),
     (2, 0x0A),
 ];

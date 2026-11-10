@@ -56,7 +56,7 @@ component Segment inherits Rectangle {
             background: i == root.selected ? Theme.accent-dark : ta.pressed ? Theme.surface-pressed : transparent;
             Text {
                 text: item;
-                font-size: 30px;
+                font-size: 40px;
                 color: i == root.selected ? Theme.text : Theme.text-dim;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -112,37 +112,37 @@ export component SoundPage inherits Rectangle {
             vertical-alignment: center;
         }
         Flickable {
-            content-height: SoundPicker.rows.length * 96px;
+            content-height: SoundPicker.rows.length * 112px;
             for row[i] in SoundPicker.rows: Rectangle {
-                y: i * 96px;
-                height: 96px;
+                y: i * 112px;
+                height: 112px;
                 background: ta.pressed ? Theme.surface : row.selected ? Theme.selected : transparent;
                 if row.kind == 1: Icon {
                     kind: 5;
                     x: 32px;
-                    y: 30px;
+                    y: 38px;
                     width: 36px;
                     height: 36px;
                     color: Theme.accent;
                 }
                 Text {
                     x: row.kind == 1 ? 88px : 32px;
-                    y: row.sub != "" ? 12px : 0;
-                    height: row.sub != "" ? 44px : 96px;
+                    y: row.sub != "" ? 10px : 0;
+                    height: row.sub != "" ? 54px : 112px;
                     width: parent.width - self.x - 96px;
                     text: row.title;
-                    font-size: 30px;
+                    font-size: 40px;
                     color: Theme.text;
                     overflow: elide;
                     vertical-alignment: center;
                 }
                 if row.sub != "": Text {
                     x: row.kind == 1 ? 88px : 32px;
-                    y: 52px;
-                    height: 32px;
+                    y: 62px;
+                    height: 40px;
                     width: parent.width - self.x - 96px;
                     text: row.sub;
-                    font-size: 24px;
+                    font-size: 30px;
                     color: Theme.text-dim;
                     overflow: elide;
                     vertical-alignment: center;
@@ -150,7 +150,7 @@ export component SoundPage inherits Rectangle {
                 if row.selected: Icon {
                     kind: 2;
                     x: parent.width - 72px;
-                    y: 30px;
+                    y: 38px;
                     width: 36px;
                     height: 36px;
                     color: Theme.accent;
@@ -175,7 +175,7 @@ export component SoundPage inherits Rectangle {
             y: 24px;
             height: 48px;
             text: "Lautstärke";
-            font-size: 30px;
+            font-size: 40px;
             color: Theme.text;
             vertical-alignment: center;
         }
@@ -185,7 +185,7 @@ export component SoundPage inherits Rectangle {
             width: 200px;
             height: 48px;
             text: "\{SoundPicker.volume} %";
-            font-size: 30px;
+            font-size: 40px;
             color: Theme.text-dim;
             horizontal-alignment: right;
             vertical-alignment: center;
@@ -202,7 +202,7 @@ export component SoundPage inherits Rectangle {
             y: 216px;
             height: 48px;
             text: "Einblenden";
-            font-size: 30px;
+            font-size: 40px;
             color: Theme.text;
             vertical-alignment: center;
         }

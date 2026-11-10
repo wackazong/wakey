@@ -21,7 +21,7 @@ use wakey_core::tone;
 
 const SAMPLE_RATE: u32 = 48_000;
 /// Click loudness, 0–1 of full scale.
-const AMPLITUDE: f32 = 0.35;
+const AMPLITUDE: f32 = 0.8;
 /// The amplifier goes off after this long without a click.
 const AMP_OFF_AFTER: Duration = Duration::from_secs(3);
 /// DMA: 3 × 5 ms; a click starts within ~15 ms.
@@ -52,7 +52,7 @@ impl Clicker {
                 .dma_buffer_count(DMA_BUFFERS)
                 .frames_per_buffer(DMA_FRAMES)
                 .auto_clear(true),
-            StdClkConfig::from_sample_rate_hz(SAMPLE_RATE).mclk_multiple(MclkMultiple::M128),
+            StdClkConfig::from_sample_rate_hz(SAMPLE_RATE).mclk_multiple(MclkMultiple::M256),
             StdSlotConfig::philips_slot_default(DataBitWidth::Bits16, SlotMode::Stereo),
             StdGpioConfig::default(),
         );
@@ -93,6 +93,9 @@ impl Clicker {
                             if !amp_on {
                                 amp_on = ioexp.set(Pin::SpkEn, true).is_ok();
                                 log::info!("click: amplifier on");
+                                // Let the amplifier start; the first click
+                                // would be cut off.
+                                std::thread::sleep(Duration::from_millis(30));
                             }
                             if let Err(e) = i2s.write_all(&samples, timeout) {
                                 log::warn!("click: {e}");

@@ -5,7 +5,7 @@
 use super::alarm::AlarmClock;
 use super::screens::{AlarmList, AlarmRow, AppWindow, Clock};
 use super::{Ctx, PAGE_CLOCK, PAGE_LIST, alarm_page};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 use wakey_core::alarm::{self, AlarmConfig};
 
@@ -23,9 +23,22 @@ pub fn refresh(window: &AppWindow, alarm: &AlarmClock) {
             next: next == Some(a.id),
         })
         .collect();
-    window
-        .global::<AlarmList>()
-        .set_rows(ModelRc::new(VecModel::from(rows)));
+    // Same alarms in the same order (on/off toggled, the next one moved):
+    // update the rows in place, so they stay and their switches animate.
+    let list = window.global::<AlarmList>();
+    let current = list.get_rows();
+    if let Some(model) = current.as_any().downcast_ref::<VecModel<AlarmRow>>()
+        && model.row_count() == rows.len()
+        && model.iter().zip(&rows).all(|(a, b)| a.id == b.id)
+    {
+        for (i, row) in rows.into_iter().enumerate() {
+            if model.row_data(i).as_ref() != Some(&row) {
+                model.set_row_data(i, row);
+            }
+        }
+        return;
+    }
+    list.set_rows(ModelRc::new(VecModel::from(rows)));
 }
 
 /// Connects the page's callbacks.
