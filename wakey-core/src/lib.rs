@@ -4,6 +4,7 @@
 //! directory); the firmware links it for the ESP32-P4. Nothing here knows
 //! about ESP-IDF, chips or threads.
 //!
+//! - [`alarm`]: alarm settings and the ringing state machine.
 //! - [`datetime`]: calendar dates ↔ Unix time, German date strings.
 //! - [`audio_file`]: WAV and AIFF/AIFC readers (PCM → stereo i16).
 //! - [`resample`]: sample-rate conversion to the speaker's 48 kHz.
@@ -11,6 +12,7 @@
 //! - [`config`]: the `config.json` model.
 //! - [`scroll`]: touch scrolling physics (drag, fling, rubber band, spring).
 
+pub mod alarm;
 pub mod audio_file;
 pub mod config;
 pub mod datetime;

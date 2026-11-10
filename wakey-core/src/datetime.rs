@@ -2,6 +2,18 @@
 //! firmware gets local time from the C library), Unix time conversion and
 //! German display strings.
 
+use serde::{Deserialize, Serialize};
+
+/// A calendar date (no time of day).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Date {
+    pub year: u16,
+    /// 1–12
+    pub month: u8,
+    /// 1–31
+    pub day: u8,
+}
+
 /// A calendar date and time of day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DateTime {
@@ -107,6 +119,24 @@ impl DateTime {
             // 1970-01-01 was a Thursday.
             weekday: (days + 4).rem_euclid(7) as u8,
         }
+    }
+
+    pub fn date(&self) -> Date {
+        Date {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+        }
+    }
+
+    /// Seconds since midnight.
+    pub fn second_of_day(&self) -> u32 {
+        u32::from(self.hour) * 3600 + u32::from(self.minute) * 60 + u32::from(self.second)
+    }
+
+    /// The same time of day `days` calendar days later (weekday adjusted).
+    pub fn add_days(&self, days: i64) -> Self {
+        Self::from_unix(self.to_unix() + days * 86_400)
     }
 
     /// "07:05:09"
