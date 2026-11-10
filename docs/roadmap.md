@@ -1,6 +1,6 @@
 # Roadmap
 
-What the clock is meant to become, and the decisions already taken for the parts not built yet. The current state is in [architecture.md](architecture.md).
+What the clock is meant to become, and the decisions already taken for the parts not built yet. This file is the master plan: change the plan here. The current state is in [architecture.md](architecture.md).
 
 ## Product
 
