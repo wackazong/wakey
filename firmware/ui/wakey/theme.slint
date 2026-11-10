@@ -1,10 +1,13 @@
-// Colours and the touch controls shared by the pages. Dark: the display is
-// the room's night light, so no large bright areas. Font sizes used
-// anywhere in the program cost flash (every size is pre-rendered), so the
-// controls stick to 30 and 64 px.
+// Colours, icons and the touch controls shared by the pages. Dark: the
+// display is the room's night light, so no large bright areas. Flat: fills
+// mark controls, no outlines. Font sizes used anywhere in the program cost
+// flash (every size is pre-rendered), so the controls stick to 24, 30 and
+// 64 px.
 
 export global Theme {
     out property <color> background: #0b0e12;
+    // Cards and list rows.
+    out property <color> card: #12171d;
     out property <color> surface: #1c232b;
     out property <color> surface-pressed: #2a333d;
     out property <color> outline: #3a4450;
@@ -13,32 +16,68 @@ export global Theme {
     out property <color> text-faint: #4a5560;
     out property <color> accent: #ffb347;
     out property <color> accent-dark: #7a4a2a;
+    out property <color> selected: #1a1510;
+    out property <color> danger: #8a2f2a;
     out property <color> ok: #4f9a6c;
     out property <color> warn: #b08a3a;
     out property <color> error: #b0574a;
 }
 
-// A text button.
+// Icons, drawn as strokes in a 24×24 box scaled to the element.
+export component Icon inherits Path {
+    // 0 back chevron, 1 forward chevron, 2 check, 3 play, 4 stop,
+    // 5 shuffle, 6 backspace, 7 shift, 8 plus.
+    in property <int> kind;
+    in property <color> color: Theme.text;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.kind == 3 || root.kind == 4 ? transparent : root.color;
+    fill: root.kind == 3 || root.kind == 4 ? root.color : transparent;
+    stroke-width: 2.6px;
+    commands: root.kind == 0 ? "M 15 4 L 7 12 L 15 20"
+        : root.kind == 1 ? "M 9 4 L 17 12 L 9 20"
+        : root.kind == 2 ? "M 4 12.5 L 9.5 18 L 20 6"
+        : root.kind == 3 ? "M 6 3 L 21 12 L 6 21 Z"
+        : root.kind == 4 ? "M 5 5 L 19 5 L 19 19 L 5 19 Z"
+        : root.kind == 5 ? "M 3 7 L 8 7 C 13 7 11 17 16 17 L 21 17 M 18 14 L 21 17 L 18 20 M 3 17 L 8 17 C 10 17 11 15.5 11.6 14 M 13.5 10 C 14 8.5 15 7 16 7 L 21 7 M 18 4 L 21 7 L 18 10"
+        : root.kind == 6 ? "M 9 5 L 21 5 L 21 19 L 9 19 L 2 12 Z M 12 9 L 18 15 M 18 9 L 12 15"
+        : root.kind == 7 ? "M 12 3 L 21 12 L 16 12 L 16 20 L 8 20 L 8 12 L 3 12 Z"
+        : "M 12 4 L 12 20 M 4 12 L 20 12";
+}
+
+// A text button. `kind`: 0 normal, 1 primary (amber), 2 ghost (text only).
 export component Button inherits Rectangle {
     in property <string> text;
-    in property <bool> primary: false;
+    in property <int> kind: 0;
     in property <bool> enabled: true;
+    // Optional icon left of the text (`Icon.kind`), -1 for none.
+    in property <int> icon: -1;
     callback clicked();
 
     height: 88px;
     border-radius: 44px;
-    border-width: 2px;
-    border-color: !root.enabled ? Theme.surface : root.primary ? Theme.accent : Theme.outline;
-    background: !root.enabled ? Theme.background
+    background: !root.enabled || root.kind == 2 ? (ta.pressed && root.enabled ? Theme.surface : transparent)
         : ta.pressed ? Theme.surface-pressed
-        : root.primary ? Theme.accent-dark : Theme.surface;
+        : root.kind == 1 ? Theme.accent-dark : Theme.surface;
 
-    Text {
-        text: root.text;
-        font-size: 30px;
-        color: root.enabled ? Theme.text : Theme.text-faint;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    HorizontalLayout {
+        alignment: center;
+        spacing: 16px;
+        if root.icon >= 0: Icon {
+            kind: root.icon;
+            width: 30px;
+            height: 30px;
+            y: (parent.height - self.height) / 2;
+            color: label.color;
+        }
+        label := Text {
+            text: root.text;
+            font-size: 30px;
+            color: !root.enabled ? Theme.text-faint
+                : root.kind == 1 ? Theme.accent
+                : root.kind == 2 ? Theme.text-dim : Theme.text;
+            vertical-alignment: center;
+        }
     }
     ta := TouchArea {
         enabled: root.enabled;
@@ -46,60 +85,48 @@ export component Button inherits Rectangle {
     }
 }
 
-// "+" / "−": steps once on touch, then repeats while held.
-export component StepButton inherits Rectangle {
+// "‹ Uhr": back to the previous page, top left.
+export component BackButton inherits Rectangle {
     in property <string> text;
-    callback step();
-    property <bool> repeating: false;
+    callback clicked();
 
     height: 88px;
-    border-radius: 24px;
-    border-width: 2px;
-    border-color: Theme.outline;
-    background: ta.pressed ? Theme.surface-pressed : Theme.surface;
-
+    border-radius: 44px;
+    background: ta.pressed ? Theme.surface : transparent;
+    Icon {
+        kind: 0;
+        x: 16px;
+        width: 40px;
+        height: 40px;
+        y: (parent.height - self.height) / 2;
+        color: Theme.text-dim;
+    }
     Text {
+        x: 64px;
         text: root.text;
-        font-size: 64px;
-        color: Theme.text;
-        horizontal-alignment: center;
+        font-size: 30px;
+        color: Theme.text-dim;
         vertical-alignment: center;
     }
     ta := TouchArea {
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.down) {
-                root.repeating = false;
-                root.step();
-            }
-        }
-    }
-    Timer {
-        interval: 450ms;
-        running: ta.pressed && !root.repeating;
-        triggered => { root.repeating = true; }
-    }
-    Timer {
-        interval: 90ms;
-        running: ta.pressed && root.repeating;
-        triggered => { root.step(); }
+        clicked => { root.clicked(); }
     }
 }
 
-// A toggle chip (weekdays). The owner flips `on` in `toggled`.
+// A round weekday chip. The owner flips `on` in `toggled`.
 export component Chip inherits Rectangle {
     in property <string> text;
     in-out property <bool> on;
     callback toggled();
 
-    height: 88px;
-    border-radius: 44px;
-    border-width: 2px;
-    border-color: root.on ? Theme.accent : Theme.outline;
-    background: ta.pressed ? Theme.surface-pressed : root.on ? Theme.accent-dark : Theme.background;
+    width: 64px;
+    height: 64px;
+    border-radius: 32px;
+    background: ta.pressed ? Theme.surface-pressed : root.on ? Theme.accent-dark : Theme.surface;
 
     Text {
         text: root.text;
-        font-size: 30px;
+        font-size: 24px;
         color: root.on ? Theme.text : Theme.text-dim;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -118,8 +145,6 @@ export component Switch inherits Rectangle {
     height: 72px;
     border-radius: 36px;
     background: root.on ? Theme.accent-dark : Theme.surface;
-    border-width: 2px;
-    border-color: root.on ? Theme.accent : Theme.outline;
 
     Rectangle {
         x: root.on ? parent.width - self.width - 8px : 8px;
@@ -127,9 +152,98 @@ export component Switch inherits Rectangle {
         width: 56px;
         height: 56px;
         border-radius: 28px;
-        background: root.on ? Theme.accent : Theme.text-faint;
+        background: root.on ? Theme.accent : Theme.text-dim;
     }
     TouchArea {
         clicked => { root.toggled(); }
+    }
+}
+
+// Volume as five rising bars (`level` 0–5).
+export component VolumeBars inherits Rectangle {
+    in property <int> level;
+    width: 55px;
+    height: 28px;
+    for i in 5: Rectangle {
+        x: i * 12px;
+        y: parent.height - self.height;
+        width: 7px;
+        height: 8px + i * 5px;
+        border-radius: 2px;
+        background: i < root.level ? Theme.text : Theme.text-faint;
+    }
+}
+
+// A row of pills, one selected (`selected`).
+export component Pills inherits Rectangle {
+    in property <[string]> items;
+    in property <int> selected;
+    callback chosen(int);
+    height: 64px;
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: start;
+        for item[i] in root.items: Rectangle {
+            width: 104px;
+            border-radius: 32px;
+            background: ta.pressed ? Theme.surface-pressed : i == root.selected ? Theme.accent-dark : Theme.surface;
+            Text {
+                text: item;
+                font-size: 24px;
+                color: i == root.selected ? Theme.text : Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            ta := TouchArea {
+                clicked => { root.chosen(i); }
+            }
+        }
+    }
+}
+
+// A horizontal slider, 0–100.
+export component Slider inherits Rectangle {
+    in-out property <int> value;
+    callback changed-by-user(int);
+    height: 72px;
+    property <length> knob: 64px;
+    property <length> span: root.width - root.knob;
+
+    Rectangle {
+        y: 30px;
+        height: 12px;
+        border-radius: 6px;
+        background: Theme.surface;
+    }
+    Rectangle {
+        x: 0;
+        y: 30px;
+        width: root.knob / 2 + root.span * root.value / 100;
+        height: 12px;
+        border-radius: 6px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        x: root.span * root.value / 100;
+        y: 4px;
+        width: root.knob;
+        height: root.knob;
+        border-radius: root.knob / 2;
+        background: ta.pressed ? Theme.accent : Theme.text;
+    }
+    ta := TouchArea {
+        function set(x: length) {
+            let v = Math.round(Math.clamp((x - root.knob / 2) / root.span, 0, 1) * 100);
+            if (v != root.value) {
+                root.value = v;
+                root.changed-by-user(v);
+            }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                self.set(self.mouse-x);
+            }
+        }
+        moved => { self.set(self.mouse-x); }
     }
 }

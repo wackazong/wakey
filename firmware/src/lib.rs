@@ -25,4 +25,5 @@ pub mod display;
 pub mod net;
 pub mod profiler;
 pub mod runtime;
+pub mod sounds;
 pub mod ui;

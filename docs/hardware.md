@@ -28,7 +28,7 @@ Three panel variants exist across production runs; the firmware detects them fro
 | C6 IO2 `RF_C6_IO2` | 14 | unused |
 | USB 2.0 HS OTG | dedicated | → USB-A socket: host port for the speaker |
 | USB Serial/JTAG | 24 / 25 | → USB-C socket |
-| I2S MCLK / SCLK / LRCK / DOUT / DIN | 30 / 27 / 29 / 26 / 28 | ES8388 codec and ES7210 mics; unused |
+| I2S MCLK / SCLK / LRCK / DOUT / DIN | 30 / 27 / 29 / 26 / 28 | ES8388 codec (I2S0 TX: wheel click) and ES7210 mics (unused) |
 | UART0 TX / RX | 37 / 38 | also via the CH9102F on USB-C |
 | Strapping | 34–38 | `BOOT_GPIO35` |
 | RS-485 TX / RX / DIR | 20 / 21 / 34 | unused |
@@ -45,7 +45,8 @@ LP-GPIOs 0–15 are all taken (bus/header, SDIO to the C6, C6 reset/IO2).
 | RX8130CE RTC | 0x32 | UTC time; alarm registers (not armed yet) |
 | ST7123 touch | 0x55 | polled every 10 ms (16-bit registers) |
 | INA226 | 0x41 | battery voltage/current (5 mΩ shunt); unused |
-| ES8388, ES7210, BMI270 | – | unused |
+| ES8388 | 0x10 | built-in speaker codec (DAC only, values from M5Unified) |
+| ES7210, BMI270 | – | unused |
 
 ## IO expander pins
 

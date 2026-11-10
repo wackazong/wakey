@@ -41,6 +41,25 @@ const ERROR_WINDOW: Duration = Duration::from_secs(1);
 /// True while the touch controller is being read (for the stall report).
 pub static READING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// When the last touch event was queued (ms since boot), for
+/// [`idle`].
+static LAST_EVENT_MS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Time since the last touch.
+pub fn idle() -> Duration {
+    let last = LAST_EVENT_MS.load(core::sync::atomic::Ordering::Relaxed);
+    Duration::from_millis(u64::from(
+        (Instant::now().as_millis() as u32).wrapping_sub(last),
+    ))
+}
+
+fn touched() {
+    LAST_EVENT_MS.store(
+        Instant::now().as_millis() as u32,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 pub static EVENTS: Channel<CriticalSectionRawMutex, TouchEvent, 32> = Channel::new();
 
 /// Touch panel coordinates → landscape UI coordinates. The touch
@@ -67,12 +86,10 @@ fn release(down: &mut bool, last: (f32, f32)) {
 
 /// Pulses the touch controller's reset line and waits until it answers.
 async fn reset_controller(bus: &SharedI2c, ioexp: &IoExpanders) {
-    let pulse = ioexp
-        .set(Pin::TpRst, false)
-        .and_then(|()| {
-            esp_idf_svc::hal::delay::FreeRtos::delay_ms(10);
-            ioexp.set(Pin::TpRst, true)
-        });
+    let pulse = ioexp.set(Pin::TpRst, false).and_then(|()| {
+        esp_idf_svc::hal::delay::FreeRtos::delay_ms(10);
+        ioexp.set(Pin::TpRst, true)
+    });
     if let Err(e) = pulse {
         log::error!("touch: reset failed ({e})");
         return;
@@ -104,6 +121,7 @@ pub async fn touch_task(bus: SharedI2c, ioexp: IoExpanders) {
         match read {
             Ok(Some((px, py))) => {
                 empty = 0;
+                touched();
                 let (x, y) = to_landscape(px, py);
                 let phase = if down { Phase::Move } else { Phase::Down };
                 if phase == Phase::Down || (x, y) != last {

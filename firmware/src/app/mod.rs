@@ -8,21 +8,28 @@
 //! has its view model here.
 
 mod alarm;
+mod alarm_list;
 mod alarm_page;
 mod clock_screen;
+mod name_page;
+mod sound_page;
 
+use crate::audio::click::Clicker;
 use crate::audio::player::Player;
 use crate::audio::uac::UsbAudio;
 use crate::board::Board;
 use crate::board::ioexp::Pin;
 use crate::display::ppa::PpaRotator;
+use crate::sounds::SoundFile;
 use crate::ui::{input, platform, render_loop};
 use crate::{clock, config, net, runtime};
 use alarm::AlarmClock;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Timer, TimerMode};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
+use wakey_core::alarm::AlarmConfig;
 
 /// Components generated from `ui/wakey.slint` (see `build.rs`).
 mod screens {
@@ -31,7 +38,62 @@ mod screens {
 
 /// `AppWindow.page` values.
 const PAGE_CLOCK: i32 = 0;
-const PAGE_ALARM: i32 = 1;
+const PAGE_LIST: i32 = 1;
+const PAGE_ALARM: i32 = 2;
+const PAGE_SOUND: i32 = 3;
+const PAGE_NAME: i32 = 4;
+
+/// Settings pages go back to the clock after this long without a touch.
+const IDLE_CLOSE: Duration = Duration::from_secs(60);
+
+/// What the settings pages share.
+pub struct Ctx {
+    window: slint::Weak<screens::AppWindow>,
+    alarm: Rc<RefCell<AlarmClock>>,
+    /// The alarm being edited (alarm, sound and name pages).
+    draft: RefCell<AlarmConfig>,
+    /// `sounds/` as listed when the sound page opened.
+    sound_files: RefCell<Vec<SoundFile>>,
+    /// The name being typed.
+    name: RefCell<String>,
+    click: Clicker,
+}
+
+impl Ctx {
+    /// A callback that runs `f` with the window and the context.
+    fn with(self: &Rc<Self>, f: fn(&screens::AppWindow, &Ctx)) -> impl Fn() + 'static {
+        let ctx = self.clone();
+        move || {
+            if let Some(window) = ctx.window.upgrade() {
+                f(&window, &ctx);
+            }
+        }
+    }
+
+    fn with_arg<A: 'static>(
+        self: &Rc<Self>,
+        f: fn(&screens::AppWindow, &Ctx, A),
+    ) -> impl Fn(A) + 'static {
+        let ctx = self.clone();
+        move |a| {
+            if let Some(window) = ctx.window.upgrade() {
+                f(&window, &ctx, a);
+            }
+        }
+    }
+
+    fn with_args<A: 'static, B: 'static>(
+        self: &Rc<Self>,
+        f: fn(&screens::AppWindow, &Ctx, A, B),
+    ) -> impl Fn(A, B) + 'static {
+        let ctx = self.clone();
+        move |a, b| {
+            if let Some(window) = ctx.window.upgrade() {
+                f(&window, &ctx, a, b);
+            }
+        }
+    }
+}
 
 /// Entry point of the `wakey` binary.
 pub fn main() -> ! {
@@ -48,6 +110,7 @@ async fn app(spawner: embassy_executor::Spawner) {
         rtc,
         modem,
         sd: _sd, // stays mounted
+        codec,
         ..
     } = Board::init().expect("board init");
 
@@ -61,13 +124,15 @@ async fn app(spawner: embassy_executor::Spawner) {
         config.wifi,
         move || clock::store_system_time(&rtc),
     );
+    let click = Clicker::start(codec, i2c.clone(), ioexp.clone());
     spawner.spawn(input::touch_task(i2c, ioexp.clone()).unwrap());
 
     // Speaker: powered and set up now, streaming while the alarm rings.
     let player = Player::new();
     let speaker = UsbAudio::start(ioexp.switch(Pin::Usb5vEn), player.source()).expect("USB host");
     let alarm = Rc::new(RefCell::new(AlarmClock::new(
-        config.alarm,
+        config.alarms,
+        config.ringing,
         nvs,
         player,
         speaker.clone(),
@@ -77,12 +142,53 @@ async fn app(spawner: embassy_executor::Spawner) {
     let window = platform::init();
     let ui = screens::AppWindow::new().expect("UI");
     ui.show().expect("show");
-    let _alarm_page = alarm_page::start(&ui, alarm.clone());
+    let ctx = Rc::new(Ctx {
+        window: ui.as_weak(),
+        alarm: alarm.clone(),
+        draft: RefCell::new(AlarmConfig::default()),
+        sound_files: RefCell::new(Vec::new()),
+        name: RefCell::new(String::new()),
+        click,
+    });
+    alarm_list::start(&ui, &ctx);
+    alarm_page::start(&ui, &ctx);
+    sound_page::start(&ui, &ctx);
+    name_page::start(&ui, &ctx);
+    let _idle = close_when_idle(&ctx);
     let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
     backlight.set_percent(100).expect("backlight");
     watch_render_loop();
     render_loop::run(window, display, &mut rot, None).await
+}
+
+/// Every few seconds: back to the clock after a minute without a touch
+/// (not while a preview plays); the alarm page's "Klingelt in" kept
+/// current.
+fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
+    let timer = Timer::default();
+    timer.start(
+        TimerMode::Repeated,
+        Duration::from_secs(5),
+        ctx.with(|window, ctx| {
+            let page = window.get_page();
+            if page == PAGE_CLOCK {
+                return;
+            }
+            if input::idle().as_millis() >= IDLE_CLOSE.as_millis() as u64
+                && !ctx.alarm.borrow().is_previewing()
+            {
+                log::info!(
+                    "ui: back to the clock after {} s without a touch",
+                    IDLE_CLOSE.as_secs()
+                );
+                window.set_page(PAGE_CLOCK);
+            } else if page == PAGE_ALARM {
+                alarm_page::fill(window, ctx);
+            }
+        }),
+    );
+    timer
 }
 
 /// Logs when the render loop has not gone round for 2 s, and where it is.
@@ -116,4 +222,3 @@ fn watch_render_loop() {
         })
         .expect("ui-watch thread");
 }
-

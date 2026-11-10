@@ -5162,6 +5162,7 @@ dependencies = [
  "esp-idf-svc",
  "esp-idf-sys",
  "heapless",
+ "i-slint-renderer-software",
  "log",
  "slint",
  "slint-build",

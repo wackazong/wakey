@@ -3,8 +3,9 @@
 
 use std::f32::consts::TAU;
 
-/// Beep pitch.
-const HZ: f32 = 880.0;
+/// Beep pitch; a whole number of cycles per pattern period, so the table
+/// loops without a seam.
+const HZ: u64 = 880;
 /// One period of the pattern: beep, gap, beep, pause (seconds).
 const PATTERN: [(bool, f32); 4] = [(true, 0.15), (false, 0.1), (true, 0.15), (false, 0.6)];
 /// Edge ramp against clicks (seconds).
@@ -13,48 +14,54 @@ const RAMP: f32 = 0.005;
 const LEVEL: f32 = 0.5;
 
 /// Endless double-beep pattern as interleaved stereo i16.
+///
+/// One period of the pattern (1 s, a whole number of 880 Hz cycles) is
+/// computed once and played from a table: per-sample `sin` and `%` cost a
+/// whole core on the ESP32-P4 (single-precision FPU only, soft-float and
+/// slow range reduction in the C library) and starved the UI.
 pub struct Beeper {
-    rate: f32,
+    /// One period, mono.
+    table: Vec<i16>,
     /// Frames since the start.
     pos: u64,
 }
 
 impl Beeper {
     pub fn new(sample_rate: u32) -> Self {
-        Self {
-            rate: sample_rate as f32,
-            pos: 0,
+        let rate = sample_rate as f32;
+        let mut table = Vec::new();
+        for (on, len) in PATTERN {
+            let n = (len * rate).round() as usize;
+            for i in 0..n {
+                let at = i as f32 / rate;
+                let level = if on {
+                    LEVEL * (at.min(len - at) / RAMP).min(1.0)
+                } else {
+                    0.0
+                };
+                // Phase within one cycle, exact in integers.
+                let k = table.len() as u64;
+                let phase = (k * HZ % u64::from(sample_rate)) as f32 / rate;
+                table.push((level * (TAU * phase).sin() * f32::from(i16::MAX)) as i16);
+            }
         }
-    }
-
-    fn period(&self) -> f32 {
-        PATTERN.iter().map(|(_, s)| s).sum()
+        Self { table, pos: 0 }
     }
 
     /// Fills `out` (frames × 2).
     pub fn fill(&mut self, out: &mut [i16]) {
-        let period = self.period();
+        let len = self.table.len() as u64;
+        let mut i = (self.pos % len) as usize;
         for frame in out.chunks_exact_mut(2) {
-            let t = self.pos as f32 / self.rate;
-            let mut at = t % period;
-            let mut level = 0.0;
-            for (on, len) in PATTERN {
-                if at < len {
-                    if on {
-                        let edge = at.min(len - at);
-                        level = LEVEL * (edge / RAMP).min(1.0);
-                    }
-                    break;
-                }
-                at -= len;
-            }
-            // Phase from the frame count modulo one second keeps f32 exact.
-            let phase = (self.pos % self.rate as u64) as f32 / self.rate * HZ;
-            let s = (level * (TAU * phase).sin() * f32::from(i16::MAX)) as i16;
+            let s = self.table[i];
             frame[0] = s;
             frame[1] = s;
-            self.pos += 1;
+            i += 1;
+            if i == self.table.len() {
+                i = 0;
+            }
         }
+        self.pos += (out.len() / 2) as u64;
     }
 }
 
@@ -75,6 +82,22 @@ pub fn faded(gain: f32, frames: u64, fade_frames: u64) -> f32 {
     }
     let x = frames as f32 / fade_frames as f32;
     gain * x * x
+}
+
+/// The wheel click: a short, dry tick (a 3 kHz tone dying away within
+/// about 4 ms), mono, at `amplitude` (0–1 of full scale).
+pub fn click(sample_rate: u32, amplitude: f32) -> Vec<i16> {
+    const FREQ: f32 = 3000.0;
+    const DECAY_S: f32 = 0.0007;
+    let n = (sample_rate as f32 * 0.004) as usize;
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let v =
+                amplitude * (-t / DECAY_S).exp() * (2.0 * core::f32::consts::PI * FREQ * t).sin();
+            (v * f32::from(i16::MAX)) as i16
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -117,5 +140,28 @@ mod tests {
         assert!((faded(0.8, 50, 100) - 0.2).abs() < 1e-6);
         assert_eq!(faded(0.8, 100, 100), 0.8);
         assert_eq!(faded(0.8, 5, 0), 0.8);
+    }
+
+    #[test]
+    fn beeper_phase_stays_within_one_cycle() {
+        // Same samples as the plain formula, at any position.
+        let mut b = Beeper::new(48_000);
+        b.pos = 48_000 * 3600 + 1234;
+        let mut out = [0i16; 2 * 64];
+        b.fill(&mut out);
+        let t0 = 1234.0_f64 / 48_000.0;
+        let expect = (std::f64::consts::TAU * 880.0 * t0).sin();
+        // The first frame is inside a beep (0.0257 s into the pattern).
+        assert!((f64::from(out[0]) / (0.5 * 32767.0) - expect).abs() < 0.01);
+    }
+
+    #[test]
+    fn click_is_short_and_dies_away() {
+        let c = click(48_000, 0.5);
+        assert_eq!(c.len(), 192);
+        let peak = c.iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert!(peak > 8000 && peak <= 16_384, "peak {peak}");
+        let tail = c[150..].iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert!(tail < 300, "tail {tail}");
     }
 }

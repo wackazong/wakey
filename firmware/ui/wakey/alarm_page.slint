@@ -1,22 +1,23 @@
-// Alarm settings: on/off, time (hours and minutes with + / −, repeating
-// while held) and one or more weekdays. Saving needs at least one weekday.
+// Editing one alarm: time on two wheels, name, weekdays, and rows that open
+// the sound page. Sichern saves, Abbrechen throws the edits away.
 //
-// ┌ Abbrechen ─────────── Wecker ─────────── Speichern ┐
-// │            [+]                  [+]                │
-// │            06         :         30                 │
-// │            [−]                  [−]                │
-// │  (Mo)(Di)(Mi)(Do)(Fr)(Sa)(So)                      │
-// │  [on/off] Wecker an          Klingelt Mo–Fr um 06:30 │
-// └────────────────────────────────────────────────────┘
+// ┌ Abbrechen ─────────────────────────────────────── Sichern ┐
+// │      05   44         │ Name                  Arbeit │
+// │    [ 06 : 45 ]       │ Tage                         │
+// │      07   46         │ (Mo)(Di)(Mi)(Do)(Fr)(Sa)(So) │
+// │                      │ Klang           Morgenlicht › │
+// │ Klingelt in 9 Std.   │ Lautstärke         ▮▮▮ · 10 s › │
+// └───────────────────────────────────────────────────────┘
 
-import { Theme, Button, StepButton, Chip, Switch } from "theme.slint";
+import { Theme, Button, Chip, Icon, VolumeBars } from "theme.slint";
+import { Wheel } from "wheel.slint";
 
 // The values being edited; filled from Rust when the page opens
 // (`app/alarm_page.rs`), read back on save.
 export global AlarmEditor {
-    in-out property <bool> enabled;
     in-out property <int> hour;
     in-out property <int> minute;
+    in property <string> name;
     // Monday to Sunday, read by the chips when the page opens. Each chip
     // then keeps its own state and reports toggles (`day-toggled`); Rust
     // holds the selection. A binding shared by all seven chips would
@@ -25,52 +26,52 @@ export global AlarmEditor {
     in property <[bool]> days: [false, false, false, false, false, false, false];
     // At least one day selected (set from Rust).
     in property <bool> any-day;
-    // "Klingelt Mo–Fr um 06:30", set from Rust after every change.
-    in property <string> summary;
+    // "Klingelt in 9 Std. 14 Min.", set from Rust after every change.
+    in property <string> relative;
+    in property <string> sound;
+    // Volume as 0–5 bars, fade-in as text ("10 s").
+    in property <int> volume-bars;
+    in property <string> fade;
     // Why saving failed, or empty.
     in property <string> error;
 
-    // Any change (for the summary and the inactivity timeout).
+    // A wheel settled, or a day changed (summary, inactivity timeout).
     callback edited();
+    // A wheel row passed the middle (click sound).
+    callback ticked();
     callback day-toggled(int, bool);
+    callback edit-name();
+    callback open-sound();
     callback save();
     callback cancel();
 }
 
-// "+", the two-digit value, "−".
-component TimeColumn inherits Rectangle {
-    in property <int> value;
-    callback up();
-    callback down();
-
-    y: 136px;
-    width: 180px;
-    height: 340px;
-
-    StepButton {
-        y: 0;
-        width: parent.width;
-        text: "+";
-        step => { root.up(); }
-    }
+// A row of the settings card: label left, value right, chevron.
+component CardRow inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 112px;
+    border-radius: 28px;
+    background: ta.pressed ? Theme.surface : transparent;
     Text {
-        x: -40px;
-        y: 88px;
-        width: parent.width + 80px;
-        height: 164px;
-        text: root.value < 10 ? "0\{root.value}" : "\{root.value}";
-        font-size: 140px;
-        font-weight: 500;
-        color: AlarmEditor.enabled ? Theme.text : Theme.text-dim;
-        horizontal-alignment: center;
+        x: 32px;
+        text: root.label;
+        font-size: 30px;
+        color: Theme.text;
         vertical-alignment: center;
     }
-    StepButton {
-        y: parent.height - self.height;
-        width: parent.width;
-        text: "−";
-        step => { root.down(); }
+    Icon {
+        kind: 1;
+        x: parent.width - 64px;
+        y: (parent.height - self.height) / 2;
+        width: 32px;
+        height: 32px;
+        color: Theme.text-faint;
     }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    @children
 }
 
 export component AlarmPage inherits Rectangle {
@@ -78,110 +79,156 @@ export component AlarmPage inherits Rectangle {
     height: 720px;
     background: Theme.background;
 
-    property <bool> can-save: AlarmEditor.any-day;
-
     // Swallows touches between the controls.
     TouchArea { }
 
-    // Top bar.
     Button {
-        x: 40px;
-        y: 24px;
-        width: 260px;
+        x: 24px;
+        y: 20px;
+        width: 240px;
+        kind: 2;
         text: "Abbrechen";
         clicked => { AlarmEditor.cancel(); }
     }
-    Text {
-        x: 300px;
-        y: 24px;
-        width: parent.width - 600px;
-        height: 88px;
-        text: "Wecker";
-        font-size: 40px;
-        color: Theme.text;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
     Button {
-        x: parent.width - 300px;
-        y: 24px;
-        width: 260px;
-        text: "Speichern";
-        primary: true;
-        enabled: root.can-save;
+        x: parent.width - 264px;
+        y: 20px;
+        width: 240px;
+        kind: 1;
+        text: "Sichern";
+        enabled: AlarmEditor.any-day;
         clicked => { AlarmEditor.save(); }
     }
 
     // Time.
-    TimeColumn {
-        x: 290px;
-        value: AlarmEditor.hour;
-        up => { AlarmEditor.hour = Math.mod(AlarmEditor.hour + 1, 24); AlarmEditor.edited(); }
-        down => { AlarmEditor.hour = Math.mod(AlarmEditor.hour + 23, 24); AlarmEditor.edited(); }
+    Rectangle {
+        x: 64px;
+        y: 308px;
+        width: 520px;
+        height: 88px;
+        border-radius: 22px;
+        background: Theme.surface;
     }
-    TimeColumn {
-        x: 810px;
-        value: AlarmEditor.minute;
-        up => { AlarmEditor.minute = Math.mod(AlarmEditor.minute + 1, 60); AlarmEditor.edited(); }
-        down => { AlarmEditor.minute = Math.mod(AlarmEditor.minute + 59, 60); AlarmEditor.edited(); }
+    Wheel {
+        x: 154px;
+        y: 132px;
+        count: 24;
+        value <=> AlarmEditor.hour;
+        ticked => { AlarmEditor.ticked(); }
+        edited => { AlarmEditor.edited(); }
     }
     Text {
-        x: 470px;
-        y: 224px;
-        width: 340px;
-        height: 164px;
+        x: 304px;
+        y: 308px;
+        width: 40px;
+        height: 88px;
         text: ":";
-        font-size: 140px;
+        font-size: 64px;
         font-weight: 500;
         color: Theme.text-faint;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-
-    // Weekdays.
-    for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
-        x: 102px + i * 156px;
-        y: 504px;
-        width: 140px;
-        text: name;
-        on: AlarmEditor.days[i];
-        toggled => {
-            self.on = !self.on;
-            AlarmEditor.day-toggled(i, self.on);
-        }
-    }
-
-    // On/off and what it means.
-    Switch {
-        x: 102px;
-        y: 620px;
-        on: AlarmEditor.enabled;
-        toggled => {
-            AlarmEditor.enabled = !AlarmEditor.enabled;
-            AlarmEditor.edited();
-        }
+    Wheel {
+        x: 344px;
+        y: 132px;
+        count: 60;
+        value <=> AlarmEditor.minute;
+        ticked => { AlarmEditor.ticked(); }
+        edited => { AlarmEditor.edited(); }
     }
     Text {
-        x: 250px;
-        y: 620px;
-        width: 260px;
-        height: 72px;
-        text: AlarmEditor.enabled ? "Wecker an" : "Wecker aus";
-        font-size: 30px;
-        color: AlarmEditor.enabled ? Theme.text : Theme.text-dim;
-        vertical-alignment: center;
-    }
-    Text {
-        x: 520px;
-        y: 620px;
-        width: parent.width - 520px - 102px;
-        height: 72px;
+        x: 64px;
+        y: 600px;
+        width: 520px;
+        height: 48px;
         text: AlarmEditor.error != "" ? AlarmEditor.error
-            : !root.can-save ? "Mindestens einen Tag wählen"
-            : AlarmEditor.summary;
+            : !AlarmEditor.any-day ? "Mindestens einen Tag wählen"
+            : AlarmEditor.relative;
         font-size: 30px;
-        color: AlarmEditor.error != "" ? Theme.error : !root.can-save ? Theme.warn : Theme.text-dim;
-        horizontal-alignment: right;
+        color: AlarmEditor.error != "" ? Theme.error : !AlarmEditor.any-day ? Theme.warn : Theme.text-dim;
+        horizontal-alignment: center;
         vertical-alignment: center;
+    }
+
+    // Settings card.
+    Rectangle {
+        x: 640px;
+        y: 132px;
+        width: 616px;
+        height: 556px;
+        border-radius: 28px;
+        background: Theme.card;
+
+        CardRow {
+            y: 0;
+            label: "Name";
+            clicked => { AlarmEditor.edit-name(); }
+            Text {
+                x: 200px;
+                width: parent.width - 200px - 80px;
+                text: AlarmEditor.name != "" ? AlarmEditor.name : "optional";
+                font-size: 30px;
+                color: AlarmEditor.name != "" ? Theme.text : Theme.text-faint;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            x: 32px;
+            y: 124px;
+            height: 56px;
+            text: "Tage";
+            font-size: 30px;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+        for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
+            x: 32px + i * 80px;
+            y: 196px;
+            text: name;
+            on: AlarmEditor.days[i];
+            toggled => {
+                self.on = !self.on;
+                AlarmEditor.day-toggled(i, self.on);
+            }
+        }
+
+        CardRow {
+            y: 300px;
+            label: "Klang";
+            clicked => { AlarmEditor.open-sound(); }
+            Text {
+                x: 200px;
+                width: parent.width - 200px - 80px;
+                text: AlarmEditor.sound;
+                font-size: 30px;
+                color: Theme.text-dim;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+        CardRow {
+            y: 420px;
+            label: "Lautstärke";
+            clicked => { AlarmEditor.open-sound(); }
+            HorizontalLayout {
+                x: 200px;
+                width: parent.width - 200px - 80px;
+                alignment: end;
+                spacing: 12px;
+                VolumeBars {
+                    level: AlarmEditor.volume-bars;
+                    y: (parent.height - self.height) / 2 + 2px;
+                }
+                Text {
+                    text: "· " + AlarmEditor.fade;
+                    font-size: 30px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+            }
+        }
     }
 }

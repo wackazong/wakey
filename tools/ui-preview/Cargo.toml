@@ -1,0 +1,19 @@
+[package]
+name = "ui-preview"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Renders the firmware's Slint pages on the host to PNG, with sample data"
+
+[dependencies]
+slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "std"] }
+i-slint-renderer-software = { version = "1.18.1", features = ["path"] }
+png = "0.17"
+
+[build-dependencies]
+slint-build = "1.18.1"
+
+# The same Slint as the firmware (vendored, with its patches).
+[patch.crates-io]
+i-slint-renderer-software = { path = "../../firmware/vendor/i-slint-renderer-software" }
+i-slint-core = { path = "../../firmware/vendor/i-slint-core" }

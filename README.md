@@ -2,7 +2,7 @@
 
 A bedside alarm clock on the M5Stack Tab5 (ESP32-P4, 5" 1280×720 touch panel) that plays sound files from its microSD card on a Creative Pebble V3 USB speaker. Written in Rust (std) on ESP-IDF with the Embassy executor. **Rust only:** no project-authored C/C++ and no C board support packages.
 
-Working today: clock screen with the RTC time (Europe/Zurich), one alarm (time and weekdays set on the touch screen, snooze, fade-in) ringing on the speaker, Wi-Fi and NTP through the on-board ESP32-C6, touch, and a list layer that scrolls at the panel's 66 fps. Next: sound choice and power states ([roadmap](docs/roadmap.md)).
+Working today: clock screen with the RTC time (Europe/Zurich), several alarms (each with time, weekdays, name, sound or a random one, volume and fade-in, set on the touch screen with clicking time wheels) ringing on the speaker with snooze, Wi-Fi and NTP through the on-board ESP32-C6, touch, and a list layer that scrolls at the panel's 66 fps. Next: the built-in speaker as fallback and power states ([roadmap](docs/roadmap.md)).
 
 ## Repository
 
@@ -15,6 +15,7 @@ Working today: clock screen with the RTC time (Europe/Zurich), one alarm (time a
 | [`docs/pitfalls.md`](docs/pitfalls.md) | traps already hit and their fixes — read before changing an area |
 | [`docs/roadmap.md`](docs/roadmap.md) | what comes next and the decisions for it |
 | [`docs/schematics/`](docs/schematics) | Tab5 schematic pages |
+| [`tools/ui-preview/`](tools/ui-preview/src/main.rs) | host tool: renders the firmware's pages to PNG with sample data |
 | [`spikes/tidal-download/`](spikes/tidal-download/README.md) | host tool: download a track from your TIDAL account (V2 groundwork) |
 
 ## Quick start

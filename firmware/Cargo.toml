@@ -45,6 +45,8 @@ static_cell = "2.1"
 
 
 slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
+# Path drawing (the icons in `ui/wakey/theme.slint`).
+i-slint-renderer-software = { version = "1.18.1", default-features = false, features = ["path"] }
 heapless = "0.9"
 
 [build-dependencies]

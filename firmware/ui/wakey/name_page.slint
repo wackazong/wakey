@@ -1,0 +1,205 @@
+// The alarm's name, typed on an on-screen keyboard (German QWERTZ, a
+// second layer with digits and punctuation). Keys go to Rust
+// (`app/name_page.rs`), which edits the text (Slint cannot remove a
+// character) and limits its length.
+//
+// ┌ Abbrechen ─────────────────────────────────────── Fertig ┐
+// │ [ Arbeit|                                              ] │
+// │  q  w  e  r  t  z  u  i  o  p  ü                        │
+// │  a  s  d  f  g  h  j  k  l  ö  ä                        │
+// │  ⇧   y  x  c  v  b  n  m  ß   ⌫                         │
+// │  123  [          Leerzeichen          ]  -               │
+// └──────────────────────────────────────────────────────────┘
+
+import { Theme, Button, Icon } from "theme.slint";
+
+export global NameEditor {
+    in property <string> text;
+    // The next letter is a capital (set from Rust: at the start, after a
+    // space, or by the shift key).
+    in property <bool> shift;
+    // Digits and punctuation instead of letters.
+    in-out property <bool> numbers;
+
+    callback key(string);
+    callback backspace();
+    callback toggle-shift();
+    callback done();
+    callback cancel();
+}
+
+component Key inherits Rectangle {
+    in property <string> text;
+    in property <int> icon: -1;
+    in property <bool> active;
+    callback pressed();
+    width: 100px;
+    height: 88px;
+    border-radius: 16px;
+    background: ta.pressed ? Theme.outline : root.active ? Theme.accent-dark : Theme.surface;
+    if root.icon < 0: Text {
+        text: root.text;
+        font-size: 30px;
+        color: Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.icon >= 0: Icon {
+        kind: root.icon;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 36px;
+        height: 36px;
+        color: Theme.text;
+    }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.pressed();
+            }
+        }
+    }
+}
+
+export component NamePage inherits Rectangle {
+    width: 1280px;
+    height: 720px;
+    background: Theme.background;
+
+    property <[[string]]> lower: [
+        ["q", "w", "e", "r", "t", "z", "u", "i", "o", "p", "ü"],
+        ["a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"],
+        ["y", "x", "c", "v", "b", "n", "m", "ß"],
+    ];
+    property <[[string]]> upper: [
+        ["Q", "W", "E", "R", "T", "Z", "U", "I", "O", "P", "Ü"],
+        ["A", "S", "D", "F", "G", "H", "J", "K", "L", "Ö", "Ä"],
+        ["Y", "X", "C", "V", "B", "N", "M", "ß"],
+    ];
+    property <[[string]]> digits: [
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "/"],
+        ["-", ":", ";", "(", ")", "&", "@", "\"", ".", ",", "'"],
+        ["!", "?", "+", "=", "#", "*", "%", "_"],
+    ];
+    property <[[string]]> keys: NameEditor.numbers ? root.digits : NameEditor.shift ? root.upper : root.lower;
+    property <length> pitch: 108px;
+
+    TouchArea { }
+
+    Button {
+        x: 24px;
+        y: 20px;
+        width: 240px;
+        kind: 2;
+        text: "Abbrechen";
+        clicked => { NameEditor.cancel(); }
+    }
+    Button {
+        x: parent.width - 264px;
+        y: 20px;
+        width: 240px;
+        kind: 1;
+        text: "Fertig";
+        clicked => { NameEditor.done(); }
+    }
+
+    // The text with a cursor at its end.
+    Rectangle {
+        x: 50px;
+        y: 124px;
+        width: parent.width - 100px;
+        height: 100px;
+        border-radius: 28px;
+        background: Theme.card;
+        HorizontalLayout {
+            padding-left: 32px;
+            padding-right: 32px;
+            alignment: start;
+            spacing: 4px;
+            Text {
+                text: NameEditor.text != "" ? NameEditor.text : "";
+                font-size: 40px;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 4px;
+                Rectangle {
+                    y: 26px;
+                    height: 48px;
+                    background: Theme.accent;
+                }
+            }
+            if NameEditor.text == "": Text {
+                text: "Name des Weckers";
+                font-size: 40px;
+                color: Theme.text-faint;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // Fixed keys whose labels change with shift and the layer: a `for`
+    // over the changing arrays would re-create every key on each change.
+    for i in 11: Key {
+        x: 50px + i * root.pitch;
+        y: 260px;
+        text: root.keys[0][i];
+        pressed => { NameEditor.key(self.text); }
+    }
+    for i in 11: Key {
+        x: 50px + i * root.pitch;
+        y: 356px;
+        text: root.keys[1][i];
+        pressed => { NameEditor.key(self.text); }
+    }
+    // Row 3: shift, eight keys, backspace.
+    Key {
+        x: 50px;
+        y: 452px;
+        width: 154px;
+        icon: NameEditor.numbers ? -1 : 7;
+        text: "";
+        active: NameEditor.shift && !NameEditor.numbers;
+        pressed => {
+            if (!NameEditor.numbers) {
+                NameEditor.toggle-shift();
+            }
+        }
+    }
+    for i in 8: Key {
+        x: 50px + 162px + i * root.pitch;
+        y: 452px;
+        text: root.keys[2][i];
+        pressed => { NameEditor.key(self.text); }
+    }
+    Key {
+        x: 50px + 162px + 8 * root.pitch;
+        y: 452px;
+        width: parent.width - 100px - 162px - 8 * root.pitch;
+        icon: 6;
+        pressed => { NameEditor.backspace(); }
+    }
+    // Row 4: layer switch, space, dash.
+    Key {
+        x: 50px;
+        y: 548px;
+        width: 154px;
+        text: NameEditor.numbers ? "ABC" : "123";
+        pressed => { NameEditor.numbers = !NameEditor.numbers; }
+    }
+    Key {
+        x: 50px + 162px;
+        y: 548px;
+        width: parent.width - 100px - 162px - 162px;
+        text: "Leerzeichen";
+        pressed => { NameEditor.key(" "); }
+    }
+    Key {
+        x: parent.width - 50px - 154px;
+        y: 548px;
+        width: 154px;
+        text: "-";
+        pressed => { NameEditor.key("-"); }
+    }
+}

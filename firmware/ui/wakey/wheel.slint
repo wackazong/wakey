@@ -1,0 +1,123 @@
+// A number wheel (hours or minutes), iOS style: drag, flick with momentum,
+// snap to a row, wrap around. Five rows visible, the middle one is the
+// value; the page draws the selection band behind it.
+//
+// Physics run in a 16 ms Timer while the wheel moves: after release the
+// velocity decays (friction), then a spring pulls the nearest row into the
+// middle. Every row that passes the middle reports `ticked` (the click
+// sound); the settled value is reported by `edited`.
+//
+// The seven row texts are fixed children (`for k in 7`), only their text
+// and position change: no items are created while scrolling.
+
+import { Theme } from "theme.slint";
+
+export component Wheel inherits Rectangle {
+    // Number of values: 24 or 60.
+    in property <int> count: 60;
+    // The value; set before the page opens, updated when the wheel settles.
+    in-out property <int> value;
+    // A row passed the middle (while moving).
+    callback ticked();
+    // The wheel settled on a new value.
+    callback edited(int);
+
+    property <length> row-h: 88px;
+    // Continuous position in rows: `value` when at rest.
+    property <float> pos: root.value;
+    // Rows per 16 ms tick.
+    property <float> vel;
+    property <bool> dragging;
+    property <bool> moving;
+    property <float> press-pos;
+    property <length> last-y;
+    property <duration> last-t;
+    // The row in the middle right now.
+    property <int> current: root.wrap(Math.round(root.pos));
+    property <int> base: Math.floor(root.pos);
+    property <float> frac: root.pos - root.base;
+
+    pure function wrap(n: int) -> int {
+        return Math.mod(Math.mod(n, root.count) + root.count, root.count);
+    }
+
+    width: 150px;
+    height: 5 * self.row-h;
+    clip: true;
+
+    changed current => {
+        root.ticked();
+    }
+
+    for k in 7: Text {
+        property <float> d: k - 3 - root.frac;
+        property <int> n: root.wrap(root.base + k - 3);
+        x: 0;
+        y: 2 * root.row-h + self.d * root.row-h;
+        width: root.width;
+        height: root.row-h;
+        text: self.n < 10 ? "0\{self.n}" : "\{self.n}";
+        font-size: 64px;
+        font-weight: 500;
+        color: Math.abs(self.d) < 0.5 ? Theme.text
+            : Theme.text-dim.with-alpha(Math.max(0, 1 - Math.abs(self.d) * 0.3));
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.dragging = true;
+                root.moving = false;
+                root.press-pos = root.pos;
+                root.vel = 0;
+                root.last-y = self.mouse-y;
+                root.last-t = animation-tick();
+            } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
+                root.dragging = false;
+                // A flick slower than this just snaps.
+                if (animation-tick() - root.last-t > 80ms) {
+                    root.vel = 0;
+                }
+                root.moving = true;
+            }
+        }
+        moved => {
+            let new = root.press-pos - (self.mouse-y - self.pressed-y) / root.row-h;
+            let dt = (animation-tick() - root.last-t) / 16ms;
+            if (dt > 0) {
+                root.vel = 0.5 * root.vel + 0.5 * (new - root.pos) / dt;
+                root.last-t = animation-tick();
+            }
+            root.pos = new;
+        }
+    }
+
+    Timer {
+        interval: 16ms;
+        running: root.moving;
+        triggered => {
+            if (Math.abs(root.vel) > 0.03) {
+                // At most 1.5 rows per tick.
+                root.vel = Math.clamp(root.vel, -1.5, 1.5) * 0.94;
+                root.pos += root.vel;
+            } else {
+                let target = Math.round(root.pos);
+                let d = target - root.pos;
+                if (Math.abs(d) < 0.02) {
+                    root.vel = 0;
+                    root.moving = false;
+                    root.pos = root.wrap(target);
+                    if (root.value != root.wrap(target)) {
+                        root.value = root.wrap(target);
+                        root.edited(root.value);
+                    }
+                } else {
+                    root.vel = 0;
+                    root.pos += d * 0.35;
+                }
+            }
+        }
+    }
+}

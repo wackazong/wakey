@@ -7,6 +7,7 @@
 //! exist across Tab5 production runs).
 
 mod backlight;
+pub mod codec;
 pub mod i2c;
 pub mod ioexp;
 pub mod rtc;
@@ -41,6 +42,8 @@ pub struct Board {
     pub sd: Option<sd::SdCard>,
     /// Wi-Fi through the ESP32-C6, for [`crate::net::start`].
     pub modem: Modem<'static>,
+    /// I2S to the ES8388 codec (built-in speaker).
+    pub codec: codec::CodecPins,
 }
 
 impl Board {
@@ -107,6 +110,13 @@ impl Board {
             backlight,
             sd,
             modem: p.modem,
+            codec: codec::CodecPins {
+                i2s: p.i2s0,
+                mclk: p.pins.gpio30.degrade_input_output(),
+                bclk: p.pins.gpio27.degrade_input_output(),
+                ws: p.pins.gpio29.degrade_input_output(),
+                dout: p.pins.gpio26.degrade_input_output(),
+            },
         })
     }
 }

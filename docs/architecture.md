@@ -24,6 +24,7 @@ README.md            overview and quick start
 docs/                architecture, hardware, pitfalls, roadmap, schematics
 wakey-core/          pure logic, host-tested (own Cargo workspace)
 firmware/            the firmware (own Cargo workspace, ESP target)
+tools/ui-preview/    host tool: renders the firmware's pages to PNG with sample data
 spikes/tidal-download/  host tool: download a track from TIDAL (V2 groundwork)
 ```
 
@@ -59,7 +60,9 @@ Each layer uses only the ones below it. Rules that keep it that way:
 | `app` | 64 KiB (internal) | 0 / 1 | Embassy executor: app task (Slint, render loop), touch task |
 | `usb-lib` | 4 KiB | any / 5 | ESP-IDF USB host library daemon |
 | `uac` | 8 KiB | any / 5 | USB audio client; transfer callbacks call the sample source |
-| `decoder` | 8 KiB | any / 5 | player: file or tone → 48 kHz → ring (while playing) |
+| `decoder` | 8 KiB | 1 / 5 | player: file or tone → 48 kHz → ring (while playing); pinned away from the UI |
+| `click` | 4 KiB | any / 5 | wheel clicks to the built-in speaker (I2S), amplifier on/off |
+| `ui-watch` | 4 KiB | any / 5 | logs where the render loop is when it has not gone round for 2 s |
 | `wifi` | 16 KiB | any / 5 | Wi-Fi connect/reconnect, SNTP |
 | esp_hosted tasks | PSRAM | – | SDIO transport to the C6 |
 
@@ -73,12 +76,12 @@ Shared state: the system I2C bus is `Arc<Mutex<SysI2c>>` (`SharedI2c`), locked p
 
 1. `Board::init()`: I2C bus recovery (9 clocks + STOP; the RTC and expanders stay powered across resets) → expanders (rails off, LCD and touch in reset, then released) → RTC configuration → backlight PWM, dark → panel variant from the touch controller → display (DSI PHY LDO, panel init, DPI streaming) → microSD (optional).
 2. `clock::init`: time zone, system time from the RTC (or the build time).
-3. `config::load`: `config.json` from the card (missing settings are added to the file at their defaults).
+3. `config::load`: `config.json` from the card (an old single `alarm` section is migrated to `alarms`; missing settings are added to the file at their defaults).
 4. `net::start`: `wifi` thread (C6 power, driver, connect, NTP → RTC); NVS is taken once here and shared with the alarm.
-5. Touch task on the executor.
+5. Built-in speaker: I2S0 stream and ES8388 codec (`audio::click`). Touch task on the executor.
 6. `UsbAudio::start`: USB host, `uac` thread (VBUS, port power, device).
 7. `AlarmClock::new`: alarm state from NVS.
-8. Slint platform, clock screen, once-a-second tick (alarm, then view model).
+8. Slint platform, the pages' view models, clock screen, once-a-second tick (alarms, then view model).
 9. Backlight on; the render loop runs forever.
 
 ## Display pipeline
@@ -99,13 +102,13 @@ flowchart LR
 - **Render loop** ([`ui/render_loop.rs`](../firmware/src/ui/render_loop.rs)): route touch events, update Slint timers, wait for the back buffer, let the `FrameHook` start, render Slint's dirty region, let the hook finish, flip. When nothing animates: background work for the hook, then sleep until the next Slint timer or touch.
 - **List layer** ([`ui/list_layer.rs`](../firmware/src/ui/list_layer.rs)), a `FrameHook`: rows are rendered once by a Slint component in an offscreen window and rotated by the PPA into a 64-row ring in PSRAM; every frame the 2D-DMA copies the visible part into the frame buffer (7 ms for 640×720 px, 64 Mpx/s, three times the PPA's rate) while Slint renders the rest. The ring is filled around the scroll position in spare frame time. Scroll physics (drag, fling τ 0.35 s, rubber band, critically damped spring) are `wakey_core::scroll::Scroller`.
 - **Cache:** DMA engines read and write PSRAM, not the cache. [`display/cache.rs`](../firmware/src/display/cache.rs) writes back CPU writes before a DMA reads, and invalidates before the CPU reads DMA output.
-- **Touch** ([`ui/input.rs`](../firmware/src/ui/input.rs)): the ST7123's touch half is polled every 10 ms over I2C; a release counts after 3 empty readings. Events go to the hook first (the list takes drags that start in its area), otherwise to the main Slint window.
+- **Touch** ([`ui/input.rs`](../firmware/src/ui/input.rs)): the ST7123's touch half is polled every 10 ms over I2C (clock stretching allowed up to ~13 ms); a release counts after 3 empty readings. After 5 failed reads within a second the touch task releases a held press and pulses `TP_RST`. Events go to the hook first (the list takes drags that start in its area), otherwise to the main Slint window. `input::idle()` is the time since the last touch.
 
 Measured (ST7123, 360 MHz): clock screen tick 110 panel rows, ~1 ms; `ui_bench` scrolling a 300-row list next to Slint content **66 fps** at ~0.8–7 ms CPU per frame.
 
-**UI structure:** `ui/wakey.slint` is one `AppWindow` showing one page at a time (`page`: clock, alarm settings); pages live in `ui/wakey/` with shared colours and controls in `theme.slint`. Pages and Rust talk through globals (`Clock`, `AlarmEditor`); each page has its view model in `src/app/`. Switching pages repaints the screen once (~45 ms); an edit repaints only what changed (5–12 ms).
+**UI structure:** `ui/wakey.slint` is one `AppWindow` showing one page at a time (`page`: 0 clock, 1 alarm list, 2 alarm, 3 sound, 4 name); pages live in `ui/wakey/`, with shared colours, icons (`Path`) and controls (buttons, chips, switch, slider, pills) in `theme.slint` and the time wheel in `wheel.slint`. Pages and Rust talk through globals (`Clock`, `AlarmList`, `AlarmEditor`, `SoundPicker`, `NameEditor`); each page has its view model in `src/app/`, and the settings pages share an `app::Ctx` (the alarms, the draft being edited, the click). Switching pages repaints the screen once (~45 ms; the keyboard ~160 ms, it has ~30 items per line); an edit repaints only what changed (5–12 ms). `tools/ui-preview` renders every page on the host with sample data (same Slint, same renderer, RGB565) to check layouts without the device.
 
-**Slint and flash size:** Slint pre-renders every imported font face at every pixel size a `.slint` file uses (ASCII plus the characters of string literals). The clock screen therefore imports one face (Inter Medium), and `build.rs` compiles one `.slint` file per program; each program `include!`s its own generated module. Characters that only come from Rust strings (umlauts in dates) must appear in a literal in the `.slint` file (a hidden `Text` in `wakey.slint`). Sizes in use: 24, 30, 40, 64, 140, 280 px.
+**Slint and flash size:** Slint pre-renders every imported font face at every pixel size a `.slint` file uses (ASCII plus the characters of string literals). The clock screen therefore imports one face (Inter Medium), and `build.rs` compiles one `.slint` file per program; each program `include!`s its own generated module. Characters that only come from Rust strings (umlauts in dates and names) must appear in a literal in the `.slint` file (hidden `Text`s in `wakey.slint`). `default-font-family` must be the font's exact family name, "Inter 24pt Medium": with any other name the compiler embeds the system's sans-serif as well and the UI draws with it (see pitfalls). Sizes in use: 24, 30, 40, 64, 280 px; the firmware image is 5.7 MB (45 % of the app partition).
 
 ## Audio
 
@@ -121,14 +124,22 @@ flowchart LR
 - **USB** ([`audio/uac/`](../firmware/src/audio/uac)): ESP-IDF's USB host library on the high-speed port, switched to full-speed-only (`HCFG.FSLSSupp`) for the full-speed Pebble. The `uac` thread switches VBUS, powers the root port (power-cycling it if nothing enumerates), parses the descriptor (`wakey_core::uac`), claims 48 kHz / 16 bit / stereo, sends `SET_INTERFACE`, sets the sample rate, unmutes, sets the volume (−20 dB below max by default), and tears everything down when the device goes away. `UsbAudio` (`Clone`) controls it: `set_streaming`, `set_volume_db`, `set_mute`, `connected`.
 - **Stream:** 3 isochronous transfers × 8 packets × 192 bytes (1 ms of 48 kHz stereo each) in flight; each completion refills its transfer from the `Source` callback and resubmits. 1000 packets/s, no failures measured.
 - **Player** ([`audio/player.rs`](../firmware/src/audio/player.rs)): a decoder thread reads the file (`wakey_core::audio_file`), converts other rates with rubato's FFT resampler (`wakey_core::resample`; 44.1 kHz: 1029-frame blocks) into a one-second ring; the source drains it and plays silence (counted as underrun) when empty. 0 underruns measured for 48 kHz AIFF and 44.1 kHz WAV. `Player::play` plays a file once; `Player::ring` loops a file, or the built-in double beep (`wakey_core::tone`) when there is no file or it cannot be read, and the source applies the gain and a squared fade-in.
-- **Volume:** the device volume (−20 dB below its maximum) is the cap; the alarm's `volume` (0–100 %) is a digital gain below it (`tone::volume_gain`: −40 dB at 1 %, 0 dB at 100 %).
+- **Volume:** the device volume (−20 dB below its maximum) is the cap; the alarm's `volume` (0–100 %) is a digital gain below it (`tone::volume_gain`: −40 dB at 1 %, 0 dB at 100 %). `Player::set_gain` changes it while playing (the sound page's slider during a preview).
+- **Built-in tone:** one period of the double beep (1 s) is computed once and played from a table; per-sample `sin` took a whole core (see pitfalls).
+- **Built-in speaker** ([`audio/click.rs`](../firmware/src/audio/click.rs), [`board/codec.rs`](../firmware/src/board/codec.rs)): the ES8388 codec (I2C 0x10, register values from M5Unified) on I2S0 at 48 kHz, MCLK = 128 × fs, through the NS4150B amplifier (`SPK_EN`). The stream plays silence by itself (`auto_clear`); the `click` thread writes a 4 ms tick (`tone::click`) per wheel row and switches the amplifier on at the first click and off after 3 s without one. Used for the wheel click only; the fallback alarm speaker is still to come.
 
 ## Alarm
 
-- **Logic** (`wakey_core::alarm`, host-tested): `Alarm::tick(cfg, now)` once a second, `Alarm::input(Snooze | Stop)`, `Alarm::is_ringing()`, `Alarm::next()` for the display. Phases: idle → ringing → (snoozed → ringing)* → idle. Rings on the configured weekdays at most once per day; snooze at most `max_snoozes` (3) times for `snooze_min`; stop ends the day, also while snoozed; unanswered it is silenced after `ring_timeout_min` for good. Local time decides when it is due, Unix time measures durations: an alarm in the skipped spring hour rings at 03:00, one in the repeated autumn hour rings once. After a boot it still rings if the alarm time is less than the ring timeout ago; an alarm time crossed by a large clock jump (NTP) does not ring.
-- **Device** ([`app/alarm.rs`](../firmware/src/app/alarm.rs)): `AlarmClock` runs the state machine on the UI thread, saves the state as JSON in NVS (namespace `wakey`, key `alarm`) whenever it changes, so a reboot neither rings a finished alarm again nor loses a snooze or a ringing alarm, and makes the speaker follow: ringing → `set_streaming(true)` + `Player::ring`, otherwise stop. If the speaker connects late, the remembered streaming request starts it.
-- **Settings** ([`app/alarm_page.rs`](../firmware/src/app/alarm_page.rs), `ui/wakey/alarm_page.slint`): tapping the alarm line on the clock page opens it. On/off, hours and minutes with + / − (repeating while held), weekday chips Monday to Sunday; Save needs at least one weekday and writes the `alarm` section of `config.json` (`config::save_alarm`: rest of the file kept, through a temporary file), then `AlarmClock::set_config` applies it (`Alarm::reconfigured`: an alarm already stopped today rings again today only if moved to a time still ahead). The page closes after 60 s without a change and when the alarm rings.
-- **Ringing screen** (clock page): while ringing the digits turn amber; a tap anywhere snoozes (while snoozes are left); stop is a smaller button in the top-right corner that has to be held for 1.5 s (a filling bar) — deliberately harder than snooze. While snoozed the bottom line shows until when, and the stop button stays. Idle, the bottom line shows the next alarm ("Wecker morgen 06:30").
+- **Logic** (`wakey_core::alarm`, host-tested): several alarms (`AlarmConfig`: id, optional name, on/off, time, weekdays, sound, volume, fade-in) and one `RingConfig` (snooze, max snoozes, ring timeout) for all. `Alarms::tick(alarms, ring, now)` once a second, `Alarms::input(Snooze | Stop)`, `Alarms::ringing()`, `Alarms::next()` / `next_of()` for the display. One alarm is active at a time: idle → ringing → (snoozed → ringing)* → idle. Each rings on its weekdays at most once per day; snooze at most `max_snoozes` (3) times for `snooze_min`; stop ends the day, also while snoozed; unanswered it is silenced after `ring_timeout_min` for good. An alarm due while another is snoozed takes over; one due while another rings is folded into that ringing. Local time decides when one is due, Unix time measures durations: an alarm in the skipped spring hour rings at 03:00, one in the repeated autumn hour rings once. After a boot it still rings if its time is less than the ring timeout ago; an alarm time crossed by a large clock jump (NTP) does not ring. Deleting or switching off the active alarm ends it.
+- **Sound** (`wakey_core::alarm::Sound`, a string in `config.json`): `"beep"` (built-in tone), a file path (`"sounds/x.wav"`), `"random"` (a file from `sounds/`, chosen by `pick_daily` from the date and the alarm id: fixed for the day, so a reboot while ringing plays the same one), `"tidal:random"` / `"tidal:<id>"` (not available yet: built-in tone). [`sounds.rs`](../firmware/src/sounds.rs) lists `sounds/*.wav|aif|aiff` and resolves a `Sound` to a file.
+- **Device** ([`app/alarm.rs`](../firmware/src/app/alarm.rs)): `AlarmClock` runs the state machine on the UI thread, saves its state as JSON in NVS (namespace `wakey`, key `alarms`: the active phase and each alarm's last finished day) whenever it changes, so a reboot neither rings a finished alarm again nor loses a snooze or a ringing alarm, and makes the speaker follow: ringing → `set_streaming(true)` + `Player::ring` with that alarm's sound, volume and fade-in, otherwise stop. If the speaker connects late, the remembered streaming request starts it. `save` / `delete` / `set_enabled` write the `alarms` list into `config.json` (`config::save_alarms`: rest of the file kept, through a temporary file) and then apply it (`Alarms::reconfigured`: an alarm already stopped today rings again today only if moved to a time still ahead). `preview` plays an alarm's sound without fade-in for the sound page (not while one rings).
+- **Settings pages** (`ui/wakey/*.slint`, view models in `src/app/`):
+  - *Alarm list* (`alarm_list`): tapping the alarm line on the clock page opens it. One row per alarm, sorted by time, the next one's time in amber; tap a row to edit, its switch for on/off, swipe it left for "Löschen" (all the way: deleted at once); "+ Neu" adds one (07:00, Mo–Fr).
+  - *Alarm* (`alarm_page`): hour and minute wheels (drag, flick, snap, wrap around; each row passing the band clicks on the built-in speaker), "Klingelt in …", name, weekday chips, and rows that open the sound page. Edits go to a draft; Sichern needs a weekday and saves, Abbrechen drops the draft.
+  - *Sound* (`sound_page`): Datei / TIDAL (placeholder until TIDAL is set up); built-in tone, "Zufällig", the files; volume slider, fade-in (aus, 10, 30, 60 s), "Probehören".
+  - *Name* (`name_page`): QWERTZ keyboard with umlauts and a digit layer; Rust edits the text (24 characters at most).
+  - Any settings page goes back to the clock after 60 s without a touch (not during a preview) and when an alarm rings.
+- **Ringing screen** (clock page): while ringing the digits turn amber; a tap anywhere snoozes (while snoozes are left); stop is a smaller button in the top-right corner that has to be held for 1.5 s (a filling bar), deliberately harder than snooze. While snoozed the bottom line shows until when, and the stop button stays. Idle, the bottom line shows the next alarm ("Wecker morgen 06:30").
 
 ## Time
 
@@ -159,5 +170,5 @@ The C6 behaves as the normal `esp_wifi` driver through `esp_wifi_remote`, so `Es
 
 - `firmware/.cargo/config.toml`: target, `build-std`, runner `scripts/flash.sh` (flashes with ESP-IDF's bootloader, built for rev < v3, and `partitions.csv`: 12 MB app, NVS).
 - `esp-idf-sys` builds ESP-IDF 5.5.5 into `firmware/.embuild/` (first build ~10 min; every `sdkconfig.defaults` change rebuilds much of it). `[package.metadata.esp-idf-sys]` adds bindings (`bindings/extra.h`: PPA) and the registry components `esp_hosted` 2.13.1 and `esp_wifi_remote` 1.6.5.
-- `build.rs`: compiles `ui/wakey.slint` and `ui/ui_bench.slint` (fonts pre-rendered for the software renderer, style `fluent-dark`), exports `BUILD_UNIX_TIME`.
-- Vendored crates (`firmware/vendor/`, `[patch.crates-io]`): Slint's renderer (glyph fast path), `i-slint-core` (16 dirty rectangles instead of 3) and `esp-idf-svc` (one impl compiled out to avoid a rustc ICE). See [vendor/README.md](../firmware/vendor/README.md).
+- `build.rs`: compiles `ui/wakey.slint` and `ui/ui_bench.slint` (fonts pre-rendered for the software renderer, style `fluent-dark`), exports `BUILD_UNIX_TIME`. The renderer's `path` feature is on (icons).
+- Vendored crates (`firmware/vendor/`, `[patch.crates-io]`): Slint's renderer (glyph fast path), `i-slint-core` (16 dirty rectangles instead of 3, and rectangles sharing lines merged into one band) and `esp-idf-svc` (one impl compiled out to avoid a rustc ICE). See [vendor/README.md](../firmware/vendor/README.md).

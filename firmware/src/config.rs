@@ -3,32 +3,35 @@
 //!
 //! For development the build environment can provide Wi-Fi credentials
 //! when the file has none (`WAKEY_WIFI_SSID`, `WAKEY_WIFI_PASSWORD`) and
-//! override the alarm time (`WAKEY_ALARM=HH:MM`: enabled, every day).
+//! replace the alarms with one test alarm (`WAKEY_ALARM=HH:MM`: every day).
 
 use crate::board::sd;
-use wakey_core::alarm::AlarmConfig;
+use wakey_core::alarm::{self, AlarmConfig};
 pub use wakey_core::config::{Config, WifiConfig};
 
 pub const FILE: &str = "config.json";
 
 /// Reads the configuration; a missing or broken file gives the defaults.
-/// Settings missing from the file are added to it.
+/// An old `alarm` section is migrated and settings missing from the file
+/// are added to it.
 pub fn load() -> Config {
     let path = format!("{}/{FILE}", sd::MOUNT_POINT);
     let mut cfg = match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            // Show every setting in the file, at its default.
-            if let Some(filled) = Config::fill_in_defaults(&text) {
-                match std::fs::write(&path, filled) {
-                    Ok(()) => log::info!("config: added missing settings to {path}"),
-                    Err(e) => log::error!("config: writing {path}: {e}"),
+        Ok(text) => match Config::load(&text) {
+            Ok((cfg, updated)) => {
+                if let Some(updated) = updated {
+                    match replace(&updated) {
+                        Ok(()) => log::info!("config: updated {path} (new or missing settings)"),
+                        Err(e) => log::error!("config: writing {path}: {e}"),
+                    }
                 }
+                cfg
             }
-            Config::parse(&text).unwrap_or_else(|e| {
+            Err(e) => {
                 log::error!("config: {path}: {e}");
                 Config::default()
-            })
-        }
+            }
+        },
         Err(e) => {
             log::info!("config: no {path} ({e})");
             Config::default()
@@ -46,28 +49,39 @@ pub fn load() -> Config {
     if let Some((h, m)) = option_env!("WAKEY_ALARM").and_then(|t| t.split_once(':'))
         && let (Ok(hour), Ok(minute)) = (h.parse(), m.parse())
     {
-        log::warn!("config: alarm {hour:02}:{minute:02} from the build environment");
-        cfg.alarm.enabled = true;
-        (cfg.alarm.hour, cfg.alarm.minute) = (hour, minute);
-        cfg.alarm.weekdays = [1; 7];
-        cfg.alarm.sanitize();
+        log::warn!("config: test alarm {hour:02}:{minute:02} from the build environment");
+        cfg.alarms = vec![AlarmConfig {
+            id: 1,
+            name: "Test".into(),
+            hour,
+            minute,
+            weekdays: [1; 7],
+            ..AlarmConfig::default()
+        }];
+        alarm::sanitize_list(&mut cfg.alarms);
     }
     cfg
 }
 
-/// Writes `alarm` into `config.json`, keeping the rest of the file. Through
-/// a temporary file, so a failed write leaves the old file intact.
-pub fn save_alarm(alarm: &AlarmConfig) -> std::io::Result<()> {
+/// Writes `alarms` into `config.json`, keeping the rest of the file.
+pub fn save_alarms(alarms: &[AlarmConfig]) -> std::io::Result<()> {
+    let path = format!("{}/{FILE}", sd::MOUNT_POINT);
+    let old = std::fs::read_to_string(&path).ok();
+    replace(&Config::with_alarms(old.as_deref(), alarms))?;
+    log::info!("config: alarms saved to {path}");
+    Ok(())
+}
+
+/// Replaces `config.json` through a temporary file, so a failed write
+/// leaves the old file intact.
+fn replace(text: &str) -> std::io::Result<()> {
     let path = format!("{}/{FILE}", sd::MOUNT_POINT);
     let tmp = format!("{}/config.tmp", sd::MOUNT_POINT);
-    let old = std::fs::read_to_string(&path).ok();
-    std::fs::write(&tmp, Config::with_alarm(old.as_deref(), alarm))?;
+    std::fs::write(&tmp, text)?;
     // FAT cannot rename onto an existing file.
     match std::fs::remove_file(&path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
-    std::fs::rename(&tmp, &path)?;
-    log::info!("config: alarm saved to {path}");
-    Ok(())
+    std::fs::rename(&tmp, &path)
 }

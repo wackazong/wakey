@@ -8,5 +8,6 @@
 //!
 //! File parsing and sample-rate conversion live in `wakey_core`.
 
+pub mod click;
 pub mod player;
 pub mod uac;

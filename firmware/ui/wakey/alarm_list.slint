@@ -1,0 +1,191 @@
+// The alarms, one row each, sorted by time. The one that rings next has
+// its time in amber. Tap a row to edit it, its switch to turn it on or off,
+// swipe it left to delete (a "Löschen" button appears; swiping all the way
+// deletes at once). "+ Neu" adds one.
+//
+// ┌ ‹ Uhr ──────────────────────────────────────── + Neu ┐
+// │ 06:30  Arbeit                               (  ●) │
+// │        Mo Di Mi Do Fr Sa So                        │
+// │ 07:15  Mo Di Mi Do Fr Sa So                 (  ●) │
+// └────────────────────────────────────────────────────┘
+
+import { Theme, Button, BackButton, Switch } from "theme.slint";
+
+export struct AlarmRow {
+    id: int,
+    // "06:30"
+    time: string,
+    // Empty: the days take its place.
+    name: string,
+    // Monday to Sunday.
+    days: [bool],
+    enabled: bool,
+    // Rings next (amber time).
+    next: bool,
+}
+
+// Set from Rust (`app/alarm_list.rs`).
+export global AlarmList {
+    in property <[AlarmRow]> rows;
+    callback back();
+    callback add();
+    callback open(int);
+    callback toggle(int, bool);
+    callback delete(int);
+}
+
+component Row inherits Rectangle {
+    in property <AlarmRow> alarm;
+    // Width of the revealed delete button.
+    property <length> reveal: 200px;
+    // Horizontal offset of the row (≤ 0).
+    property <length> dx: 0;
+    property <bool> swiping;
+    property <bool> open: false;
+
+    height: 116px;
+    clip: true;
+    border-radius: 28px;
+    background: Theme.danger;
+
+    Text {
+        x: parent.width - root.reveal;
+        width: root.reveal;
+        text: "Löschen";
+        font-size: 30px;
+        color: Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // On the fixed row, not the sliding one: its coordinates must not move
+    // with the finger. The switch on the sliding row takes its own taps.
+    ta := TouchArea {
+        moved => {
+            let ddx = self.mouse-x - self.pressed-x;
+            if (!root.swiping && Math.abs(ddx) > 16px
+                    && Math.abs(ddx) > Math.abs(self.mouse-y - self.pressed-y)) {
+                root.swiping = true;
+            }
+            if (root.swiping) {
+                root.dx = Math.min(0, (root.open ? -root.reveal : 0) + ddx);
+            }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up) {
+                if (root.swiping) {
+                    if (root.dx < -root.width * 0.6) {
+                        root.dx = -root.width;
+                        AlarmList.delete(root.alarm.id);
+                    } else {
+                        root.open = root.dx < -root.reveal / 2;
+                        root.dx = root.open ? -root.reveal : 0;
+                    }
+                } else if (root.open && self.mouse-x > root.width - root.reveal) {
+                    AlarmList.delete(root.alarm.id);
+                } else if (root.open) {
+                    root.open = false;
+                    root.dx = 0;
+                } else {
+                    AlarmList.open(root.alarm.id);
+                }
+                root.swiping = false;
+            } else if (e.kind == PointerEventKind.cancel) {
+                root.swiping = false;
+                root.dx = root.open ? -root.reveal : 0;
+            }
+        }
+    }
+
+    Rectangle {
+        x: root.dx;
+        width: parent.width;
+        border-radius: 28px;
+        background: ta.pressed && !root.swiping && !root.open ? Theme.surface : Theme.card;
+        animate x { duration: ta.pressed ? 0ms : 180ms; easing: ease-out; }
+
+        Text {
+            x: 36px;
+            width: 220px;
+            text: root.alarm.time;
+            font-size: 64px;
+            font-weight: 500;
+            color: !root.alarm.enabled ? Theme.text-faint : root.alarm.next ? Theme.accent : Theme.text;
+            vertical-alignment: center;
+        }
+        if root.alarm.name != "": Text {
+            x: 280px;
+            y: 18px;
+            height: 40px;
+            text: root.alarm.name;
+            font-size: 30px;
+            color: root.alarm.enabled ? Theme.text : Theme.text-faint;
+            vertical-alignment: center;
+        }
+        for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Text {
+            x: 280px + i * 52px;
+            y: root.alarm.name != "" ? 62px : 38px;
+            height: 40px;
+            text: name;
+            font-size: 24px;
+            font-weight: root.alarm.days[i] ? 500 : 400;
+            color: root.alarm.days[i] && root.alarm.enabled ? Theme.text : Theme.text-faint;
+            vertical-alignment: center;
+        }
+        Switch {
+            x: parent.width - self.width - 36px;
+            y: (parent.height - self.height) / 2;
+            on: root.alarm.enabled;
+            toggled => { AlarmList.toggle(root.alarm.id, !root.alarm.enabled); }
+        }
+    }
+}
+
+export component AlarmListPage inherits Rectangle {
+    width: 1280px;
+    height: 720px;
+    background: Theme.background;
+
+    TouchArea { }
+
+    BackButton {
+        x: 24px;
+        y: 20px;
+        width: 240px;
+        text: "Uhr";
+        clicked => { AlarmList.back(); }
+    }
+    Button {
+        x: parent.width - 264px;
+        y: 20px;
+        width: 240px;
+        kind: 1;
+        icon: 8;
+        text: "Neu";
+        clicked => { AlarmList.add(); }
+    }
+
+    if AlarmList.rows.length == 0: Text {
+        y: 300px;
+        width: parent.width;
+        height: 120px;
+        text: "Noch kein Wecker gestellt";
+        font-size: 40px;
+        color: Theme.text-faint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Flickable {
+        x: 40px;
+        y: 132px;
+        width: parent.width - 80px;
+        height: parent.height - 132px;
+        content-height: AlarmList.rows.length * 128px + 24px;
+        for row[i] in AlarmList.rows: Row {
+            y: i * 128px;
+            width: parent.width;
+            alarm: row;
+        }
+    }
+}

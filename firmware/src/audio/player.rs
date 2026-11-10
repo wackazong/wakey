@@ -10,6 +10,8 @@
 //! [`Player::source`].
 
 use super::uac::{self, Source};
+use esp_idf_svc::hal::cpu::Core;
+use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -138,6 +140,12 @@ impl Player {
         });
     }
 
+    /// Changes the gain of what is playing (the volume slider during a
+    /// preview).
+    pub fn set_gain(&self, gain: f32) {
+        self.ring.gain.store(gain.to_bits(), Ordering::Relaxed);
+    }
+
     /// Stops what is playing and starts `produce` on a new decoder thread.
     fn start(&self, gain: f32, fade_frames: u32, produce: impl FnOnce(&Ring) + Send + 'static) {
         let ring = self.ring.clone();
@@ -155,6 +163,18 @@ impl Player {
         ring.stop.store(false, Ordering::Release);
         ring.armed.store(false, Ordering::Release);
         ring.playing.store(true, Ordering::Release);
+        // On core 1, away from the UI (core 0): decoding and resampling can
+        // take a good part of a core, and the decoder's priority (5) is
+        // above the UI task's (1).
+        let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
+        let pinned = ThreadSpawnConfiguration {
+            name: Some(c"decoder"),
+            pin_to_core: Some(Core::Core1),
+            ..ThreadSpawnConfiguration::default()
+        };
+        if let Err(e) = pinned.set() {
+            log::warn!("player: decoder thread not pinned: {e}");
+        }
         std::thread::Builder::new()
             .name("decoder".into())
             .stack_size(8192)
@@ -171,6 +191,7 @@ impl Player {
                 ring.playing.store(false, Ordering::Release);
             })
             .expect("decoder thread");
+        let _ = previous.set();
     }
 }
 

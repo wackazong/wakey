@@ -1,0 +1,229 @@
+// The sound of the alarm being edited: source (Datei / TIDAL), the list of
+// sounds, volume, fade-in and a preview. Tapping a row chooses it; the
+// choice goes back to the alarm page with "‹ Alarm" and is saved with it.
+//
+// ┌ ‹ Alarm ──────────────────────────────────────────────┐
+// │ (Datei | TIDAL)           │ Lautstärke                │
+// │ Eingebauter Ton           │ ───────●──────            │
+// │ ⤮ Zufällig                │ Einblenden                │
+// │ Morgenlicht            ✓  │ (aus)(10 s)(30 s)(60 s)   │
+// │ Vogelstimmen              │ [▶ Probehören]            │
+// └───────────────────────────────────────────────────────┘
+
+import { Theme, Button, BackButton, Icon, Pills, Slider } from "theme.slint";
+
+export struct SoundRow {
+    title: string,
+    // Second line (artist, "Piepen"), or empty.
+    sub: string,
+    selected: bool,
+    // 0 built-in tone, 1 random, 2 file / track.
+    kind: int,
+}
+
+// Set from Rust (`app/sound_page.rs`).
+export global SoundPicker {
+    // 0 Datei, 1 TIDAL.
+    in property <int> tab;
+    in property <[SoundRow]> rows;
+    // Shown instead of the list when it is empty (no TIDAL yet, no files).
+    in property <string> empty;
+    in-out property <int> volume;
+    // Index into 0, 10, 30, 60 s.
+    in-out property <int> fade;
+    in property <bool> previewing;
+
+    callback back();
+    callback select-tab(int);
+    callback select(int);
+    callback volume-changed(int);
+    callback fade-changed(int);
+    callback preview();
+}
+
+component Segment inherits Rectangle {
+    in property <[string]> items;
+    in property <int> selected;
+    callback chosen(int);
+    height: 72px;
+    border-radius: 36px;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 6px;
+        for item[i] in root.items: Rectangle {
+            border-radius: 30px;
+            background: i == root.selected ? Theme.accent-dark : ta.pressed ? Theme.surface-pressed : transparent;
+            Text {
+                text: item;
+                font-size: 30px;
+                color: i == root.selected ? Theme.text : Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            ta := TouchArea {
+                clicked => { root.chosen(i); }
+            }
+        }
+    }
+}
+
+export component SoundPage inherits Rectangle {
+    width: 1280px;
+    height: 720px;
+    background: Theme.background;
+
+    TouchArea { }
+
+    BackButton {
+        x: 24px;
+        y: 20px;
+        width: 240px;
+        text: "Alarm";
+        clicked => { SoundPicker.back(); }
+    }
+
+    Segment {
+        x: 40px;
+        y: 132px;
+        width: 600px;
+        items: ["Datei", "TIDAL"];
+        selected: SoundPicker.tab;
+        chosen(i) => { SoundPicker.select-tab(i); }
+    }
+
+    Rectangle {
+        x: 40px;
+        y: 228px;
+        width: 600px;
+        height: 460px;
+        border-radius: 28px;
+        clip: true;
+        background: Theme.card;
+
+        if SoundPicker.rows.length == 0: Text {
+            x: 40px;
+            width: parent.width - 80px;
+            text: SoundPicker.empty;
+            font-size: 30px;
+            color: Theme.text-faint;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Flickable {
+            content-height: SoundPicker.rows.length * 96px;
+            for row[i] in SoundPicker.rows: Rectangle {
+                y: i * 96px;
+                height: 96px;
+                background: ta.pressed ? Theme.surface : row.selected ? Theme.selected : transparent;
+                if row.kind == 1: Icon {
+                    kind: 5;
+                    x: 32px;
+                    y: 30px;
+                    width: 36px;
+                    height: 36px;
+                    color: Theme.accent;
+                }
+                Text {
+                    x: row.kind == 1 ? 88px : 32px;
+                    y: row.sub != "" ? 12px : 0;
+                    height: row.sub != "" ? 44px : 96px;
+                    width: parent.width - self.x - 96px;
+                    text: row.title;
+                    font-size: 30px;
+                    color: Theme.text;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                if row.sub != "": Text {
+                    x: row.kind == 1 ? 88px : 32px;
+                    y: 52px;
+                    height: 32px;
+                    width: parent.width - self.x - 96px;
+                    text: row.sub;
+                    font-size: 24px;
+                    color: Theme.text-dim;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                if row.selected: Icon {
+                    kind: 2;
+                    x: parent.width - 72px;
+                    y: 30px;
+                    width: 36px;
+                    height: 36px;
+                    color: Theme.accent;
+                }
+                ta := TouchArea {
+                    clicked => { SoundPicker.select(i); }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: 680px;
+        y: 132px;
+        width: 576px;
+        height: 556px;
+        border-radius: 28px;
+        background: Theme.card;
+
+        Text {
+            x: 32px;
+            y: 24px;
+            height: 48px;
+            text: "Lautstärke";
+            font-size: 30px;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+        Text {
+            x: parent.width - 32px - 200px;
+            y: 24px;
+            width: 200px;
+            height: 48px;
+            text: "\{SoundPicker.volume} %";
+            font-size: 30px;
+            color: Theme.text-dim;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+        Slider {
+            x: 32px;
+            y: 92px;
+            width: parent.width - 64px;
+            value <=> SoundPicker.volume;
+            changed-by-user(v) => { SoundPicker.volume-changed(v); }
+        }
+        Text {
+            x: 32px;
+            y: 216px;
+            height: 48px;
+            text: "Einblenden";
+            font-size: 30px;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+        Pills {
+            x: 32px;
+            y: 280px;
+            width: parent.width - 64px;
+            items: ["aus", "10 s", "30 s", "60 s"];
+            selected: SoundPicker.fade;
+            chosen(i) => {
+                SoundPicker.fade = i;
+                SoundPicker.fade-changed(i);
+            }
+        }
+        Button {
+            x: 32px;
+            y: 420px;
+            width: 320px;
+            icon: SoundPicker.previewing ? 4 : 3;
+            text: SoundPicker.previewing ? "Stopp" : "Probehören";
+            clicked => { SoundPicker.preview(); }
+        }
+    }
+}

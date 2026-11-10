@@ -288,9 +288,37 @@ impl DirtyRegion {
     /// Add a box to the region
     ///
     /// Note that if the region becomes too complex, it might be simplified by being bigger than the actual union.
-    pub fn add_box(&mut self, b: euclid::Box2D<Coord, LogicalPx>) {
+    pub fn add_box(&mut self, mut b: euclid::Box2D<Coord, LogicalPx>) {
         if b.is_empty() {
             return;
+        }
+        // wakey patch: no line in more than two rectangles. A rectangle
+        // sharing lines with two or more others is merged with them into
+        // their union (one wide band). The renderer hands out one line
+        // range per rectangle, and the PPA path (firmware `display::ppa`)
+        // keeps only three strips open: a row of side-by-side changes
+        // (keyboard keys, weekday chips) took ~350 ms instead of ~40 ms.
+        fn sharing_lines(
+            r: &euclid::Box2D<Coord, LogicalPx>,
+            b: &euclid::Box2D<Coord, LogicalPx>,
+        ) -> bool {
+            r.min.y < b.max.y && b.min.y < r.max.y
+        }
+        loop {
+            let n = self.rectangles[..self.count].iter().filter(|r| sharing_lines(r, &b)).count();
+            if n < 2 {
+                break;
+            }
+            let mut i = 0;
+            while i < self.count {
+                if sharing_lines(&self.rectangles[i], &b) {
+                    b = b.union(&self.rectangles[i]);
+                    self.rectangles.swap(i, self.count - 1);
+                    self.count -= 1;
+                } else {
+                    i += 1;
+                }
+            }
         }
         let mut i = 0;
         while i < self.count {

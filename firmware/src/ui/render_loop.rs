@@ -72,7 +72,15 @@ fn stage(s: u32) {
 }
 
 /// Stage names, indexed by [`STAGE`].
-pub const STAGES: [&str; 7] = ["start", "touch", "timers", "back buffer", "render", "present", "sleep"];
+pub const STAGES: [&str; 7] = [
+    "start",
+    "touch",
+    "timers",
+    "back buffer",
+    "render",
+    "present",
+    "sleep",
+];
 
 /// Renders the main window, plus `hook`, forever.
 pub async fn run(

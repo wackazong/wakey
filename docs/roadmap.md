@@ -4,22 +4,22 @@ What the clock is meant to become, and the decisions already taken for the parts
 
 ## Product
 
-A bedside alarm clock: large clock face, one alarm that plays a sound file from the microSD card on the Creative Pebble V3 (one USB cable for power and audio, gain switch "L"), dims and sleeps at night, wakes instantly on touch.
+A bedside alarm clock: large clock face, several alarms that play a sound file from the microSD card on the Creative Pebble V3 (one USB cable for power and audio, gain switch "L"), dims and sleeps at night, wakes instantly on touch.
 
-**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout); alarm settings page (on/off, time, weekdays).
+**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout); several alarms with their own sound, volume and fade-in; settings pages in the design agreed on 2026-11-10 (alarm list with swipe-to-delete, alarm page with time wheels that click on the built-in speaker, sound page with "Zufällig", name keyboard); the built-in speaker (ES8388) for the wheel click.
 
 **V1 (next):**
 
-1. **Screens:** sound and volume on the alarm page, sound list (the list layer).
-2. **No speaker:** if the Pebble is not connected when the alarm rings, nothing is audible today; the internal ES8388 speaker as a fallback is the planned answer.
+1. **No speaker:** if the Pebble is not connected when the alarm rings, nothing is audible today; the built-in ES8388 speaker (already used for the wheel click) as the fallback.
+2. **Screens:** the sound list on the list layer once it can be long (TIDAL); slow frames while audio plays (~130 ms page switches during a preview).
 3. **Config:** the remaining `config.json` fields (below).
 4. **Power states** (below), measured step by step.
 5. **Wi-Fi only when needed:** sync at most every 24 h while the display is on, then C6 unpowered (`WLAN_PWR_EN` off).
-6. FLAC playback (`claxon`), sound list scan of `sounds/`.
+6. FLAC playback (`claxon`; `sounds/` is scanned for WAV/AIFF today).
 
-**V2: TIDAL.** Songs are chosen in the TIDAL app in a playlist ("Wecker"); the device syncs that playlist, shows it with covers (160×160 RGB565, decoded once) and downloads tracks as FLAC to `sounds/`. Groundwork: [`spikes/tidal-download`](../spikes/tidal-download) (host tool, working login and download). On the device: HTTP via `esp_idf_svc::http::client`, login code shown on the display, token in the config.
+**V2: TIDAL.** Songs are chosen in the TIDAL app in a playlist ("Wecker"); the device syncs that playlist silently each time the sound page's TIDAL tab opens, shows it with covers (160×160 RGB565, decoded once) and "Zufällige Auswahl" on top, and downloads tracks as FLAC to `sounds/`. Before login the tab shows the login code. An alarm stores `"tidal:<track id>"` or `"tidal:random"` (already parsed; it plays the built-in tone until then). Groundwork: [`spikes/tidal-download`](../spikes/tidal-download) (host tool, working login and download). On the device: HTTP via `esp_idf_svc::http::client`, login code shown on the display, token in the config.
 
-**Not planned:** several alarms, radio, OTA, USB hub.
+**Not planned:** radio, OTA, USB hub.
 
 ## Power concept
 
@@ -41,19 +41,18 @@ Estimates (5 V input, factor-2 uncertainty; only measurements count): active 400
 
 ## `config.json` (planned fields)
 
-`wifi` and `alarm` are read today (see [architecture.md](architecture.md#alarm)); `alarm.sound` is optional (the built-in tone without it). Missing fields get defaults and are written back.
+`wifi`, `alarms` and `ringing` are read today (see [architecture.md](architecture.md#alarm)); `sound` is `"beep"`, `"random"`, a file path or (V2) `"tidal:…"`. Missing fields get defaults and are written back.
 
 ```json
 {
   "wifi": { "ssid": "MeinNetz", "password": "geheim" },
   "sync_interval_h": 24,
-  "alarm": {
-    "enabled": true, "hour": 6, "minute": 30,
-    "weekdays": [1, 1, 1, 1, 1, 0, 0],
-    "sound": "sounds/morgen.flac",
-    "volume": 60, "fade_in_s": 10,
-    "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10
-  },
+  "alarms": [
+    { "id": 1, "name": "Arbeit", "enabled": true, "hour": 6, "minute": 30,
+      "weekdays": [1, 1, 1, 1, 1, 0, 0], "sound": "random",
+      "volume": 60, "fade_in_s": 10 }
+  ],
+  "ringing": { "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10 },
   "display": { "dim_after_s": 30, "dim_percent": 10 },
   "power": {
     "sleep_after_s": 60, "night_mode": "light",

@@ -1,37 +1,38 @@
-//! The alarm on the device: [`wakey_core::alarm::Alarm`] driven by the
+//! The alarms on the device: [`wakey_core::alarm::Alarms`] driven by the
 //! clock, its state kept in NVS, and the speaker following it.
 //!
 //! [`AlarmClock::tick`] runs once a second (from the clock screen's timer)
 //! and [`AlarmClock::input`] on the ringing screen's buttons, both on the UI
-//! thread. While the state machine says "ringing", the USB stream runs and
-//! the player rings the configured sound (or the built-in tone) with its
-//! fade-in; otherwise both are stopped.
+//! thread. While an alarm rings, the USB stream runs and the player rings
+//! that alarm's sound (or the built-in tone) with its fade-in; otherwise
+//! both are stopped.
 
-use crate::audio::player::{Player, Sound};
+use crate::audio::player::{Player, Sound as PlayerSound};
 use crate::audio::uac::UsbAudio;
-use crate::board::sd;
-use crate::{clock, config};
+use crate::{clock, config, sounds};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
-use std::path::Path;
-use wakey_core::alarm::{Alarm, AlarmConfig, Input, Phase, State};
+use wakey_core::alarm::{self, AlarmConfig, Alarms, Input, Phase, RingConfig, State};
 use wakey_core::datetime::DateTime;
 use wakey_core::tone;
 
 const NVS_NAMESPACE: &str = "wakey";
-const NVS_KEY: &str = "alarm";
+const NVS_KEY: &str = "alarms";
 
 pub struct AlarmClock {
-    cfg: AlarmConfig,
-    alarm: Alarm,
+    alarms: Vec<AlarmConfig>,
+    ring: RingConfig,
+    machine: Alarms,
     nvs: Option<EspNvs<NvsDefault>>,
     saved: State,
     player: Player,
     speaker: UsbAudio,
-    /// Whether the speaker is ringing right now.
-    sounding: bool,
+    /// The alarm the speaker is ringing for right now.
+    sounding: Option<u32>,
+    /// A sound page preview is playing.
+    previewing: bool,
 }
 
-/// What the screen shows of the alarm.
+/// What the screens show of the alarms.
 pub enum View {
     /// The next alarm, if one is set.
     Idle {
@@ -49,7 +50,8 @@ pub enum View {
 impl AlarmClock {
     /// Resumes from the state saved in NVS.
     pub fn new(
-        cfg: AlarmConfig,
+        alarms: Vec<AlarmConfig>,
+        ring: RingConfig,
         nvs: EspDefaultNvsPartition,
         player: Player,
         speaker: UsbAudio,
@@ -58,50 +60,138 @@ impl AlarmClock {
             .inspect_err(|e| log::error!("alarm: NVS: {e}; the state will not survive a reboot"))
             .ok();
         let saved = nvs.as_ref().map(load).unwrap_or_default();
-        log::info!("alarm: {cfg:?}, saved {saved:?}");
+        log::info!("alarm: {} alarms, {ring:?}, saved {saved:?}", alarms.len());
+        for a in &alarms {
+            log::info!("alarm: {a:?}");
+        }
         Self {
-            cfg,
-            alarm: Alarm::new(saved.clone()),
+            alarms,
+            ring,
+            machine: Alarms::new(saved.clone()),
             nvs,
             saved,
             player,
             speaker,
-            sounding: false,
+            sounding: None,
+            previewing: false,
         }
     }
 
-    pub fn config(&self) -> &AlarmConfig {
-        &self.cfg
+    pub fn alarms(&self) -> &[AlarmConfig] {
+        &self.alarms
     }
 
-    /// New settings: written to `config.json`, then in effect. On a write
+    pub fn get(&self, id: u32) -> Option<&AlarmConfig> {
+        self.alarms.iter().find(|a| a.id == id)
+    }
+
+    /// A new list: written to `config.json`, then in effect. On a write
     /// error nothing changes.
-    pub fn set_config(&mut self, mut cfg: AlarmConfig) -> std::io::Result<()> {
-        cfg.sanitize();
-        config::save_alarm(&cfg)?;
-        log::info!("alarm: new settings {cfg:?}");
-        self.alarm.reconfigured(&cfg, clock::now());
-        self.cfg = cfg;
+    pub fn set_alarms(&mut self, mut alarms: Vec<AlarmConfig>) -> std::io::Result<()> {
+        alarm::sanitize_list(&mut alarms);
+        config::save_alarms(&alarms)?;
+        self.machine.reconfigured(&alarms, clock::now());
+        self.alarms = alarms;
         self.follow();
         Ok(())
     }
 
+    /// Adds `cfg` (id 0: a new alarm) or replaces the alarm with its id.
+    pub fn save(&mut self, mut cfg: AlarmConfig) -> std::io::Result<()> {
+        let mut list = self.alarms.clone();
+        match list.iter_mut().find(|a| a.id == cfg.id && cfg.id != 0) {
+            Some(a) => *a = cfg,
+            None => {
+                cfg.id = alarm::new_id(&list);
+                list.push(cfg);
+            }
+        }
+        log::info!("alarm: saving {list:?}");
+        self.set_alarms(list)
+    }
+
+    pub fn delete(&mut self, id: u32) -> std::io::Result<()> {
+        log::info!("alarm: deleting {id}");
+        let list = self.alarms.iter().filter(|a| a.id != id).cloned().collect();
+        self.set_alarms(list)
+    }
+
+    pub fn set_enabled(&mut self, id: u32, enabled: bool) -> std::io::Result<()> {
+        let mut list = self.alarms.clone();
+        if let Some(a) = list.iter_mut().find(|a| a.id == id) {
+            a.enabled = enabled;
+        }
+        self.set_alarms(list)
+    }
+
     pub fn tick(&mut self) {
-        self.alarm.tick(&self.cfg, clock::moment());
+        self.machine.tick(&self.alarms, &self.ring, clock::moment());
         self.follow();
     }
 
     pub fn input(&mut self, input: Input) {
         log::info!("alarm: {input:?}");
-        self.alarm.input(&self.cfg, clock::moment(), input);
+        self.machine.input(&self.ring, clock::moment(), input);
         self.follow();
     }
 
+    /// Plays `cfg`'s sound at its volume, without fade-in, until
+    /// [`stop_preview`](Self::stop_preview). Not while an alarm rings.
+    pub fn preview(&mut self, cfg: &AlarmConfig) {
+        if self.sounding.is_some() {
+            return;
+        }
+        let sound = match sounds::resolve(&cfg.sound, cfg.id, clock::now().date()) {
+            Some(path) => PlayerSound::File(path),
+            None => PlayerSound::Tone,
+        };
+        log::info!("alarm: preview {:?} at {} %", cfg.sound, cfg.volume);
+        self.speaker.set_streaming(true);
+        self.player.ring(sound, tone::volume_gain(cfg.volume), 0);
+        self.previewing = true;
+    }
+
+    /// The volume slider moved during a preview.
+    pub fn preview_volume(&mut self, volume: u8) {
+        if self.previewing {
+            self.player.set_gain(tone::volume_gain(volume));
+        }
+    }
+
+    pub fn stop_preview(&mut self) {
+        if self.previewing {
+            self.previewing = false;
+            if self.sounding.is_none() {
+                self.player.stop();
+                self.speaker.set_streaming(false);
+            }
+        }
+    }
+
+    pub fn is_previewing(&self) -> bool {
+        self.previewing
+    }
+
+    /// When `cfg` (possibly being edited, not saved) rings next.
+    pub fn next_of(&self, cfg: &AlarmConfig) -> Option<DateTime> {
+        self.machine.next_of(cfg, clock::now())
+    }
+
+    /// The alarm that rings next.
+    pub fn next_id(&self) -> Option<u32> {
+        self.machine
+            .next(&self.alarms, clock::now())
+            .map(|(id, _)| id)
+    }
+
     pub fn view(&self) -> View {
-        let snoozes_left = self.alarm.snoozes_left(&self.cfg).unwrap_or(0);
-        match self.alarm.state().phase {
+        let snoozes_left = self.machine.snoozes_left(&self.ring).unwrap_or(0);
+        match self.machine.state().phase {
             Phase::Idle => View::Idle {
-                next: self.alarm.next(&self.cfg, clock::now()),
+                next: self
+                    .machine
+                    .next(&self.alarms, clock::now())
+                    .map(|(_, t)| t),
             },
             Phase::Ringing { .. } => View::Ringing { snoozes_left },
             Phase::Snoozed { until, .. } => View::Snoozed {
@@ -113,7 +203,7 @@ impl AlarmClock {
 
     /// Saves a changed state and makes the speaker follow it.
     fn follow(&mut self) {
-        let state = self.alarm.state();
+        let state = self.machine.state();
         if *state != self.saved {
             log::info!("alarm: {:?}", state.phase);
             if let Some(nvs) = &self.nvs {
@@ -121,34 +211,36 @@ impl AlarmClock {
             }
             self.saved = state.clone();
         }
-        let ring = self.alarm.is_ringing();
-        if ring == self.sounding {
+        let ringing = self.machine.ringing();
+        if ringing == self.sounding {
             return;
         }
-        self.sounding = ring;
-        if ring {
-            let sound = match &self.cfg.sound {
-                Some(file) => Sound::File(Path::new(sd::MOUNT_POINT).join(file)),
-                None => Sound::Tone,
-            };
-            self.speaker.set_streaming(true);
-            self.player.ring(
-                sound,
-                tone::volume_gain(self.cfg.volume),
-                self.cfg.fade_in_s,
-            );
-            if !self.speaker.connected() {
-                log::warn!("alarm: ringing, but no speaker is connected");
+        self.sounding = ringing;
+        // An alarm takes over from a preview.
+        self.previewing = false;
+        match ringing.and_then(|id| self.get(id)) {
+            Some(cfg) => {
+                let sound = match sounds::resolve(&cfg.sound, cfg.id, clock::now().date()) {
+                    Some(path) => PlayerSound::File(path),
+                    None => PlayerSound::Tone,
+                };
+                self.speaker.set_streaming(true);
+                self.player
+                    .ring(sound, tone::volume_gain(cfg.volume), cfg.fade_in_s);
+                if !self.speaker.connected() {
+                    log::warn!("alarm: ringing, but no speaker is connected");
+                }
             }
-        } else {
-            self.player.stop();
-            self.speaker.set_streaming(false);
+            None => {
+                self.player.stop();
+                self.speaker.set_streaming(false);
+            }
         }
     }
 }
 
 fn load(nvs: &EspNvs<NvsDefault>) -> State {
-    let mut buf = [0u8; 256];
+    let mut buf = [0u8; 1024];
     match nvs.get_str(NVS_KEY, &mut buf) {
         Ok(Some(json)) => State::from_json(json).unwrap_or_else(|e| {
             log::warn!("alarm: saved state {json:?}: {e}");
