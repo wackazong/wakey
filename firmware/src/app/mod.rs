@@ -103,7 +103,7 @@ fn watch_render_loop() {
                     continue;
                 }
                 still += 1;
-                if still == 2 || still % 10 == 0 {
+                if still == 2 || still.is_multiple_of(10) {
                     let stage = render_loop::STAGE.load(Relaxed) as usize;
                     log::error!(
                         "ui: render loop stuck for {still} s in '{}', panel frames {}, touch read {}",
