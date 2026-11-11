@@ -3,8 +3,8 @@
 //! clock page, holds a row (the first press must repaint only that row,
 //! twice: no slide), flings the list, stops a fling with a tap (must not
 //! open the alarm), flings back, presses, swipes and closes a row,
-//! toggles a switch twice (saved; the state ends as it began) and goes
-//! back, with the per-frame trace (`ui::trace`) on. The gestures go through
+//! toggles a switch twice (saved; the state ends as it began), turns the
+//! minute wheel of an alarm (clicks) and goes back, with the per-frame trace (`ui::trace`) on. The gestures go through
 //! the touch queue like real ones. Each step is logged as `bench: <step>`;
 //! the frames after it belong to that step.
 //!
@@ -94,6 +94,14 @@ pub async fn run() {
     tap(FIRST_SWITCH).await;
     step("toggle back", 1500).await;
     tap(FIRST_SWITCH).await;
+    // Opens an alarm and turns the minute wheel: the log shows
+    // `click: amplifier on` (the clicks reach the speaker's driver).
+    step("wheel", 1500).await;
+    tap(FIRST_ROW).await;
+    Timer::after_millis(1000).await;
+    drag((420.0, 450.0), (0.0, -200.0), 20).await;
+    Timer::after_millis(1500).await;
+    tap((140.0, 64.0)).await;
     step("back to clock", 1500).await;
     tap(LIST_BACK).await;
 

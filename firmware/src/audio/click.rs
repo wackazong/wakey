@@ -20,13 +20,15 @@ use std::time::Duration;
 use wakey_core::tone;
 
 const SAMPLE_RATE: u32 = 48_000;
-/// Click loudness, 0–1 of full scale.
-const AMPLITUDE: f32 = 0.4;
+/// Click loudness, 0–1 of full scale (0.8 was a bit loud; at 0.4, with
+/// 128-frame DMA buffers, the click was gone).
+const AMPLITUDE: f32 = 0.6;
 /// The amplifier goes off after this long without a click.
 const AMP_OFF_AFTER: Duration = Duration::from_secs(3);
-/// DMA: 3 × 2.5 ms; a click starts within ~7.5 ms.
+/// DMA: 3 × 5 ms; a click starts within ~15 ms. (240 frames is what was
+/// heard to work; 120 frames, which the driver rounds to 128, was not.)
 const DMA_BUFFERS: u32 = 3;
-const DMA_FRAMES: u32 = 120;
+const DMA_FRAMES: u32 = 240;
 
 #[derive(Default)]
 pub struct Clicker {
