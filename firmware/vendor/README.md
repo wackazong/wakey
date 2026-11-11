@@ -4,7 +4,11 @@ Patched copies of upstream crates, used through `[patch.crates-io]` in `../Cargo
 
 ## i-slint-renderer-software 1.18.1
 
-Slint's software renderer, unchanged except for one addition in `draw_functions.rs` (`draw_texture_line`, marked "wakey patch"): a fast path for glyphs, meaning alpha maps drawn 1:1 with no rotation and an integer offset. It skips transparent pixels, writes opaque ones directly and blends only the edges. The generic path computes several divisions per glyph and line, plus a division and premultiply per pixel. On the Tab5 the patch cut text rendering in the list bench from about 14 ms to 9 ms per frame.
+Slint's software renderer with two additions, both marked "wakey patch".
+
+`draw_texture_line` in `draw_functions.rs` has a fast path for glyphs, meaning alpha maps drawn 1:1 with no rotation and an integer offset. It skips transparent pixels, writes opaque ones directly and blends only the edges. The generic path computes several divisions per glyph and line, plus a division and premultiply per pixel. On the Tab5 the patch cut text rendering in the list bench from about 14 ms to 9 ms per frame.
+
+`Scene::is_opaque_on_line` in `scene.rs` treats a rounded rectangle with an opaque fill and border as covering its lines outside the top and bottom corners, so the line renderer skips what lies behind it there (the page background behind cards and list rows, a list row's red underlay). Upstream counts only plain rectangles and RGB images as opaque. Output is pixel for pixel the same (checked with `tools/ui-preview`).
 
 Licence unchanged (GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0, see `LICENSES/`). Worth offering upstream; drop the vendored copy when a Slint release has an equivalent.
 

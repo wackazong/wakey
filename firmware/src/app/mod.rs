@@ -10,6 +10,7 @@
 mod alarm;
 mod alarm_list;
 mod alarm_page;
+mod bench;
 mod clock_screen;
 mod name_page;
 mod sound_page;
@@ -159,6 +160,9 @@ async fn app(spawner: embassy_executor::Spawner) {
 
     backlight.set_percent(100).expect("backlight");
     watch_render_loop();
+    if option_env!("WAKEY_UI_BENCH").is_some() {
+        spawner.spawn(bench::run().unwrap());
+    }
     render_loop::run(window, display, &mut rot, None).await
 }
 

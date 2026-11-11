@@ -92,6 +92,8 @@ sdkconfig.defaults     ESP-IDF configuration (commented)
 
 **Look at the pages without the device.** `cd tools/ui-preview && cargo run --release -- <dir> [name filter]` renders every scene (sample data, some with simulated drags) to `<dir>/*.png` and prints the render time per scene. Same `.slint` files, same Slint and renderer; only the line-by-line timing on the device differs.
 
+**Measure the UI on the device.** `WAKEY_UI_BENCH=1 cargo run --release --bin wakey`: ten seconds after boot a scripted run (`app/bench.rs`) opens the alarm list, flings it, presses, swipes, toggles a switch twice (saved, ends as it began) and goes back, and every frame is logged: `frame … ms, gap … ms, dirty (x, y, w, h), … Mcycles, … Minstr`. Cycles per instruction near 1.4 mean the work itself is the cost; near 5, memory stalls (see the internal RAM entry in `docs/pitfalls.md`). `scripts/profile.sh` resolves the sampling profiler's output (`profiler::start`/`report`). Flash a build without the variable afterwards. `LINES=1` makes `tools/ui-preview` render line by line like the device.
+
 **Test the alarm.** `WAKEY_ALARM=HH:MM cargo run --release --bin wakey` a few minutes ahead; the log shows `alarm: Ringing …`, `uac: stream on`, and `alarm: Idle` after the ring timeout. Unit tests for the rules are in `wakey-core/src/alarm.rs`.
 
 **Add a service.** A module (or directory) below `src/`, owning its thread or Embassy task, taking `board` handles or `Switch`es as arguments and returning a cheap `Clone` handle. Put anything computable without hardware into `wakey-core` with tests.

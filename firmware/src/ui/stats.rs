@@ -49,7 +49,7 @@ impl FrameStats {
         let ppa_wait_ms =
             crate::display::ppa::WAIT_US.swap(0, Ordering::Relaxed) as f32 / 1000.0 / n as f32;
         log::info!(
-            "{}: {:.1} fps (panel {:.1} Hz), render avg {:.2} ms max {:.2} ms (PPA wait {ppa_wait_ms:.2}), {} rows/frame, heap free {} KiB (internal {} KiB)",
+            "{}: {:.1} fps (panel {:.1} Hz), render avg {:.2} ms max {:.2} ms (PPA wait {ppa_wait_ms:.2}), {} rows/frame, heap free {} KiB (internal {} KiB, DMA {} KiB, largest DMA block {} B)",
             self.name,
             self.frames as f32 / secs,
             scanned as f32 / secs,
@@ -60,6 +60,11 @@ impl FrameStats {
             unsafe {
                 esp_idf_svc::sys::heap_caps_get_free_size(esp_idf_svc::sys::MALLOC_CAP_INTERNAL)
             } / 1024,
+            unsafe { esp_idf_svc::sys::heap_caps_get_free_size(esp_idf_svc::sys::MALLOC_CAP_DMA) }
+                / 1024,
+            unsafe {
+                esp_idf_svc::sys::heap_caps_get_largest_free_block(esp_idf_svc::sys::MALLOC_CAP_DMA)
+            },
         );
         LAST_FPS_X10.store((self.frames as f32 / secs * 10.0) as u32, Ordering::Relaxed);
         LAST_RENDER_US.store(

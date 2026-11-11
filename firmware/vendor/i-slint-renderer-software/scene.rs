@@ -233,6 +233,32 @@ impl Scene {
         false
     }
 
+    /// Like [`Self::is_guaranteed_opaque`], and also true for a rounded
+    /// rectangle on a line outside its top and bottom corners when its fill
+    /// and border are opaque: every pixel of such a line is one of the two.
+    ///
+    /// wakey patch: cards and list rows are rounded rectangles; without
+    /// this, everything behind them (the page background, a swiped row's
+    /// red underlay) was drawn on every line too.
+    pub fn is_opaque_on_line(&self, span: &SceneItem, line: PhysicalLength) -> bool {
+        if let SceneCommand::RoundedRectangle { rectangle_index } = span.command {
+            let rr = &self.vectors.rounded_rectangles[rectangle_index as usize];
+            if rr.inner_color.alpha != 255 || (rr.width.get() > 0 && rr.border_color.alpha != 255)
+            {
+                return false;
+            }
+            // Distances from the unclipped top and bottom edges, as in
+            // `draw_rounded_rectangle_line`.
+            let y1 = (line - span.pos.y_length()) + rr.top_clip;
+            let y2 = (span.pos.y_length() + span.size.height_length() - line) + rr.bottom_clip
+                - PhysicalLength::new(1);
+            let top = rr.radius.top_left.max(rr.radius.top_right);
+            let bottom = rr.radius.bottom_left.max(rr.radius.bottom_right);
+            return y1.get() >= top && y2.get() >= bottom;
+        }
+        self.is_guaranteed_opaque(&span.command)
+    }
+
     pub fn is_guaranteed_opaque(&self, command: &SceneCommand) -> bool {
         match command {
             SceneCommand::Rectangle { color } => color.alpha == 255,

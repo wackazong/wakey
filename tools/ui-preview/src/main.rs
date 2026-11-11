@@ -77,12 +77,31 @@ impl Preview {
         self.window.request_redraw();
         let t = std::time::Instant::now();
         self.window.draw_if_needed(|r| {
-            r.render(&mut buf, W);
+            if std::env::var_os("LINES").is_some() {
+                r.render_by_line(Lines(&mut buf));
+            } else {
+                r.render(&mut buf, W);
+            }
         });
         let ms = t.elapsed().as_secs_f32() * 1000.0;
         let path = self.out.join(format!("{name}.png"));
         write_png(&path, &buf);
         println!("{ms:6.2} ms {}", path.display());
+    }
+}
+
+/// Line-by-line rendering, as on the device (`LINES=1`).
+struct Lines<'a>(&'a mut [Rgb565Pixel]);
+
+impl slint::platform::software_renderer::LineBufferProvider for Lines<'_> {
+    type TargetPixel = Rgb565Pixel;
+    fn process_line(
+        &mut self,
+        line: usize,
+        range: core::ops::Range<usize>,
+        render_fn: impl FnOnce(&mut [Rgb565Pixel]),
+    ) {
+        render_fn(&mut self.0[line * W + range.start..line * W + range.end]);
     }
 }
 
@@ -119,6 +138,9 @@ fn row(id: i32, time: &str, name: &str, d: [u8; 7], enabled: bool, next: bool) -
         days: days(d),
         enabled,
         next,
+        dx: 0.0,
+        dragging: false,
+        highlighted: false,
     }
 }
 

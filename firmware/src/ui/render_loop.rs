@@ -62,10 +62,25 @@ const DEBUG_TOUCH: bool = false;
 /// Log the dirty rectangles of frames that take longer than 35 ms.
 const DEBUG_SLOW_FRAMES: bool = true;
 
+/// Log every frame: render time, time since the previous frame, dirty
+/// bounding box, CPU cycles and instructions (set by `app::bench`).
+pub static TRACE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// Where the render loop is (for the stall report): see [`stage`].
 pub static STAGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// Loop iterations since boot.
 pub static ITERATIONS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The CPU's cycle and retired-instruction counters (cycles per instruction
+/// show whether a frame is slow from work or from memory stalls).
+fn counters() -> (u32, u32) {
+    let (c, i): (u32, u32);
+    unsafe {
+        core::arch::asm!("csrr {0}, mcycle", out(reg) c);
+        core::arch::asm!("csrr {0}, minstret", out(reg) i);
+    }
+    (c, i)
+}
 
 fn stage(s: u32) {
     STAGE.store(s, core::sync::atomic::Ordering::Relaxed);
@@ -92,6 +107,7 @@ pub async fn run(
     let mut stats = FrameStats::new("slint/ppa");
     // An event that woke the idle loop, handled in the next iteration.
     let mut woken_by: Option<TouchEvent> = None;
+    let mut last_present = Instant::now();
     loop {
         ITERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         stage(1);
@@ -126,6 +142,7 @@ pub async fn run(
 
         stage(4);
         let t0 = Instant::now();
+        let (cyc0, ins0) = counters();
         let mut hook_started = false;
         if hook_active && let Some(h) = hook.as_mut() {
             h.start(target, rot);
@@ -134,15 +151,18 @@ pub async fn run(
         let mut slint_drawn = false;
         let mut rows = 0;
         let mut slint_x = 0..0;
+        let mut dirty = (0, 0, 0, 0);
         window.draw_if_needed(|renderer| {
             renderer.set_rendering_rotation(RenderingRotation::NoRotation);
             rot.begin(target);
             let region = renderer.render_by_line(PpaLines { rot: &mut *rot });
             rot.finish();
             slint_drawn = true;
-            rows = region.bounding_box_size().width as usize;
-            let x0 = region.bounding_box_origin().x.max(0) as usize;
+            let (o, sz) = (region.bounding_box_origin(), region.bounding_box_size());
+            rows = sz.width as usize;
+            let x0 = o.x.max(0) as usize;
             slint_x = x0..x0 + rows;
+            dirty = (o.x, o.y, sz.width, sz.height);
             if DEBUG_SLOW_FRAMES && t0.elapsed() > Duration::from_millis(35) {
                 let rects: Vec<_> = region
                     .iter()
@@ -179,7 +199,18 @@ pub async fn run(
             // write back from the cache, so only one row is synced (the
             // driver needs a non-empty area to switch buffers).
             display.present(0..1).expect("present");
+            let (cyc1, ins1) = counters();
             stats.frame(render_time, rows);
+            if TRACE.load(core::sync::atomic::Ordering::Relaxed) {
+                log::info!(
+                    "frame {:.1} ms, gap {:.1} ms, dirty {dirty:?}, {:.1} Mcycles, {:.1} Minstr",
+                    render_time.as_micros() as f32 / 1000.0,
+                    last_present.elapsed().as_micros() as f32 / 1000.0,
+                    cyc1.wrapping_sub(cyc0) as f32 / 1e6,
+                    ins1.wrapping_sub(ins0) as f32 / 1e6,
+                );
+            }
+            last_present = Instant::now();
         }
 
         if !window.has_active_animations() && !hook_active {

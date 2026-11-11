@@ -77,11 +77,15 @@ pub fn save_alarms(alarms: &[AlarmConfig]) -> std::io::Result<()> {
 fn replace(text: &str) -> std::io::Result<()> {
     let path = format!("{}/{FILE}", sd::MOUNT_POINT);
     let tmp = format!("{}/config.tmp", sd::MOUNT_POINT);
-    std::fs::write(&tmp, text)?;
+    let context =
+        |step: &str, e: std::io::Error| std::io::Error::new(e.kind(), format!("{step}: {e}"));
+    std::fs::write(&tmp, text).map_err(|e| context("writing config.tmp", e))?;
     // FAT cannot rename onto an existing file.
     match std::fs::remove_file(&path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(context("removing config.json", e));
+        }
         _ => {}
     }
-    std::fs::rename(&tmp, &path)
+    std::fs::rename(&tmp, &path).map_err(|e| context("renaming config.tmp", e))
 }

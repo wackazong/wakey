@@ -155,7 +155,6 @@ export component ClockPage inherits Rectangle {
         width: 360px;
         height: 96px;
         border-radius: 48px;
-        clip: true;
         background: Theme.surface;
         border-width: 2px;
         border-color: Theme.outline;
@@ -164,6 +163,9 @@ export component ClockPage inherits Rectangle {
             x: 0;
             width: stop-area.pressed ? parent.width : 0;
             animate width { duration: stop-area.pressed ? 1500ms : 0ms; }
+            // Rounded itself: the software renderer clips to the parent's
+            // rectangle and ignores its border radius.
+            border-radius: 48px;
             background: Theme.accent-dark;
         }
         Text {

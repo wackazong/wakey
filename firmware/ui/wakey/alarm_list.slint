@@ -27,11 +27,21 @@ export struct AlarmRow {
     enabled: bool,
     // Rings next (amber time).
     next: bool,
+    // Touch state, set by the page (Rust leaves it at the defaults). Kept
+    // per row so a press or swipe repaints only that row: a binding on a
+    // page-wide "touched row" property made every row repaint (the whole
+    // list, ~170 ms on the ESP32-P4).
+    // Horizontal offset of the row content (≤ 0).
+    dx: length,
+    // Follows the finger (no animation).
+    dragging: bool,
+    // Touched or being swiped.
+    highlighted: bool,
 }
 
 // Set from Rust (`app/alarm_list.rs`).
 export global AlarmList {
-    in property <[AlarmRow]> rows;
+    in-out property <[AlarmRow]> rows;
     callback back();
     callback add();
     callback open(int);
@@ -41,16 +51,11 @@ export global AlarmList {
 
 component Row inherits Rectangle {
     in property <AlarmRow> alarm;
-    // Horizontal offset of the row content (≤ 0).
-    in property <length> dx;
-    // Follows the finger (no animation).
-    in property <bool> dragging;
-    // Touched or being swiped.
-    in property <bool> highlighted;
     in property <length> reveal;
+    property <length> dx: root.alarm.dx;
 
     height: 150px;
-    clip: true;
+    // No `clip` needed: the list area clips the sliding content.
     border-radius: 28px;
     background: root.dx < 0 ? Theme.danger : Theme.card;
 
@@ -68,8 +73,8 @@ component Row inherits Rectangle {
         x: root.dx;
         width: parent.width;
         border-radius: 28px;
-        background: root.highlighted ? Theme.surface : Theme.card;
-        animate x { duration: root.dragging ? 0ms : 180ms; easing: ease-out; }
+        background: root.alarm.highlighted ? Theme.surface : Theme.card;
+        animate x { duration: root.alarm.dragging ? 0ms : 180ms; easing: ease-out; }
         animate background { duration: 120ms; }
 
         Text {
@@ -182,16 +187,26 @@ export component AlarmListPage inherits Rectangle {
             }
             return i;
         }
+        // Per-row touch state (see `AlarmRow`); only rows that change are
+        // written, so only they repaint.
+        function set-highlight(i: int, on: bool) {
+            if (i >= 0 && i < AlarmList.rows.length && AlarmList.rows[i].highlighted != on) {
+                AlarmList.rows[i].highlighted = on;
+            }
+        }
+        function set-dx(i: int, dx: length, dragging: bool) {
+            if (i >= 0 && i < AlarmList.rows.length
+                    && (AlarmList.rows[i].dx != dx || AlarmList.rows[i].dragging != dragging)) {
+                AlarmList.rows[i].dx = dx;
+                AlarmList.rows[i].dragging = dragging;
+            }
+        }
 
         for alarm[i] in AlarmList.rows: Row {
             y: i * view.pitch - view.scroll;
             width: parent.width;
             alarm: alarm;
             reveal: view.reveal;
-            dragging: ta.pressed && view.mode == 2 && i == view.touched;
-            highlighted: ta.pressed && i == view.touched && view.mode != 1 && view.mode != 3;
-            dx: ta.pressed && view.mode == 2 && i == view.touched ? view.swipe-dx
-                : i == view.open-row ? -view.reveal : 0;
         }
 
         ta := TouchArea {
@@ -207,10 +222,15 @@ export component AlarmListPage inherits Rectangle {
                     view.swipe-dx = view.touched == view.open-row && view.open-row >= 0 ? -view.reveal : 0;
                     if (view.open-row >= 0 && view.touched != view.open-row) {
                         // A touch elsewhere only closes the open row.
+                        view.set-dx(view.open-row, 0, false);
                         view.open-row = -1;
                         view.mode = 3;
+                    } else {
+                        view.set-highlight(view.touched, true);
                     }
                 } else if (e.kind == PointerEventKind.up) {
+                    let i = view.touched;
+                    view.set-highlight(i, false);
                     if (view.mode == 1) {
                         if (animation-tick() - view.last-t > 80ms) {
                             view.vel = 0;
@@ -219,27 +239,33 @@ export component AlarmListPage inherits Rectangle {
                             view.vel += view.carried;
                         }
                         view.flinging = Math.abs(view.vel) > 0.5;
-                    } else if (view.mode == 2 && view.touched >= 0) {
+                    } else if (view.mode == 2 && i >= 0) {
                         if (view.swipe-dx < -self.width * 0.6) {
                             view.open-row = -1;
-                            AlarmList.delete(AlarmList.rows[view.touched].id);
+                            AlarmList.delete(AlarmList.rows[i].id);
                         } else {
-                            view.open-row = view.swipe-dx < -view.reveal / 2 ? view.touched : -1;
+                            view.open-row = view.swipe-dx < -view.reveal / 2 ? i : -1;
+                            view.set-dx(i, view.open-row == i ? -view.reveal : 0, false);
                         }
-                    } else if (view.mode == 0 && view.touched >= 0) {
-                        if (view.open-row == view.touched) {
+                    } else if (view.mode == 0 && i >= 0) {
+                        if (view.open-row == i) {
                             view.open-row = -1;
+                            view.set-dx(i, 0, false);
                             if (self.mouse-x > self.width - view.reveal) {
-                                AlarmList.delete(AlarmList.rows[view.touched].id);
+                                AlarmList.delete(AlarmList.rows[i].id);
                             }
                         } else if (self.mouse-x > self.width - 220px) {
-                            AlarmList.toggle(AlarmList.rows[view.touched].id, !AlarmList.rows[view.touched].enabled);
+                            AlarmList.toggle(AlarmList.rows[i].id, !AlarmList.rows[i].enabled);
                         } else {
-                            AlarmList.open(AlarmList.rows[view.touched].id);
+                            AlarmList.open(AlarmList.rows[i].id);
                         }
                     }
                     view.mode = 0;
                 } else if (e.kind == PointerEventKind.cancel) {
+                    view.set-highlight(view.touched, false);
+                    if (view.mode == 2) {
+                        view.set-dx(view.touched, view.open-row == view.touched ? -view.reveal : 0, false);
+                    }
                     view.mode = 0;
                 }
             }
@@ -249,6 +275,7 @@ export component AlarmListPage inherits Rectangle {
                 if (view.mode == 0) {
                     if (Math.abs(dy) > 12px && Math.abs(dy) >= Math.abs(dx)) {
                         view.mode = 1;
+                        view.set-highlight(view.touched, false);
                     } else if (Math.abs(dx) > 12px && view.touched >= 0) {
                         view.mode = 2;
                     }
@@ -263,6 +290,7 @@ export component AlarmListPage inherits Rectangle {
                     view.scroll = new;
                 } else if (view.mode == 2) {
                     view.swipe-dx = Math.min(0px, (view.open-row == view.touched ? -view.reveal : 0px) + dx);
+                    view.set-dx(view.touched, view.swipe-dx, true);
                 }
             }
         }

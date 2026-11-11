@@ -1347,7 +1347,7 @@ fn render_window_frame_by_line(
                     let first_cover = items.iter().position(|span| {
                         span.pos.x <= r.start
                             && span.pos.x + span.size.width >= r.end
-                            && scene.is_guaranteed_opaque(&span.command)
+                            && scene.is_opaque_on_line(span, scene.current_line)
                     });
                     let items = match first_cover {
                         Some(i) => &items[..=i],
