@@ -174,6 +174,9 @@ async fn app(spawner: embassy_executor::Spawner) {
     let window = platform::init();
     let ui = screens::AppWindow::new().expect("UI");
     ui.show().expect("show");
+    transition::set_background(crate::ui::rgb565(
+        ui.global::<screens::Theme>().get_background(),
+    ));
     let ctx = Rc::new(Ctx {
         window: ui.as_weak(),
         alarm: alarm.clone(),

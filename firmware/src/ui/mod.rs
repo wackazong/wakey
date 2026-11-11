@@ -29,3 +29,8 @@ use crate::display;
 pub const UI_WIDTH: u32 = display::HEIGHT as u32;
 /// Landscape UI height, pixels.
 pub const UI_HEIGHT: u32 = display::WIDTH as u32;
+
+/// A Slint colour as the panel's RGB565.
+pub fn rgb565(c: slint::Color) -> u16 {
+    u16::from(c.red() >> 3) << 11 | u16::from(c.green() >> 2) << 5 | u16::from(c.blue() >> 3)
+}

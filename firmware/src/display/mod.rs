@@ -372,6 +372,20 @@ impl Display {
         unsafe { core::slice::from_raw_parts_mut(self.fbs[back], PIXELS) }
     }
 
+    /// The back buffer if the last flip is done, without waiting (see
+    /// [`back_buffer`](Self::back_buffer)).
+    pub fn try_back_buffer(&mut self) -> Option<&mut [u16]> {
+        if let Some(requested_at) = self.pending_flip {
+            if Self::frames_scanned().wrapping_sub(requested_at) as i32 <= 0 {
+                return None;
+            }
+            self.pending_flip = None;
+        }
+        let back = 1 - self.front;
+        // SAFETY: as in `back_buffer`.
+        Some(unsafe { core::slice::from_raw_parts_mut(self.fbs[back], PIXELS) })
+    }
+
     /// The buffer on screen (or about to be, after a flip), for DMA reads
     /// only: the CPU must not write it.
     pub fn front_buffer(&self) -> *mut u16 {

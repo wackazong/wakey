@@ -106,7 +106,7 @@ pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
         // All rows of a typical list: no rendering while scrolling.
         slots: 16,
         slop: l.get_slop(),
-        background: rgb565(window.global::<Theme>().get_background()),
+        background: crate::ui::rgb565(window.global::<Theme>().get_background()),
         page_draws_still: true,
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
@@ -118,10 +118,6 @@ pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
         view,
     };
     ListLayer::new(layout, row_window, rows)
-}
-
-fn rgb565(c: slint::Color) -> u16 {
-    u16::from(c.red() >> 3) << 11 | u16::from(c.green() >> 2) << 5 | u16::from(c.blue() >> 3)
 }
 
 /// The alarm list as the list layer sees it: the rows in the `AlarmList`

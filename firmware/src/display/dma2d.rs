@@ -41,10 +41,13 @@ unsafe extern "C" {
     ) -> sys::esp_err_t;
 }
 
-static DONE: AtomicU32 = AtomicU32::new(0);
-
-unsafe extern "C" fn on_done(_m: Handle, _e: *mut c_void, _a: *mut c_void) -> bool {
-    DONE.fetch_add(1, Ordering::Release);
+/// Counts the finished copies of one [`FbCopy`] (`cb_args`). Each instance
+/// has its own: with one counter for all, a copy of one instance counted
+/// as done when the other's finished.
+unsafe extern "C" fn on_done(_m: Handle, _e: *mut c_void, done: *mut c_void) -> bool {
+    // SAFETY: `done` is the `AtomicU32` boxed in the `FbCopy`, which lives
+    // as long as its copies (it waits for them before dropping).
+    unsafe { &*done.cast::<AtomicU32>() }.fetch_add(1, Ordering::Release);
     false
 }
 
@@ -59,7 +62,10 @@ pub struct Picture {
 /// The 2D-DMA copy engine. One copy at a time.
 pub struct FbCopy {
     handle: Handle,
+    /// Copies started, and finished (counted by the ISR; boxed, so its
+    /// address stays fixed).
     submitted: u32,
+    done: Box<AtomicU32>,
 }
 
 impl FbCopy {
@@ -75,7 +81,8 @@ impl FbCopy {
         };
         Ok(Self {
             handle,
-            submitted: DONE.load(Ordering::Acquire),
+            submitted: 0,
+            done: Box::new(AtomicU32::new(0)),
         })
     }
 
@@ -112,17 +119,33 @@ impl FbCopy {
                 self.handle,
                 &mut d,
                 Some(on_done),
-                core::ptr::null_mut()
+                (&raw const *self.done).cast_mut().cast()
             ))
             .expect("2D-DMA copy");
         }
         self.submitted = self.submitted.wrapping_add(1);
     }
 
+    /// True once the last copy has finished.
+    pub fn is_done(&self) -> bool {
+        (self
+            .done
+            .load(Ordering::Acquire)
+            .wrapping_sub(self.submitted) as i32)
+            >= 0
+    }
+
     /// Waits until the last copy has finished.
     pub fn wait(&self) {
-        while (DONE.load(Ordering::Acquire).wrapping_sub(self.submitted) as i32) < 0 {
+        while !self.is_done() {
             core::hint::spin_loop();
         }
+    }
+}
+
+impl Drop for FbCopy {
+    /// The ISR writes `done` until the last copy has finished.
+    fn drop(&mut self) {
+        self.wait();
     }
 }
