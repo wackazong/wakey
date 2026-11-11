@@ -37,7 +37,12 @@ impl slint::platform::Platform for Platform {
 }
 
 struct Preview {
+    /// Renders like the firmware: only what changed, into two buffers in
+    /// turn (`RepaintBufferType::SwappedBuffers`), once per 16 ms step.
     window: Rc<MinimalSoftwareWindow>,
+    buffers: std::cell::RefCell<[Vec<Rgb565Pixel>; 2]>,
+    /// The buffer rendered last (what the panel would show).
+    front: std::cell::Cell<usize>,
     ui: AppWindow,
     /// The alarm list's row as the list layer renders it.
     row_window: Rc<MinimalSoftwareWindow>,
@@ -52,8 +57,30 @@ impl Preview {
     fn run(&self, ms: u64) {
         for _ in 0..ms / 16 {
             std::thread::sleep(Duration::from_millis(16));
-            slint::platform::update_timers_and_animations();
+            self.frame();
         }
+    }
+
+    /// One frame: timers and animations, then Slint renders what changed
+    /// into the back buffer, which becomes the front. Returns the render
+    /// time, or `None` if nothing changed.
+    fn frame(&self) -> Option<f32> {
+        slint::platform::update_timers_and_animations();
+        let back = 1 - self.front.get();
+        let mut buffers = self.buffers.borrow_mut();
+        let buf = &mut buffers[back];
+        let t = std::time::Instant::now();
+        let drawn = self.window.draw_if_needed(|r| {
+            if self.by_line {
+                r.render_by_line(Lines(buf));
+            } else {
+                r.render(buf, W);
+            }
+        });
+        drawn.then(|| {
+            self.front.set(back);
+            t.elapsed().as_secs_f32() * 1000.0
+        })
     }
 
     fn press(&self, x: f32, y: f32) {
@@ -80,14 +107,10 @@ impl Preview {
     }
 
     /// Renders the main window into a new buffer.
+    /// Renders a frame; returns the screen.
     fn render(&self) -> Vec<Rgb565Pixel> {
-        slint::platform::update_timers_and_animations();
-        let mut buf = vec![Rgb565Pixel::default(); W * H];
-        self.window.request_redraw();
-        self.window.draw_if_needed(|r| {
-            r.render(&mut buf, W);
-        });
-        buf
+        self.frame();
+        self.buffers.borrow()[self.front.get()].clone()
     }
 
     /// Checks that every row fully in view on the list page has the same
@@ -146,18 +169,8 @@ impl Preview {
         {
             return;
         }
-        slint::platform::update_timers_and_animations();
-        let mut buf = vec![Rgb565Pixel::default(); W * H];
-        self.window.request_redraw();
-        let t = std::time::Instant::now();
-        self.window.draw_if_needed(|r| {
-            if self.by_line {
-                r.render_by_line(Lines(&mut buf));
-            } else {
-                r.render(&mut buf, W);
-            }
-        });
-        let ms = t.elapsed().as_secs_f32() * 1000.0;
+        let ms = self.frame().unwrap_or(0.0);
+        let buf = self.buffers.borrow()[self.front.get()].clone();
         let path = self.out.join(format!("{name}.png"));
         write_png(&path, &buf);
         println!("{ms:6.2} ms {}", path.display());
@@ -238,7 +251,7 @@ fn main() {
     let filter = args.next();
     std::fs::create_dir_all(&out).expect("output dir");
 
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
     window.set_size(PhysicalSize::new(W as u32, H as u32));
     let row_window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Platform(std::cell::RefCell::new(vec![
@@ -261,6 +274,11 @@ fn main() {
         ui,
         row_window,
         row_view,
+        buffers: std::cell::RefCell::new([
+            vec![Rgb565Pixel::default(); W * H],
+            vec![Rgb565Pixel::default(); W * H],
+        ]),
+        front: std::cell::Cell::new(0),
         out,
         filter,
         by_line,
@@ -310,6 +328,17 @@ fn main() {
     list.on_delete(|id| println!("delete {id}"));
     list.on_open(|id| println!("open {id}"));
     list.on_toggle(|id, on| println!("toggle {id} {on}"));
+    // The first press after opening the page: the row lights up in place
+    // (it once slid in from the left, from the open-row offset).
+    ui.set_page(0);
+    p.render();
+    ui.set_page(1);
+    p.render();
+    p.press(600.0, 207.0);
+    p.run(130);
+    p.shot("1-list-first-press");
+    p.window.dispatch_event(WindowEvent::PointerExited);
+    p.run(300);
     // Hold a row: it lights up after 100 ms. Then the touch is taken over
     // (a scroll): the page gets a cancel and the highlight fades.
     p.press(600.0, 207.0);

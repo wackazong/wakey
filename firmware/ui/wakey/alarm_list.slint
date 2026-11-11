@@ -95,6 +95,10 @@ component Row inherits Rectangle {
     in property <bool> highlighted;
     // Changes animate (false: shown at once, see `ListRowPage`).
     in property <bool> animated: true;
+    // The switch slides on a toggle. Off for a row that shows one alarm
+    // after the other (the active row): it would slide from the previous
+    // alarm's state.
+    in property <bool> switch-animated: true;
 
     pure function day-on(i: int) -> bool {
         return Math.mod(Math.floor(root.alarm.days / Math.pow(2, i)), 2) == 1;
@@ -158,7 +162,7 @@ component Row inherits Rectangle {
             y: (parent.height - self.height) / 2;
             on: root.alarm.enabled;
             touchable: false;
-            animated: root.animated;
+            animated: root.animated && root.switch-animated;
         }
     }
 }
@@ -288,9 +292,13 @@ export component AlarmListPage inherits Rectangle {
             width: parent.width;
             alarm: AlarmList.rows[view.active];
             reveal: view.reveal;
-            dx: view.swiping ? view.swipe-dx : view.active == view.open-row ? -view.reveal : 0;
+            // Open only for a real row: with none (-1 == -1) the hidden row
+            // sat at the open offset and slid in at the first press.
+            dx: view.swiping ? view.swipe-dx
+                : view.active >= 0 && view.active == view.open-row ? -view.reveal : 0;
             dragging: view.swiping;
             highlighted: view.pressing;
+            switch-animated: false;
         }
 
         ta := TouchArea {
@@ -310,8 +318,11 @@ export component AlarmListPage inherits Rectangle {
                     }
                 } else if (e.kind == PointerEventKind.up) {
                     let i = view.touched;
+                    let toggles = view.gesture == Gesture.undecided && i >= 0 && view.open-row != i
+                        && self.mouse-x > self.width - view.switch-area;
                     // Feedback was shown, or an open row closes: animate it.
-                    let animates = view.pressing || (i >= 0 && i == view.open-row);
+                    // Not after a toggle: the switch slides in the row below.
+                    let animates = !toggles && (view.pressing || (i >= 0 && i == view.open-row));
                     if (view.gesture == Gesture.swipe && i >= 0) {
                         if (view.swipe-dx < -self.width * view.delete-fraction) {
                             view.delete(i);
@@ -324,7 +335,7 @@ export component AlarmListPage inherits Rectangle {
                             if (self.mouse-x > self.width - view.reveal) {
                                 view.delete(i);
                             }
-                        } else if (self.mouse-x > self.width - view.switch-area) {
+                        } else if (toggles) {
                             AlarmList.toggle(AlarmList.rows[i].id, !AlarmList.rows[i].enabled);
                         } else {
                             AlarmList.open(AlarmList.rows[i].id);
