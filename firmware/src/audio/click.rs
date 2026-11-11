@@ -24,16 +24,17 @@ use std::time::{Duration, Instant};
 use wakey_core::tone;
 
 const SAMPLE_RATE: u32 = 48_000;
-/// Peak loudness of a single click, 0–1 of full scale (0.6 was barely
-/// audible when turning slowly; the codec's output is at its maximum).
-const AMPLITUDE: f32 = 1.0;
+/// Peak loudness of a single click, 0–1 of full scale.
+const AMPLITUDE: f32 = 0.5;
 /// The amplifier goes off after this long without a click or a wake.
 const AMP_OFF_AFTER: Duration = Duration::from_secs(8);
 /// Time the amplifier gets to start before the first click.
 const AMP_START: Duration = Duration::from_millis(50);
-/// DMA: 3 × 5 ms; a click starts within ~15 ms.
+/// DMA: 3 × 2 ms. The keep-alive keeps the buffers full, so a click
+/// waits behind them: small buffers keep that wait short and even (5 ms
+/// buffers made fast clicks uneven).
 const DMA_BUFFERS: u32 = 3;
-const DMA_FRAMES: u32 = 240;
+const DMA_FRAMES: u32 = 96;
 
 #[derive(Default)]
 pub struct Clicker {
