@@ -6,7 +6,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5. Des
 
 | Binary | What it is |
 | --- | --- |
-| `wakey` | The alarm clock: clock page (RTC time, Europe/Zurich, date, next alarm, Wi-Fi and speaker status), alarm list, alarm, sound and name pages (tap the alarm line), the alarms ringing on the USB speaker (snooze, stop), wheel clicks on the built-in speaker, Wi-Fi + NTP, touch |
+| `wakey` | The alarm clock: clock page (RTC time, Europe/Zurich, date, next alarm, symbols for a missing speaker or network), alarm list, alarm, sound and name pages (tap the alarm line), the alarms ringing on the USB speaker (snooze, stop), wheel clicks on the built-in speaker, Wi-Fi + NTP, touch |
 | `ui_bench` | Slint and list-layer bench: clock digits, an animation and a 300-row list to drag and fling; frame statistics on screen and in the log (target 66 fps) |
 | `audio_test` | USB speaker test: plays every WAV/AIFF in the SD card root and `sounds/` in a loop (writes a 44.1 kHz test tone first), or a 440 Hz sine without a card; logs packets and underruns; survives re-plugging |
 
@@ -48,7 +48,7 @@ src/
 │  ├─ alarm_page.rs    alarm page view model (the draft being edited)
 │  ├─ sound_page.rs    sound page view model (sound, volume, fade-in, preview)
 │  ├─ name_page.rs     name keyboard view model
-│  ├─ clock_screen.rs  clock page view model (time, date, alarm, Wi-Fi, speaker)
+│  ├─ clock_screen.rs  clock page view model (time, date, alarm, missing speaker/network)
 │  └─ bench.rs         scripted gestures for measuring (feature ui-bench)
 ├─ ui/
 │  ├─ platform.rs      Slint platform, windows, rendering through the PPA

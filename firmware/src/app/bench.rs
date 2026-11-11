@@ -19,7 +19,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use embassy_time::{Instant, Timer};
 
 /// The alarm line on the clock page (opens the list).
-const CLOCK_ALARM_LINE: (f32, f32) = (290.0, 658.0);
+const CLOCK_ALARM_LINE: (f32, f32) = (640.0, 652.0);
 /// "‹ Uhr" on the list page.
 const LIST_BACK: (f32, f32) = (140.0, 64.0);
 /// The middle of the first row's text, and its switch.

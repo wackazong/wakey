@@ -12,7 +12,9 @@
 
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel};
 use slint::platform::{PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalSize, VecModel};
+use slint::{
+    ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalSize, SharedString, VecModel,
+};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -350,17 +352,35 @@ fn main() {
 
     // Clock.
     let clock = ui.global::<Clock>();
-    clock.set_hours("06".into());
-    clock.set_minutes("12".into());
-    clock.set_seconds("41".into());
+    let chars = |s: &str| {
+        ModelRc::new(VecModel::from(
+            s.chars()
+                .map(|c| SharedString::from(c.to_string()))
+                .collect::<Vec<_>>(),
+        ))
+    };
+    let time = chars("06:12");
+    clock.set_time(time.clone());
+    clock.set_seconds(chars("41"));
     clock.set_date("Dienstag, 10. November 2026".into());
-    clock.set_alarm("Wecker morgen 06:30".into());
-    clock.set_speaker_connected(true);
-    clock.set_wifi_text("MeinNetz · 192.168.1.23 · Zeit via NTP".into());
-    clock.set_wifi_state(2);
-    clock.set_wifi_bars(3);
+    clock.set_alarm("Morgen 06:30".into());
     ui.set_page(0);
+    p.run(500);
     p.shot("0-clock");
+    // The minute changes: its last digit rolls (old up and out, new up
+    // from below), the date as a whole.
+    time.set_row_data(4, "3".into());
+    clock.set_date("Mittwoch, 11. November 2026".into());
+    p.run(160);
+    p.shot("0-clock-rolling");
+    p.run(400);
+    clock.set_no_speaker(true);
+    clock.set_no_network(true);
+    clock.set_time(chars("10:11"));
+    p.run(500);
+    p.shot("0-clock-missing");
+    clock.set_no_speaker(false);
+    clock.set_no_network(false);
 
     // Alarm list.
     let list = ui.global::<AlarmList>();
@@ -521,8 +541,7 @@ fn main() {
     ed.set_name("Übung Ärger Öl".into());
     ui.set_page(2);
     p.shot("2-alarm-umlauts");
-    clock.set_wifi_text("24px: ÜÄÖ üäö".into());
-    clock.set_alarm("30px: ÜÄÖ üäö".into());
+    clock.set_alarm("40px: ÜÄÖ üäö".into());
     clock.set_date("40px: ÜÄÖ üäö".into());
     ui.set_page(0);
     p.shot("0-clock-umlauts");

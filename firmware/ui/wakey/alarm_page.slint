@@ -149,7 +149,8 @@ export component AlarmPage inherits Rectangle {
     }
     Text {
         x: root.time-x;
-        y: 600px;
+        // Its bottom on the card's bottom edge.
+        y: 132px + 556px - self.height;
         width: root.time-width;
         height: 48px;
         text: AlarmEditor.error != "" ? AlarmEditor.error
@@ -185,10 +186,10 @@ export component AlarmPage inherits Rectangle {
             }
         }
 
-        // Name, Tage (label and chips) and Klang with equal gaps between
-        // what they show (92 px) and 32 px to the card's top and bottom
-        // edge: Name's text sits in the middle of its 112 px row, Klang's
-        // two lines at 28–136 px of its 160 px row.
+        // Name, Tage and Klang with even gaps between what they show and
+        // 32 px to the card's top and bottom edge: Name's text sits in the
+        // middle of its 112 px row, Klang's two lines at 28–136 px of its
+        // 160 px row. The chips sit 32 px below the Tage label.
         Text {
             x: 32px;
             y: 164px;
@@ -201,7 +202,7 @@ export component AlarmPage inherits Rectangle {
         // Seven chips across the card, 12 px apart.
         for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
             x: 24px + i * (self.width + 12px);
-            y: 232px;
+            y: 252px;
             width: (parent.width - 48px - 6 * 12px) / 7;
             text: name;
             on: AlarmEditor.days[i];

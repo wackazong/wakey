@@ -29,7 +29,8 @@ export global Theme {
 export component Icon inherits Path {
     // 0 back chevron, 1 forward chevron, 2 check, 3 play, 4 stop,
     // 5 shuffle, 6 backspace, 7 shift, 8 plus, 9 fade-in (a level rising
-    // from silence, then holding).
+    // from silence, then holding), 10 alarm clock, 11 no speaker, 12 no
+    // network.
     in property <int> kind;
     in property <color> color: Theme.text;
     viewbox-width: 24;
@@ -46,6 +47,9 @@ export component Icon inherits Path {
         : root.kind == 6 ? "M 9 5 L 21 5 L 21 19 L 9 19 L 2 12 Z M 12 9 L 18 15 M 18 9 L 12 15"
         : root.kind == 7 ? "M 12 3 L 21 12 L 16 12 L 16 20 L 8 20 L 8 12 L 3 12 Z"
         : root.kind == 9 ? "M 3 19 L 14 6 L 21 6"
+        : root.kind == 10 ? "M 12 5 A 8 8 0 1 1 11.99 5 Z M 12 9 L 12 13 L 15 15 M 2.5 6.5 L 6.5 2.5 M 21.5 6.5 L 17.5 2.5 M 6.5 19.5 L 5 21.5 M 17.5 19.5 L 19 21.5"
+        : root.kind == 11 ? "M 3 9 L 7 9 L 12 5 L 12 19 L 7 15 L 3 15 Z M 16 9.5 L 21 14.5 M 21 9.5 L 16 14.5"
+        : root.kind == 12 ? "M 2 9.5 A 15 15 0 0 1 22 9.5 M 5.5 13 A 10 10 0 0 1 18.5 13 M 9 16.5 A 5 5 0 0 1 15 16.5 M 12 20 L 12 20.2 M 3 3 L 21 21"
         : "M 12 4 L 12 20 M 4 12 L 20 12";
 }
 
@@ -279,5 +283,75 @@ export component Slider inherits Rectangle {
             }
         }
         moved => { self.set(self.mouse-x); }
+    }
+}
+
+// Text that rolls when it changes: the old text moves up and out of the
+// box, the new one comes up from below (clipped to the box, so only that
+// area repaints while it moves). `natural` is the text's width, for a
+// layout around it; a change of it follows the roll.
+export component Roll inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size;
+    in property <int> font-weight: 400;
+    in property <color> text-color: Theme.text;
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    out property <length> natural: new.preferred-width;
+    animate natural { duration: root.duration; easing: ease-out; }
+    clip: true;
+
+    property <duration> duration: 400ms;
+    // The text shown, and the one rolling out.
+    property <string> shown;
+    property <string> old;
+    property <duration> started;
+    property <bool> rolling;
+    // 0 → 1 over the roll, eased out. Depends on the animation tick only
+    // while rolling: otherwise nothing redraws.
+    property <float> t: root.rolling ? Math.clamp((animation-tick() - root.started) / root.duration, 0, 1) : 1;
+    property <float> e: 1 - Math.pow(1 - root.t, 3);
+
+    init => {
+        root.shown = root.text;
+    }
+    changed text => {
+        root.old = root.shown;
+        root.shown = root.text;
+        root.started = animation-tick();
+        root.rolling = true;
+        done.running = true;
+        done.restart();
+    }
+
+    Text {
+        visible: root.rolling;
+        y: -root.e * root.height;
+        width: root.width;
+        height: root.height;
+        text: root.old;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        color: root.text-color;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: center;
+    }
+    new := Text {
+        y: (1 - root.e) * root.height;
+        width: root.width;
+        height: root.height;
+        text: root.shown;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        color: root.text-color;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: center;
+    }
+    done := Timer {
+        interval: root.duration;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.rolling = false;
+        }
     }
 }

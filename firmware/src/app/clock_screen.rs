@@ -1,16 +1,17 @@
 //! The clock screen's view model: once a second, aligned to the clock's
-//! second, the alarm is advanced and the time, date, alarm, Wi-Fi and
-//! speaker state go into the `ClockScreen` properties. Only fields that
-//! changed are set, so Slint repaints only those (a seconds tick dirties
-//! ~110 panel rows). The ringing controls are on this screen too.
+//! second, the alarm is advanced and the time, date, alarm and the
+//! missing-speaker and missing-network flags go into the `Clock`
+//! properties. Only fields that changed are set, so Slint repaints only
+//! those (a seconds tick dirties ~110 panel rows). The ringing controls are
+//! on this screen too.
 
 use super::alarm::{AlarmClock, View};
 use super::screens::{AppWindow, Clock};
 use super::{PAGE_CLOCK, show_page};
 use crate::audio::uac::UsbAudio;
 use crate::clock;
-use crate::net::{Failure, Status, Wifi};
-use slint::{ComponentHandle, SharedString, Timer, TimerMode};
+use crate::net::{Status, Wifi};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 use wakey_core::alarm::Input;
@@ -31,11 +32,12 @@ pub fn start(
     alarm: Rc<RefCell<AlarmClock>>,
 ) -> Ticker {
     let weak = window.as_weak();
+    let face = Face::new(window);
     let refresh = {
         let alarm = alarm.clone();
         Rc::new(move || {
             if let Some(window) = weak.upgrade() {
-                update(&window, &speaker, &wifi, &alarm.borrow());
+                update(&window, &face, &speaker, &wifi, &alarm.borrow());
             }
         })
     };
@@ -77,7 +79,42 @@ pub fn start(
     }
 }
 
-fn update(window: &AppWindow, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmClock) {
+/// The time's characters, one model entry each: a changed entry is a
+/// changed digit, which rolls on the page.
+struct Face {
+    time: Rc<VecModel<SharedString>>,
+    seconds: Rc<VecModel<SharedString>>,
+}
+
+impl Face {
+    fn new(window: &AppWindow) -> Self {
+        let face = Self {
+            time: Rc::new(VecModel::from(chars("--:--"))),
+            seconds: Rc::new(VecModel::from(chars("--"))),
+        };
+        let screen = window.global::<Clock>();
+        screen.set_time(ModelRc::from(face.time.clone()));
+        screen.set_seconds(ModelRc::from(face.seconds.clone()));
+        face
+    }
+}
+
+fn chars(s: &str) -> Vec<SharedString> {
+    s.chars()
+        .map(|c| SharedString::from(c.encode_utf8(&mut [0; 4]) as &str))
+        .collect()
+}
+
+/// Sets the entries of `model` that differ from `text`'s characters.
+fn set_chars(model: &VecModel<SharedString>, text: &str) {
+    for (i, c) in chars(text).into_iter().enumerate() {
+        if model.row_data(i).as_ref() != Some(&c) {
+            model.set_row_data(i, c);
+        }
+    }
+}
+
+fn update(window: &AppWindow, face: &Face, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmClock) {
     let screen = window.global::<Clock>();
     fn set_text(current: SharedString, new: String, set: impl Fn(SharedString)) {
         if current.as_str() != new {
@@ -85,15 +122,8 @@ fn update(window: &AppWindow, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmCloc
         }
     }
     let t = clock::now();
-    set_text(screen.get_hours(), format!("{:02}", t.hour), |v| {
-        screen.set_hours(v)
-    });
-    set_text(screen.get_minutes(), format!("{:02}", t.minute), |v| {
-        screen.set_minutes(v)
-    });
-    set_text(screen.get_seconds(), format!("{:02}", t.second), |v| {
-        screen.set_seconds(v)
-    });
+    set_chars(&face.time, &format!("{:02}:{:02}", t.hour, t.minute));
+    set_chars(&face.seconds, &format!("{:02}", t.second));
     set_text(screen.get_date(), t.date_de(), |v| screen.set_date(v));
 
     let view = alarm.view();
@@ -115,35 +145,33 @@ fn update(window: &AppWindow, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmCloc
         screen.set_snoozes_left(snoozes_left.into());
     }
 
-    if screen.get_speaker_connected() != speaker.connected() {
-        screen.set_speaker_connected(speaker.connected());
+    let no_speaker = !speaker.connected();
+    if screen.get_no_speaker() != no_speaker {
+        screen.set_no_speaker(no_speaker);
     }
-
-    let line = wifi_line(&wifi.status());
-    set_text(screen.get_wifi_text(), line.text, |v| {
-        screen.set_wifi_text(v)
-    });
-    if screen.get_wifi_state() != line.state as i32 {
-        screen.set_wifi_state(line.state as i32);
-    }
-    if screen.get_wifi_bars() != line.bars {
-        screen.set_wifi_bars(line.bars);
+    // Starting and connecting are not errors (yet).
+    let no_network = matches!(
+        wifi.status(),
+        Status::NotConfigured { .. } | Status::Failed { .. }
+    );
+    if screen.get_no_network() != no_network {
+        screen.set_no_network(no_network);
     }
 }
 
-/// The bottom-left line: the next alarm, or the snooze.
+/// The bottom line: the next alarm ("Morgen 07:00"), or the snooze.
 fn alarm_line(view: &View, now: &DateTime) -> String {
     match view {
         View::Idle { next: None } => "Kein Wecker gestellt".into(),
         View::Idle { next: Some(t) } => {
             let day = if t.date() == now.date() {
-                "heute"
+                "Heute"
             } else if t.date() == now.add_days(1).date() {
-                "morgen"
+                "Morgen"
             } else {
-                &WEEKDAYS_DE[usize::from(t.weekday) % 7][..2]
+                WEEKDAYS_DE[usize::from(t.weekday) % 7]
             };
-            format!("Wecker {day} {:02}:{:02}", t.hour, t.minute)
+            format!("{day} {:02}:{:02}", t.hour, t.minute)
         }
         View::Ringing { .. } => "Wecker klingelt".into(),
         View::Snoozed {
@@ -160,61 +188,5 @@ fn alarm_line(view: &View, now: &DateTime) -> String {
             "Schlummern bis {:02}:{:02} · noch {snoozes_left}×",
             until.hour, until.minute
         ),
-    }
-}
-
-/// Colour of the Wi-Fi line (`wifi-state` in `wakey.slint`).
-#[derive(Clone, Copy)]
-enum WifiState {
-    Off = 0,
-    Busy = 1,
-    Connected = 2,
-    Error = 3,
-}
-
-struct WifiLine {
-    text: String,
-    state: WifiState,
-    /// Signal bars, 0–4.
-    bars: i32,
-}
-
-fn wifi_line(s: &Status) -> WifiLine {
-    let line = |text: String, state, bars| WifiLine { text, state, bars };
-    match s {
-        Status::Starting => line("WLAN startet…".into(), WifiState::Busy, 0),
-        Status::NotConfigured { networks: Some(n) } => line(
-            format!("WLAN nicht eingerichtet · {n} Netze in Reichweite"),
-            WifiState::Off,
-            0,
-        ),
-        Status::NotConfigured { networks: None } => {
-            line("WLAN nicht eingerichtet".into(), WifiState::Off, 0)
-        }
-        Status::Connecting { ssid } => line(format!("Verbinde mit {ssid}…"), WifiState::Busy, 0),
-        Status::Connected {
-            ssid,
-            ip,
-            rssi,
-            time_synced,
-        } => {
-            let bars = match rssi {
-                Some(r) if *r >= -55 => 4,
-                Some(r) if *r >= -65 => 3,
-                Some(r) if *r >= -75 => 2,
-                Some(_) => 1,
-                None => 4,
-            };
-            let ntp = if *time_synced { " · Zeit via NTP" } else { "" };
-            line(format!("{ssid} · {ip}{ntp}"), WifiState::Connected, bars)
-        }
-        Status::Failed { ssid, error } => {
-            let reason = match error {
-                Failure::Driver => "WLAN-Modul startet nicht".into(),
-                Failure::Timeout => "Zeitüberschreitung".into(),
-                Failure::Other(code) => format!("Fehler {code}"),
-            };
-            line(format!("{ssid}: {reason}"), WifiState::Error, 0)
-        }
     }
 }
