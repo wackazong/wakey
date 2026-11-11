@@ -14,6 +14,7 @@
 //! - [`mix`]: sample operations for the built-in speaker (mono, mixing,
 //!   keep-alive).
 //! - [`scroll`]: touch scrolling physics (drag, fling, rubber band, spring).
+//! - [`sky`]: the sun's elevation and the clock face's sky gradient.
 
 pub mod alarm;
 pub mod audio_file;
@@ -22,5 +23,6 @@ pub mod datetime;
 pub mod mix;
 pub mod resample;
 pub mod scroll;
+pub mod sky;
 pub mod tone;
 pub mod uac;

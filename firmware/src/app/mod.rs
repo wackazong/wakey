@@ -76,6 +76,14 @@ fn show_page(window: &screens::AppWindow, page: i32) {
     } else {
         Direction::Back
     };
+    // What fills the new page's part of the screen until it is rendered:
+    // the clock's sky, or the settings pages' background.
+    let background = if page == PAGE_CLOCK {
+        window.global::<screens::Clock>().get_sky_middle()
+    } else {
+        window.global::<screens::Theme>().get_background()
+    };
+    transition::set_background(crate::ui::rgb565(background));
     transition::request(direction);
     window.set_page(page);
 }
@@ -182,9 +190,6 @@ async fn app(spawner: embassy_executor::Spawner) {
     let window = platform::init();
     let ui = screens::AppWindow::new().expect("UI");
     ui.show().expect("show");
-    transition::set_background(crate::ui::rgb565(
-        ui.global::<screens::Theme>().get_background(),
-    ));
     let ctx = Rc::new(Ctx {
         window: ui.as_weak(),
         alarm: alarm.clone(),

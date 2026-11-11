@@ -133,6 +133,8 @@ component Row inherits Rectangle {
             font-size: 64px;
             font-weight: 500;
             color: !root.alarm.enabled ? Theme.text-faint : root.alarm.next ? Theme.accent : Theme.text;
+            // A change (switched, or another alarm rings next) fades.
+            animate color { duration: root.animated ? 250ms : 0ms; }
             vertical-alignment: center;
         }
         if root.alarm.name != "": Text {
@@ -144,6 +146,7 @@ component Row inherits Rectangle {
             font-size: 40px;
             overflow: elide;
             color: root.alarm.enabled ? Theme.text : Theme.text-faint;
+            animate color { duration: root.animated ? 250ms : 0ms; }
             vertical-alignment: center;
         }
         for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Text {
@@ -154,6 +157,7 @@ component Row inherits Rectangle {
             font-size: 30px;
             color: root.day-on(i) && root.alarm.enabled ? Theme.text
                 : root.day-on(i) ? Theme.text-dim : Theme.text-faint;
+            animate color { duration: root.animated ? 250ms : 0ms; }
             vertical-alignment: center;
         }
         Switch {

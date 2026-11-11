@@ -381,6 +381,41 @@ fn main() {
     p.shot("0-clock-missing");
     clock.set_no_speaker(false);
     clock.set_no_network(false);
+    // The sky through 21 June in Zurich (UTC times; CEST is +2 h).
+    for (name, h, m, time) in [
+        ("night", 23, 0, "01:00"),
+        ("dawn", 2, 40, "04:40"),
+        ("sunrise", 3, 35, "05:35"),
+        ("morning", 6, 0, "08:00"),
+        ("noon", 11, 25, "13:25"),
+        ("sunset", 19, 20, "21:20"),
+        ("dusk", 20, 0, "22:00"),
+    ] {
+        let unix = wakey_core::datetime::DateTime {
+            year: 2026,
+            month: 6,
+            day: 21,
+            hour: h,
+            minute: m,
+            second: 0,
+            weekday: 0,
+        }
+        .to_unix();
+        let e = wakey_core::sky::sun_elevation(
+            unix,
+            wakey_core::sky::LATITUDE,
+            wakey_core::sky::LONGITUDE,
+        );
+        let [a, b, c] =
+            wakey_core::sky::gradient(e).map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
+        clock.set_sky_top(a);
+        clock.set_sky_middle(b);
+        clock.set_sky_bottom(c);
+        clock.set_time(chars(time));
+        p.run(500);
+        println!("         sky {name}: sun at {e:.1}°");
+        p.shot(&format!("0-clock-sky-{name}"));
+    }
 
     // Alarm list.
     let list = ui.global::<AlarmList>();

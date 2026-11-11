@@ -9,6 +9,7 @@ description = "Renders the firmware's Slint pages on the host to PNG, with sampl
 slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "std"] }
 i-slint-renderer-software = { version = "1.18.1", features = ["path"] }
 png = "0.17"
+wakey-core = { path = "../../wakey-core" }
 
 [build-dependencies]
 slint-build = "1.18.1"

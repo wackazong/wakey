@@ -1,5 +1,7 @@
 // The clock face: the time, the date, the next alarm and, only when
-// something is wrong, symbols for a missing speaker or network.
+// something is wrong, symbols for a missing speaker or network, on a sky
+// that follows the sun (`wakey_core::sky`, colours set from Rust). Text
+// other than the digits is translucent white, readable on any sky.
 //
 // The time is one string ("07:38"), drawn one character per item, each as
 // wide as its glyph: the spacing is the font's, and a changed digit rolls
@@ -22,6 +24,10 @@ export global Clock {
     // built-in one), no network (Wi-Fi failed or not set up).
     in property <bool> no-speaker;
     in property <bool> no-network;
+    // The sky, top to bottom.
+    in property <color> sky-top: #04060e;
+    in property <color> sky-middle: #080c1a;
+    in property <color> sky-bottom: #0d1426;
     // Alarm: 0 idle, 1 ringing, 2 snoozed; snoozes still allowed.
     in property <int> alarm-phase: 0;
     in property <int> snoozes-left: 0;
@@ -38,8 +44,12 @@ export component ClockPage inherits Rectangle {
     width: 1280px;
     height: 720px;
 
+    background: @linear-gradient(180deg, Clock.sky-top 0%, Clock.sky-middle 55%, Clock.sky-bottom 100%);
+
     property <bool> ringing: Clock.alarm-phase == 1;
     property <color> digits: root.ringing ? Theme.accent : Theme.text;
+    property <color> soft: Theme.text.with-alpha(0.72);
+    property <color> faint: Theme.text.with-alpha(0.45);
 
     // Snooze: the whole screen, under everything else.
     TouchArea {
@@ -71,7 +81,7 @@ export component ClockPage inherits Rectangle {
             text: c;
             font-size: 280px;
             font-weight: 500;
-            text-color: c == ":" ? Theme.text-faint : root.digits;
+            text-color: c == ":" ? root.faint : root.digits;
         }
         Rectangle {
             width: 120px;
@@ -86,7 +96,7 @@ export component ClockPage inherits Rectangle {
                     text: c;
                     font-size: 64px;
                     font-weight: 500;
-                    text-color: #66727f;
+                    text-color: root.faint;
                 }
             }
         }
@@ -101,13 +111,13 @@ export component ClockPage inherits Rectangle {
             : Clock.snoozes-left > 0 ? "Tippen zum Schlummern · noch \{Clock.snoozes-left}×"
             : "Zum Ausschalten oben rechts halten";
         font-size: 40px;
-        text-color: root.ringing ? Theme.accent : Theme.text-dim;
+        text-color: root.ringing ? Theme.accent : root.soft;
         horizontal-alignment: center;
     }
 
     // Bottom middle: the next alarm. Touching it opens the alarm list (the
     // slide starts at once).
-    property <color> alarm-color: Clock.alarm-phase == 0 ? Theme.text-dim : Theme.warn;
+    property <color> alarm-color: Clock.alarm-phase == 0 ? root.soft : Theme.accent;
     HorizontalLayout {
         x: 0;
         y: parent.height - 104px;
@@ -160,7 +170,7 @@ export component ClockPage inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 40px;
                 height: 40px;
-                color: Theme.warn;
+                color: Theme.accent;
             }
         }
         if Clock.no-network: Rectangle {
@@ -170,7 +180,7 @@ export component ClockPage inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 40px;
                 height: 40px;
-                color: Theme.warn;
+                color: Theme.accent;
             }
         }
     }

@@ -1,5 +1,6 @@
 //! The clock screen's view model: once a second, aligned to the clock's
-//! second, the alarm is advanced and the time, date, alarm and the
+//! second, the alarm is advanced and the time, date, alarm, the sky
+//! (`wakey_core::sky`, from the sun's elevation over Zurich) and the
 //! missing-speaker and missing-network flags go into the `Clock`
 //! properties. Only fields that changed are set, so Slint repaints only
 //! those (a seconds tick dirties ~110 panel rows). The ringing controls are
@@ -16,6 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wakey_core::alarm::Input;
 use wakey_core::datetime::{DateTime, WEEKDAYS_DE};
+use wakey_core::sky;
 
 /// Keeps the screen updating while alive.
 pub struct Ticker {
@@ -121,7 +123,23 @@ fn update(window: &AppWindow, face: &Face, speaker: &UsbAudio, wifi: &Wifi, alar
             set(new.into());
         }
     }
-    let t = clock::now();
+    let now = clock::moment();
+    let t = now.local;
+    // The sky changes at most once a minute (a whole-screen repaint, ~50
+    // ms per frame buffer): it is computed for the minute, not the second.
+    let minute = now.unix - now.unix.rem_euclid(60);
+    let elevation = sky::sun_elevation(minute, sky::LATITUDE, sky::LONGITUDE);
+    let [top, middle, bottom] =
+        sky::gradient(elevation).map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
+    if screen.get_sky_top() != top {
+        screen.set_sky_top(top);
+    }
+    if screen.get_sky_middle() != middle {
+        screen.set_sky_middle(middle);
+    }
+    if screen.get_sky_bottom() != bottom {
+        screen.set_sky_bottom(bottom);
+    }
     set_chars(&face.time, &format!("{:02}:{:02}", t.hour, t.minute));
     set_chars(&face.seconds, &format!("{:02}", t.second));
     set_text(screen.get_date(), t.date_de(), |v| screen.set_date(v));

@@ -76,7 +76,7 @@ pub fn request(direction: Direction) {
     PENDING.store(v, Ordering::Relaxed);
 }
 
-/// The pages' background colour (RGB565); set once at start-up.
+/// The new page's background colour (RGB565), set before each request.
 pub fn set_background(rgb565: u16) {
     BACKGROUND.store(rgb565, Ordering::Relaxed);
 }

@@ -612,7 +612,21 @@ pub(super) fn draw_linear_gradient(
         };
         if (fill_col1 || p >= 0) && (fill_col2 || p < 255) {
             let col = interpolate_color(p.clamp(0, 255) as u32, color1, color2);
-            TargetPixel::blend_slice(buffer, col);
+            if col.alpha == u8::MAX {
+                // wakey patch: dithered, so a gradient on a 16-bit target
+                // shows no bands (each line is one colour otherwise).
+                // The pattern repeats every 4 pixels: computed once per line.
+                let x0 = (g.left_clip.get() as i32 + extra_left_clip as i32).max(0) as usize;
+                let y = line.get() as usize;
+                let pattern: [_; 4] = core::array::from_fn(|i| {
+                    TargetPixel::from_rgb_dithered(col.red, col.green, col.blue, x0 + i, y)
+                });
+                for chunk in buffer.chunks_mut(4) {
+                    chunk.copy_from_slice(&pattern[..chunk.len()]);
+                }
+            } else {
+                TargetPixel::blend_slice(buffer, col);
+            }
         }
         return;
     }
@@ -891,6 +905,12 @@ pub trait TargetPixel: Sized + Copy {
     /// Create a pixel from the red, gree, blue component in the range 0..=255
     fn from_rgb(red: u8, green: u8, blue: u8) -> Self;
 
+    /// wakey patch: the same at pixel (`x`, `y`), dithered where the target
+    /// has fewer bits than 8 per channel (default: not dithered).
+    fn from_rgb_dithered(red: u8, green: u8, blue: u8, _x: usize, _y: usize) -> Self {
+        Self::from_rgb(red, green, blue)
+    }
+
     /// Pixel which will be filled as the background in case the slint view has transparency
     fn background() -> Self {
         Self::from_rgb(0, 0, 0)
@@ -983,6 +1003,15 @@ impl TargetPixel for Rgb565Pixel {
 
     fn from_rgb(r: u8, g: u8, b: u8) -> Self {
         Self(((r as u16 & 0b11111000) << 8) | ((g as u16 & 0b11111100) << 3) | (b as u16 >> 3))
+    }
+
+    /// wakey patch: ordered (4×4 Bayer) dithering: the 3 (red, blue) or 2
+    /// (green) bits that do not fit become a pattern of the neighbouring
+    /// levels.
+    fn from_rgb_dithered(r: u8, g: u8, b: u8, x: usize, y: usize) -> Self {
+        const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+        let t = BAYER[y & 3][x & 3];
+        Self::from_rgb(r.saturating_add(t / 2), g.saturating_add(t / 4), b.saturating_add(t / 2))
     }
 }
 
