@@ -16,12 +16,14 @@
 //! **Still.** When the list stops, the layer hands the position to the page
 //! ([`ListSource::scroll_ended`]) and Slint draws the list there, with
 //! the same component, so the pixels are the same. Slint then owns the
-//! touches: taps, swipes, switches.
+//! touches: taps and switches.
 //!
 //! **Swiping.** A touch that moves sideways on a still row is the layer's
 //! too: it renders that row (highlighted, its corners on the delete
-//! button's red) and the bare delete button into two pictures and moves
-//! the row with the finger by DMA (two copies of one row band per frame).
+//! button's red), the bare delete button and, for the first
+//! [`ROW_RADIUS`] px where the red must not show in the corners, the
+//! highlighted row as the page draws it into pictures, and moves the row
+//! with the finger by DMA (two copies of one row band per frame).
 //! On release the row snaps open or closed (or is deleted, swiped past
 //! [`DELETE_FRACTION`] of the width), then the page takes over again
 //! ([`ListSource::swipe_ended`]) and draws the same pixels.
@@ -64,13 +66,17 @@ const SETTLE_FRAMES: u8 = 2;
 const DELETE_FRACTION: f32 = 0.6;
 /// The snap of a released row to open or closed.
 const SNAP: Duration = Duration::from_millis(180);
+/// Corner radius of a row (`Row` in `alarm_list.slint`).
+const ROW_RADIUS: usize = 28;
 
 /// What [`ListSource::prepare_swipe`] puts into the row component.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SwipePart {
-    /// The row at offset 0, its rounded corners on the delete button's red
-    /// (what shows behind them while it is swiped), lit up or not.
-    Content { highlighted: bool },
+    /// The row at offset 0, lit up or not. With `underlay` its rounded
+    /// corners are on the delete button's red (what shows behind them once
+    /// it is swiped further than the corner radius); without, on the page
+    /// background, as the page draws it.
+    Content { highlighted: bool, underlay: bool },
     /// The delete button alone (the row moved out).
     Underlay,
 }
@@ -166,9 +172,13 @@ struct Swipe {
     /// at the delete button's width).
     finger_x0: f32,
     base: f32,
-    /// The pictures (content, underlay) are rendered for this row.
-    pictures: bool,
-    /// The content picture is lit up (while the finger is down).
+    /// The content picture (on red) is rendered for this row and
+    /// `highlighted`.
+    content: bool,
+    /// The lit plain picture is rendered (only needed while lit: unlit, the
+    /// ring slot has it).
+    plain: bool,
+    /// The row is lit up (while the finger is down).
     highlighted: bool,
     /// After release: from, to, when, and how it ends.
     snap: Option<(f32, f32, Instant, SwipeEnd)>,
@@ -177,6 +187,7 @@ struct Swipe {
 /// Slots of the swipe pictures.
 const CONTENT: usize = 0;
 const UNDERLAY: usize = 1;
+const PLAIN: usize = 2;
 
 pub struct ListLayer<S: ListSource> {
     layout: Layout,
@@ -203,7 +214,7 @@ pub struct ListLayer<S: ListSource> {
     composing: bool,
     /// A row being swiped (never together with `composing`).
     swipe: Option<Swipe>,
-    /// The swipe pictures: content and underlay, two row slots.
+    /// The swipe pictures: content, underlay and plain, three row slots.
     swipe_pics: Picture,
     /// The underlay is rendered (it is the same for every row).
     underlay_ready: bool,
@@ -248,8 +259,8 @@ impl<S: ListSource> ListLayer<S> {
             h: width,
         };
         let swipe_pics = Picture {
-            buf: alloc(2 * row_h * width),
-            w: 2 * row_h,
+            buf: alloc(3 * row_h * width),
+            w: 3 * row_h,
             h: width,
         };
         // As tall as the view: covers it even when the list is shorter.
@@ -517,7 +528,8 @@ impl<S: ListSource> ListLayer<S> {
             d: base,
             finger_x0: finger_x,
             base,
-            pictures: false,
+            content: false,
+            plain: false,
             highlighted: true,
             snap: None,
         });
@@ -547,7 +559,7 @@ impl<S: ListSource> ListLayer<S> {
         // The page shows the row plain when it takes over: so does the snap
         // (its content picture is rendered again, unlit).
         s.highlighted = false;
-        s.pictures = false;
+        s.content = false;
     }
 
     /// Renders `part` of row `row` into swipe picture slot `slot`.
@@ -580,12 +592,24 @@ impl<S: ListSource> ListLayer<S> {
             self.render_swipe_part(s.row, SwipePart::Underlay, UNDERLAY, rot);
             self.underlay_ready = true;
         }
-        if !s.pictures {
+        // One of the two content pictures per frame, the one shown first:
+        // the first frame stays as short as possible.
+        let want_plain = s.highlighted && !s.plain;
+        let near = s.d.round() < ROW_RADIUS as f32;
+        if want_plain && (near || s.content) {
+            let part = SwipePart::Content {
+                highlighted: true,
+                underlay: false,
+            };
+            self.render_swipe_part(s.row, part, PLAIN, rot);
+            s.plain = true;
+        } else if !s.content {
             let part = SwipePart::Content {
                 highlighted: s.highlighted,
+                underlay: true,
             };
             self.render_swipe_part(s.row, part, CONTENT, rot);
-            s.pictures = true;
+            s.content = true;
         }
         let mut ended = None;
         if let Some((from, to, at, end)) = s.snap {
@@ -620,8 +644,9 @@ impl<S: ListSource> ListLayer<S> {
     }
 
     /// Starts the copies that show the swiped row: its content moved `d`
-    /// px left and the delete button in the gap. A closed row at rest
-    /// comes from the ring (the page's plain row, corners on the card).
+    /// px left and the delete button in the gap. Moved less than the
+    /// corner radius, the row is drawn plain (corners on the page
+    /// background): lit from its picture, unlit from the ring.
     fn draw_swipe(&mut self, fb: Target, rot: &mut PpaRotator) {
         let Some(s) = self.swipe else {
             return;
@@ -636,8 +661,13 @@ impl<S: ListSource> ListLayer<S> {
             ..
         } = self.layout;
         let d = (s.d.round().max(0.0) as usize).min(width);
-        let closed = d == 0 && s.snap.is_some_and(|(_, to, ..)| to == 0.0);
-        if closed {
+        // The content picture has the red underlay behind its rounded
+        // corners. Nearly closed, the left corners are on screen and the
+        // right ones are over the underlay's own corners: draw the row
+        // plain.
+        let plain = d < ROW_RADIUS || !s.content;
+        let ring = plain && !(s.highlighted && s.plain);
+        if ring {
             self.ensure(s.row, rot);
         }
         let top = y as i32 + (s.row * row_h) as i32 - self.source.offset().round() as i32;
@@ -649,8 +679,10 @@ impl<S: ListSource> ListLayer<S> {
             return;
         }
         let (ry0, rh, col) = ((a - top) as usize, (b - a) as usize, a as usize);
-        let (content, content_col) = if closed {
+        let (content, content_col) = if ring {
             (self.layer, s.row % slots * row_h)
+        } else if plain {
+            (self.swipe_pics, PLAIN * row_h)
         } else {
             (self.swipe_pics, CONTENT * row_h)
         };

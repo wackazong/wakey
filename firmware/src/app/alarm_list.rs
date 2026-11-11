@@ -176,11 +176,14 @@ impl ListSource for Rows {
     fn prepare_swipe(&mut self, i: usize, part: SwipePart) {
         let Some(r) = self.row(i) else { return };
         self.view.set_list_row(r);
-        self.view.set_list_row_underlay(true);
         match part {
-            SwipePart::Content { highlighted } => {
+            SwipePart::Content {
+                highlighted,
+                underlay,
+            } => {
                 self.view.set_list_row_dx(0.0);
                 self.view.set_list_row_highlighted(highlighted);
+                self.view.set_list_row_underlay(underlay);
             }
             SwipePart::Underlay => {
                 // The row content moved out entirely; the button keeps its

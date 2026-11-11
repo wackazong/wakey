@@ -75,6 +75,8 @@ unsafe extern "C" fn on_trans_done(
 /// `row_ref - x`.
 #[derive(Clone, Copy, Debug)]
 pub struct Target {
+    /// 128-byte aligned, and allocated in whole 128-byte cache lines: the
+    /// PPA rejects an output buffer size that is not a multiple of them.
     pub buf: *mut u16,
     /// Picture width (row stride) and height, pixels.
     pub pic_w: usize,
@@ -349,7 +351,7 @@ impl PpaRotator {
             cfg.in_.__bindgen_anon_1.srm_cm = sys::ppa_srm_color_mode_t_PPA_SRM_COLOR_MODE_RGB565;
             let t = self.target;
             cfg.out.buffer = t.buf.cast();
-            cfg.out.buffer_size = (t.pic_w * t.pic_h * 2) as u32;
+            cfg.out.buffer_size = (t.pic_w * t.pic_h * 2).next_multiple_of(128) as u32;
             cfg.out.pic_w = t.pic_w as u32;
             cfg.out.pic_h = t.pic_h as u32;
             // Landscape (x, y) → picture column col_off+y, row row_ref-x. The
