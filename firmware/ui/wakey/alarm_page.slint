@@ -46,7 +46,8 @@ export global AlarmEditor {
     callback cancel();
 }
 
-// A row of the settings card: label left, value right, chevron.
+// A row of the settings card: label left, value right, chevron. Opens a
+// page, so it acts when touched.
 component CardRow inherits Rectangle {
     in property <string> label;
     callback clicked();
@@ -69,7 +70,11 @@ component CardRow inherits Rectangle {
         color: Theme.text-faint;
     }
     ta := TouchArea {
-        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.clicked();
+            }
+        }
     }
     @children
 }
@@ -88,6 +93,7 @@ export component AlarmPage inherits Rectangle {
         width: 240px;
         kind: 2;
         text: "Abbrechen";
+        on-press: true;
         clicked => { AlarmEditor.cancel(); }
     }
     Button {
@@ -96,6 +102,7 @@ export component AlarmPage inherits Rectangle {
         width: 240px;
         kind: 1;
         text: "Sichern";
+        on-press: true;
         enabled: AlarmEditor.any-day;
         clicked => { AlarmEditor.save(); }
     }
@@ -178,9 +185,13 @@ export component AlarmPage inherits Rectangle {
             }
         }
 
+        // Name, Tage (label and chips) and Klang with equal gaps between
+        // what they show (92 px) and 32 px to the card's top and bottom
+        // edge: Name's text sits in the middle of its 112 px row, Klang's
+        // two lines at 28–136 px of its 160 px row.
         Text {
             x: 32px;
-            y: 124px;
+            y: 164px;
             height: 56px;
             text: "Tage";
             font-size: 40px;
@@ -190,7 +201,7 @@ export component AlarmPage inherits Rectangle {
         // Seven chips across the card, 12 px apart.
         for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
             x: 24px + i * (self.width + 12px);
-            y: 192px;
+            y: 232px;
             width: (parent.width - 48px - 6 * 12px) / 7;
             text: name;
             on: AlarmEditor.days[i];
@@ -203,7 +214,7 @@ export component AlarmPage inherits Rectangle {
         // Sound, volume and fade-in: one row, one tap (the sound page
         // sets all three).
         CardRow {
-            y: 340px;
+            y: 388px;
             height: 160px;
             label: "Klang";
             clicked => { AlarmEditor.open-sound(); }

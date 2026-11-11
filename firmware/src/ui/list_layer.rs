@@ -14,17 +14,24 @@
 //! either end a blank picture in the background colour is copied.
 //!
 //! **Still.** When the list stops, the layer hands the position to the page
-//! ([`ListSource::scrolling_stopped`]) and Slint draws the list there, with
+//! ([`ListSource::scroll_ended`]) and Slint draws the list there, with
 //! the same component, so the pixels are the same. Slint then owns the
 //! touches: taps, swipes, switches.
+//!
+//! **Swiping.** A touch that moves sideways on a still row is the layer's
+//! too: it renders that row (highlighted, its corners on the delete
+//! button's red) and the bare delete button into two pictures and moves
+//! the row with the finger by DMA (two copies of one row band per frame).
+//! On release the row snaps open or closed (or is deleted, swiped past
+//! [`DELETE_FRACTION`] of the width), then the page takes over again
+//! ([`ListSource::swipe_ended`]) and draws the same pixels.
 //!
 //! **Touch.** The layer sees every touch event first:
 //! - On the still list, events go to Slint until the finger has moved more
 //!   than [`Layout::slop`]. Mostly vertical: the layer takes the touch
 //!   ([`Route::TakeOver`], Slint gets a cancel) and scrolls with it, unless
-//!   the list fits the view (then nothing scrolls).
-//!   Mostly sideways: the touch stays Slint's (a swipe). This is the same
-//!   rule the page uses to tell swipes from scrolls.
+//!   the list fits the view (then nothing scrolls). Mostly sideways on a
+//!   row: the layer takes it and swipes that row.
 //! - On the moving list a touch stops it and stays the layer's: lifting
 //!   does not tap the row that slid under the finger, moving scrolls on.
 //!
@@ -53,6 +60,30 @@ const FRAME_BUDGET: Duration = Duration::from_millis(9);
 /// Frames the layer keeps composing after the list stopped, so both frame
 /// buffers show the final position before Slint takes over.
 const SETTLE_FRAMES: u8 = 2;
+/// A swipe past this part of the width deletes the row at once.
+const DELETE_FRACTION: f32 = 0.6;
+/// The snap of a released row to open or closed.
+const SNAP: Duration = Duration::from_millis(180);
+
+/// What [`ListSource::prepare_swipe`] puts into the row component.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SwipePart {
+    /// The row at offset 0, its rounded corners on the delete button's red
+    /// (what shows behind them while it is swiped), lit up or not.
+    Content { highlighted: bool },
+    /// The delete button alone (the row moved out).
+    Underlay,
+}
+
+/// How a swipe ended.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SwipeEnd {
+    /// The delete button shows.
+    Open,
+    Closed,
+    /// Swiped past [`DELETE_FRACTION`]: delete the row.
+    Delete,
+}
 
 /// The list's content and the page around it.
 pub trait ListSource {
@@ -64,13 +95,20 @@ pub trait ListSource {
     fn stamp(&self, i: usize) -> u64;
     /// Puts row `i` into the offscreen row component (rendered next).
     fn prepare(&mut self, i: usize);
+    /// The same for the pictures of a swipe of row `i`.
+    fn prepare_swipe(&mut self, i: usize, part: SwipePart);
+    /// The row whose delete button shows, if any.
+    fn open_row(&self) -> Option<usize>;
     /// Scroll position of the still list (content y at the top of the view).
     fn offset(&self) -> f32;
-    /// The layer took over: drop any touch feedback on the page (an open
-    /// row, a highlight); the layer shows the rows plain.
-    fn scrolling_started(&mut self);
+    /// The layer took over (a scroll or a swipe): drop any touch feedback
+    /// on the page (an open row, a highlight).
+    fn layer_started(&mut self);
     /// The list stopped at `offset` (whole pixels): the page draws it there.
-    fn scrolling_stopped(&mut self, offset: f32);
+    fn scroll_ended(&mut self, offset: f32);
+    /// The swipe of row `i` ended: the page shows it open or closed, or
+    /// deletes it.
+    fn swipe_ended(&mut self, i: usize, end: SwipeEnd);
 }
 
 /// Where the list is on screen (landscape px) and how its touches work.
@@ -89,6 +127,8 @@ pub struct Layout {
     pub slop: f32,
     /// RGB565 colour behind the rows (shown past the ends).
     pub background: u16,
+    /// Width of the delete button behind a swiped row.
+    pub reveal: usize,
     /// The page draws the list while it is still, and the layer only while
     /// it moves. Otherwise the layer always shows it (the page leaves the
     /// area blank) and has all its touches.
@@ -110,7 +150,33 @@ enum Touch {
     Slint,
     /// The layer scrolls with it.
     Scroll,
+    /// The layer swipes a row with it.
+    Swipe,
+    /// Down while a swipe snaps: ignored to the end.
+    Ignored,
 }
+
+/// A row being swiped (by the finger, or snapping after release).
+#[derive(Clone, Copy, Debug)]
+struct Swipe {
+    row: usize,
+    /// How far the row is moved left, px.
+    d: f32,
+    /// Finger x when the swipe started, and `d` then (an open row starts
+    /// at the delete button's width).
+    finger_x0: f32,
+    base: f32,
+    /// The pictures (content, underlay) are rendered for this row.
+    pictures: bool,
+    /// The content picture is lit up (while the finger is down).
+    highlighted: bool,
+    /// After release: from, to, when, and how it ends.
+    snap: Option<(f32, f32, Instant, SwipeEnd)>,
+}
+
+/// Slots of the swipe pictures.
+const CONTENT: usize = 0;
+const UNDERLAY: usize = 1;
 
 pub struct ListLayer<S: ListSource> {
     layout: Layout,
@@ -135,6 +201,12 @@ pub struct ListLayer<S: ListSource> {
     /// The layer shows the list (from the start of a scroll until both
     /// frame buffers show where it stopped).
     composing: bool,
+    /// A row being swiped (never together with `composing`).
+    swipe: Option<Swipe>,
+    /// The swipe pictures: content and underlay, two row slots.
+    swipe_pics: Picture,
+    /// The underlay is rendered (it is the same for every row).
+    underlay_ready: bool,
     settle: u8,
     /// Offset composed in the previous frame.
     shown: Option<i32>,
@@ -175,6 +247,11 @@ impl<S: ListSource> ListLayer<S> {
             w,
             h: width,
         };
+        let swipe_pics = Picture {
+            buf: alloc(2 * row_h * width),
+            w: 2 * row_h,
+            h: width,
+        };
         // As tall as the view: covers it even when the list is shorter.
         let blank = Picture {
             buf: alloc(height * width),
@@ -204,6 +281,9 @@ impl<S: ListSource> ListLayer<S> {
             scroller: Scroller::new(height as f32, 0.0),
             touch: Touch::None,
             composing: !layout.page_draws_still,
+            swipe: None,
+            swipe_pics,
+            underlay_ready: false,
             settle: 0,
             shown: None,
         }
@@ -371,7 +451,7 @@ impl<S: ListSource> ListLayer<S> {
             self.scroller.set_offset(self.source.offset());
             self.composing = true;
             self.shown = None;
-            self.source.scrolling_started();
+            self.source.layer_started();
         }
         self.scroller.press(y, at);
         self.settle = SETTLE_FRAMES;
@@ -411,7 +491,211 @@ impl<S: ListSource> ListLayer<S> {
             .offset()
             .round()
             .clamp(0.0, self.scroller.max_offset());
-        self.source.scrolling_stopped(offset);
+        self.source.scroll_ended(offset);
+    }
+
+    /// The row at view position `y` on the still list.
+    fn row_at(&self, y: f32) -> Option<usize> {
+        let y = y + self.source.offset();
+        if y < 0.0 {
+            return None;
+        }
+        let i = (y / self.layout.row_h as f32) as usize;
+        (i < self.source.rows()).then_some(i)
+    }
+
+    /// Takes over a sideways touch on `row` at finger x `finger_x`.
+    fn start_swipe(&mut self, row: usize, finger_x: f32) {
+        let base = if self.source.open_row() == Some(row) {
+            self.layout.reveal as f32
+        } else {
+            0.0
+        };
+        self.source.layer_started();
+        self.swipe = Some(Swipe {
+            row,
+            d: base,
+            finger_x0: finger_x,
+            base,
+            pictures: false,
+            highlighted: true,
+            snap: None,
+        });
+        self.shown = None;
+        self.settle = SETTLE_FRAMES;
+    }
+
+    /// The finger left a swiped row: delete it, or snap it open or closed.
+    fn release_swipe(&mut self) {
+        let reveal = self.layout.reveal as f32;
+        let width = self.layout.width as f32;
+        let Some(s) = self.swipe.as_mut() else {
+            return;
+        };
+        if s.d > width * DELETE_FRACTION {
+            let row = s.row;
+            self.swipe = None;
+            self.source.swipe_ended(row, SwipeEnd::Delete);
+            return;
+        }
+        let (to, end) = if s.d > reveal / 2.0 {
+            (reveal, SwipeEnd::Open)
+        } else {
+            (0.0, SwipeEnd::Closed)
+        };
+        s.snap = Some((s.d, to, Instant::now(), end));
+        // The page shows the row plain when it takes over: so does the snap
+        // (its content picture is rendered again, unlit).
+        s.highlighted = false;
+        s.pictures = false;
+    }
+
+    /// Renders `part` of row `row` into swipe picture slot `slot`.
+    fn render_swipe_part(
+        &mut self,
+        row: usize,
+        part: SwipePart,
+        slot: usize,
+        rot: &mut PpaRotator,
+    ) {
+        self.source.prepare_swipe(row, part);
+        let target = Target {
+            buf: self.swipe_pics.buf,
+            pic_w: self.swipe_pics.w,
+            pic_h: self.swipe_pics.h,
+            col_off: slot * self.layout.row_h,
+            row_ref: self.layout.width - 1,
+            lines: self.layout.row_h,
+        };
+        platform::render_offscreen(&self.row_window, rot, target);
+    }
+
+    /// One frame of a swipe: renders missing pictures, advances a snap, and
+    /// hands back once it has ended (returns false then).
+    fn step_swipe(&mut self, rot: &mut PpaRotator) -> bool {
+        let Some(mut s) = self.swipe else {
+            return false;
+        };
+        if !self.underlay_ready {
+            self.render_swipe_part(s.row, SwipePart::Underlay, UNDERLAY, rot);
+            self.underlay_ready = true;
+        }
+        if !s.pictures {
+            let part = SwipePart::Content {
+                highlighted: s.highlighted,
+            };
+            self.render_swipe_part(s.row, part, CONTENT, rot);
+            s.pictures = true;
+        }
+        let mut ended = None;
+        if let Some((from, to, at, end)) = s.snap {
+            let t = at.elapsed().as_micros() as f32 / SNAP.as_micros() as f32;
+            if t >= 1.0 {
+                s.d = to;
+                ended = Some(end);
+            } else {
+                s.d = from + (to - from) * (1.0 - (1.0 - t).powi(3));
+            }
+        }
+        let d = s.d.round() as i32;
+        if self.touch == Touch::Swipe
+            || (s.snap.is_some() && ended.is_none())
+            || self.shown != Some(d)
+        {
+            self.settle = SETTLE_FRAMES;
+        } else {
+            self.settle = self.settle.saturating_sub(1);
+        }
+        self.shown = Some(d);
+        self.swipe = Some(s);
+        if let Some(end) = ended
+            && self.settle == 0
+        {
+            // Both frame buffers show where the row stopped.
+            self.swipe = None;
+            self.source.swipe_ended(s.row, end);
+            return false;
+        }
+        true
+    }
+
+    /// Starts the copies that show the swiped row: its content moved `d`
+    /// px left and the delete button in the gap. A closed row at rest
+    /// comes from the ring (the page's plain row, corners on the card).
+    fn draw_swipe(&mut self, fb: Target, rot: &mut PpaRotator) {
+        let Some(s) = self.swipe else {
+            return;
+        };
+        let Layout {
+            x,
+            y,
+            width,
+            height,
+            row_h,
+            slots,
+            ..
+        } = self.layout;
+        let d = (s.d.round().max(0.0) as usize).min(width);
+        let closed = d == 0 && s.snap.is_some_and(|(_, to, ..)| to == 0.0);
+        if closed {
+            self.ensure(s.row, rot);
+        }
+        let top = y as i32 + (s.row * row_h) as i32 - self.source.offset().round() as i32;
+        let a = top.max(y as i32);
+        let b = (top + row_h as i32).min((y + height) as i32);
+        self.pending.clear();
+        self.pending_fb = fb.buf;
+        if b <= a {
+            return;
+        }
+        let (ry0, rh, col) = ((a - top) as usize, (b - a) as usize, a as usize);
+        let (content, content_col) = if closed {
+            (self.layer, s.row % slots * row_h)
+        } else {
+            (self.swipe_pics, CONTENT * row_h)
+        };
+        // Row x `d..width` (picture rows `0..width-d`) to screen x
+        // `x..x+width-d`; row x `width-d..width` of the delete button to
+        // the rest. Landscape x is panel row `HEIGHT-1-x`.
+        let mut copies: heapless::Vec<Copy, 2> = heapless::Vec::new();
+        if d < width {
+            let _ = copies.push((
+                content,
+                (content_col + ry0, 0),
+                (col, HEIGHT - x - width + d),
+                (rh, width - d),
+            ));
+        }
+        if d > 0 {
+            let _ = copies.push((
+                self.swipe_pics,
+                (UNDERLAY * row_h + ry0, 0),
+                (col, HEIGHT - x - width),
+                (rh, d),
+            ));
+        }
+        let fbp = Picture {
+            buf: fb.buf,
+            w: WIDTH,
+            h: HEIGHT,
+        };
+        let mut copies = copies.into_iter();
+        if let Some((src, from, to, size)) = copies.next() {
+            self.dma.start(src, from, fbp, to, size);
+        }
+        self.pending.extend(copies);
+    }
+
+    /// Landscape rows of the swiped row on screen.
+    fn swipe_band(&self) -> Option<Range<usize>> {
+        let s = self.swipe?;
+        let Layout {
+            y, height, row_h, ..
+        } = self.layout;
+        let top = y as i32 + (s.row * row_h) as i32 - self.source.offset().round() as i32;
+        let a = top.max(y as i32);
+        let b = (top + row_h as i32).min((y + height) as i32);
+        (b > a).then_some(a as usize..b as usize)
     }
 }
 
@@ -424,8 +708,14 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
             // The page went away mid-scroll.
             self.stop_composing();
         }
+        if let Some(s) = self.swipe
+            && !self.source.shown()
+        {
+            self.swipe = None;
+            self.source.swipe_ended(s.row, SwipeEnd::Closed);
+        }
         // Until it hands back (in `start`).
-        self.composing
+        self.composing || self.swipe.is_some()
     }
 
     fn pointer(&mut self, ev: &TouchEvent) -> Route {
@@ -439,6 +729,11 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
             (Phase::Down, _) if !self.contains(ev) => {
                 self.touch = Touch::None;
                 Route::Slint
+            }
+            (Phase::Down, _) if self.swipe.is_some() => {
+                // A swiped row still snapping: this touch is ignored.
+                self.touch = Touch::Ignored;
+                Route::Hook
             }
             (Phase::Down, _) if self.composing => {
                 // Stops the moving list; this touch only scrolls.
@@ -460,12 +755,38 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
                     self.start_scroll(y, at);
                     self.touch = Touch::Scroll;
                     Route::TakeOver
-                } else {
-                    if dx > self.layout.slop {
-                        self.touch = Touch::Slint;
+                } else if dx > self.layout.slop {
+                    match self.row_at(y0 - self.layout.y as f32) {
+                        Some(row) => {
+                            self.start_swipe(row, x0);
+                            self.touch = Touch::Swipe;
+                            Route::TakeOver
+                        }
+                        None => {
+                            self.touch = Touch::Slint;
+                            Route::Slint
+                        }
                     }
+                } else {
                     Route::Slint
                 }
+            }
+            (Phase::Move, Touch::Swipe) => {
+                if let Some(s) = self.swipe.as_mut() {
+                    let width = self.layout.width as f32;
+                    s.d = (s.base + s.finger_x0 - ev.x).clamp(0.0, width);
+                }
+                Route::Hook
+            }
+            (Phase::Up, Touch::Swipe) => {
+                self.touch = Touch::None;
+                self.release_swipe();
+                Route::Hook
+            }
+            (Phase::Move, Touch::Ignored) => Route::Hook,
+            (Phase::Up, Touch::Ignored) => {
+                self.touch = Touch::None;
+                Route::Hook
             }
             (Phase::Move, Touch::Scroll) => {
                 self.scroller.drag_to(y, at);
@@ -489,6 +810,12 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
     fn start(&mut self, fb: Target, rot: &mut PpaRotator) {
         self.frame_start = Instant::now();
         self.pending.clear();
+        if self.swipe.is_some() {
+            if self.step_swipe(rot) {
+                self.draw_swipe(fb, rot);
+            }
+            return;
+        }
         self.scroller.tick(Instant::now().as_micros());
         let scroll = self.offset();
         if self.scroller.is_moving() || self.shown != Some(scroll) {
@@ -508,7 +835,11 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
 
     fn repeat(&mut self, fb: Target, rot: &mut PpaRotator) {
         self.dma.wait();
-        self.draw(fb, rot);
+        if self.swipe.is_some() {
+            self.draw_swipe(fb, rot);
+        } else {
+            self.draw(fb, rot);
+        }
     }
 
     fn finish(&mut self, rot: &mut PpaRotator) {
@@ -529,11 +860,12 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
 
     fn overlaps(&mut self, x: Range<usize>, y: Range<usize>) -> bool {
         let l = &self.layout;
-        self.composing
-            && x.start < l.x + l.width
-            && l.x < x.end
-            && y.start < l.y + l.height
-            && l.y < y.end
+        let in_x = x.start < l.x + l.width && l.x < x.end;
+        if let Some(band) = self.swipe_band() {
+            // Swiping: only the row's band is the layer's.
+            return in_x && y.start < band.end && band.start < y.end;
+        }
+        self.composing && in_x && y.start < l.y + l.height && l.y < y.end
     }
 
     fn idle_work(&mut self, rot: &mut PpaRotator) -> bool {

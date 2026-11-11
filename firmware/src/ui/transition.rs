@@ -1,4 +1,5 @@
-//! Page transitions: the new page slides in, pushing the old one out,
+//! Page transitions: the new page slides in (sideways, or up from the
+//! bottom for the alarm list over the clock), pushing the old one out,
 //! composed by the 2D-DMA. Slint renders a page change in 40–60 ms, too slow
 //! to animate it frame by frame; instead the new page is rendered once into
 //! a picture of its own and the two pictures are copied into the frame
@@ -39,9 +40,11 @@ use std::collections::VecDeque;
 
 /// Length of the slide.
 const DURATION: Duration = Duration::from_millis(300);
-/// Landscape width of the background picture shown for the part of the new
-/// page not rendered yet; the slide waits rather than show more.
+/// Landscape width (sideways slides) and height (vertical slides) of the
+/// background pictures shown for the part of the new page not rendered yet;
+/// the slide waits rather than show more.
 const BLANK_W: usize = 256;
+const BLANK_H: usize = 160;
 
 /// Where the new page comes from.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,9 +53,13 @@ pub enum Direction {
     Forward,
     /// Back up: from the left.
     Back,
+    /// Up from the bottom (the alarm list over the clock).
+    Up,
+    /// Down, uncovering the page below (back to the clock).
+    Down,
 }
 
-/// 0 none, 1 forward, 2 back.
+/// 0 none, 1 forward, 2 back, 3 up, 4 down.
 static PENDING: AtomicU8 = AtomicU8::new(0);
 /// The pages' background colour (RGB565), for the not yet rendered part.
 static BACKGROUND: AtomicU16 = AtomicU16::new(0);
@@ -63,6 +70,8 @@ pub fn request(direction: Direction) {
     let v = match direction {
         Direction::Forward => 1,
         Direction::Back => 2,
+        Direction::Up => 3,
+        Direction::Down => 4,
     };
     PENDING.store(v, Ordering::Relaxed);
 }
@@ -77,6 +86,8 @@ pub(super) fn take() -> Option<Direction> {
     match PENDING.swap(0, Ordering::Relaxed) {
         1 => Some(Direction::Forward),
         2 => Some(Direction::Back),
+        3 => Some(Direction::Up),
+        4 => Some(Direction::Down),
         _ => None,
     }
 }
@@ -95,24 +106,27 @@ type Job = (
 pub(super) struct Transitions {
     old: Picture,
     new: Picture,
-    /// Background colour, `BLANK_W` landscape columns.
+    /// Background colour: `BLANK_W` landscape columns (panel rows), and
+    /// `BLANK_H` landscape rows (panel columns).
     blank: Picture,
+    blank_v: Picture,
     blank_colour: Option<u16>,
     dma: FbCopy,
 }
 
-fn alloc(rows: usize) -> Picture {
+/// A picture of `cols × rows` (panel orientation) in PSRAM.
+fn alloc(cols: usize, rows: usize) -> Picture {
     let p = unsafe {
         sys::heap_caps_aligned_alloc(
             128,
-            rows * WIDTH * 2,
+            (rows * cols * 2).next_multiple_of(128),
             sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_DMA,
         )
     };
     assert!(!p.is_null(), "no PSRAM for page transitions");
     Picture {
         buf: p.cast(),
-        w: WIDTH,
+        w: cols,
         h: rows,
     }
 }
@@ -120,9 +134,10 @@ fn alloc(rows: usize) -> Picture {
 impl Transitions {
     pub fn new() -> Self {
         Self {
-            old: alloc(HEIGHT),
-            new: alloc(HEIGHT),
-            blank: alloc(BLANK_W),
+            old: alloc(WIDTH, HEIGHT),
+            new: alloc(WIDTH, HEIGHT),
+            blank: alloc(WIDTH, BLANK_W),
+            blank_v: alloc(BLANK_H, HEIGHT),
             blank_colour: None,
             dma: FbCopy::new().expect("2D-DMA"),
         }
@@ -143,6 +158,7 @@ impl Transitions {
             old: self.old,
             new: self.new,
             blank: self.blank,
+            blank_v: self.blank_v,
             dma: &mut self.dma,
             jobs: VecDeque::new(),
             start: None,
@@ -213,10 +229,12 @@ impl Transitions {
         if self.blank_colour == Some(colour) {
             return;
         }
-        let px = self.blank.w * self.blank.h;
-        // SAFETY: the picture holds `px` pixels; no DMA uses it now.
-        unsafe { core::slice::from_raw_parts_mut(self.blank.buf, px) }.fill(colour);
-        cache::writeback(self.blank.buf, px);
+        for p in [self.blank, self.blank_v] {
+            let px = p.w * p.h;
+            // SAFETY: the picture holds `px` pixels; no DMA uses it now.
+            unsafe { core::slice::from_raw_parts_mut(p.buf, px) }.fill(colour);
+            cache::writeback(p.buf, px);
+        }
         self.blank_colour = Some(colour);
     }
 }
@@ -228,6 +246,7 @@ struct Slide<'a> {
     old: Picture,
     new: Picture,
     blank: Picture,
+    blank_v: Picture,
     dma: &'a mut FbCopy,
     jobs: VecDeque<Job>,
     /// When the first frame was composed (the slide's time 0).
@@ -282,44 +301,78 @@ impl Slide<'_> {
             } else {
                 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
             };
-            let mut d = ((eased.min(1.0) * HEIGHT as f32) as usize).min(HEIGHT);
+            let (length, blank) = if self.vertical() {
+                (WIDTH, BLANK_H)
+            } else {
+                (HEIGHT, BLANK_W)
+            };
+            let mut d = ((eased.min(1.0) * length as f32) as usize).min(length);
             if !self.new_ready {
                 // Show no more of the new page than the background covers.
-                d = d.min(BLANK_W);
+                d = d.min(blank);
             }
             self.compose(fb, d);
         }
         self.composed = true;
     }
 
+    fn vertical(&self) -> bool {
+        matches!(self.direction, Direction::Up | Direction::Down)
+    }
+
     /// Queues one frame, `d` landscape pixels in: forward, the old page
     /// moves left and the new one follows from the right; back, the other
-    /// way round. Before the new page is rendered, its part comes from the
-    /// background picture.
+    /// way round; up, the new page comes up from the bottom; down, it comes
+    /// down from the top. Before the new page is rendered, its part comes
+    /// from a background picture.
     fn compose(&mut self, fb: Picture, d: usize) {
-        let w = HEIGHT;
-        let (new_src, new_from) = if self.new_ready {
-            (
-                self.new,
-                if self.direction == Direction::Forward {
-                    0
-                } else {
-                    w - d
-                },
-            )
-        } else {
-            (self.blank, 0)
-        };
+        let ready = self.new_ready;
+        let (w, h) = (HEIGHT, WIDTH);
+        // Where the visible part of the new page starts in it.
+        let new_at = |from_start: bool, length: usize| if from_start { 0 } else { length - d };
         match self.direction {
-            Direction::Forward => {
-                self.strip(self.old, d, fb, 0, w - d);
-                self.strip(new_src, new_from, fb, w - d, d);
+            Direction::Forward | Direction::Back => {
+                let forward = self.direction == Direction::Forward;
+                let (src, from) = if ready {
+                    (self.new, new_at(forward, w))
+                } else {
+                    (self.blank, 0)
+                };
+                if forward {
+                    self.strip(self.old, d, fb, 0, w - d);
+                    self.strip(src, from, fb, w - d, d);
+                } else {
+                    self.strip(src, from, fb, 0, d);
+                    self.strip(self.old, 0, fb, d, w - d);
+                }
             }
-            Direction::Back => {
-                self.strip(new_src, new_from, fb, 0, d);
-                self.strip(self.old, 0, fb, d, w - d);
+            Direction::Up | Direction::Down => {
+                let up = self.direction == Direction::Up;
+                let (src, from) = if ready {
+                    (self.new, new_at(up, h))
+                } else {
+                    (self.blank_v, 0)
+                };
+                if up {
+                    self.band(self.old, d, fb, 0, h - d);
+                    self.band(src, from, fb, h - d, d);
+                } else {
+                    self.band(src, from, fb, 0, d);
+                    self.band(self.old, 0, fb, d, h - d);
+                }
             }
         }
+    }
+
+    /// Queues a copy of landscape rows `from..from+n` of `src` to `to..to+n`
+    /// of `dst`. Landscape y is the panel column, so a row range is a block
+    /// of whole columns.
+    fn band(&mut self, src: Picture, from: usize, dst: Picture, to: usize, n: usize) {
+        if n == 0 {
+            return;
+        }
+        self.jobs
+            .push_back((src, (from, 0), dst, (to, 0), (n, HEIGHT)));
     }
 
     /// Queues a copy of landscape columns `from..from+n` of `src` to

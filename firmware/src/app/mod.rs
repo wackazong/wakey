@@ -59,16 +59,22 @@ fn depth(page: i32) -> i32 {
     }
 }
 
-/// Shows `page`, sliding it in.
+/// Shows `page`, sliding it in: the alarm pages come up over the clock and
+/// go down again; within them deeper pages come from the right.
 fn show_page(window: &screens::AppWindow, page: i32) {
+    use transition::Direction;
     let from = window.get_page();
     if from == page {
         return;
     }
-    let direction = if depth(page) > depth(from) {
-        transition::Direction::Forward
+    let direction = if from == PAGE_CLOCK {
+        Direction::Up
+    } else if page == PAGE_CLOCK {
+        Direction::Down
+    } else if depth(page) > depth(from) {
+        Direction::Forward
     } else {
-        transition::Direction::Back
+        Direction::Back
     };
     transition::request(direction);
     window.set_page(page);
@@ -85,6 +91,8 @@ pub struct Ctx {
     draft: RefCell<AlarmConfig>,
     /// `sounds/` as listed when the sound page opened.
     sound_files: RefCell<Vec<SoundFile>>,
+    /// The sound each row of the sound page stands for.
+    sound_choices: RefCell<Vec<wakey_core::alarm::Sound>>,
     /// The name being typed.
     name: RefCell<String>,
     /// The built-in speaker, for the wheel click.
@@ -182,6 +190,7 @@ async fn app(spawner: embassy_executor::Spawner) {
         alarm: alarm.clone(),
         draft: RefCell::new(AlarmConfig::default()),
         sound_files: RefCell::new(Vec::new()),
+        sound_choices: RefCell::new(Vec::new()),
         name: RefCell::new(String::new()),
         click: builtin,
     });

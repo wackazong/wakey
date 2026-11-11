@@ -108,9 +108,14 @@ export component ClockPage inherits Rectangle {
             color: Clock.alarm-phase == 0 ? Theme.text-dim : Theme.warn;
             vertical-alignment: center;
         }
+        // Opens the alarm list when touched (the slide starts at once).
         alarm-area := TouchArea {
             enabled: Clock.alarm-phase == 0;
-            clicked => { Clock.open-alarm(); }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    Clock.open-alarm();
+                }
+            }
         }
     }
 

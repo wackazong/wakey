@@ -9,7 +9,7 @@
 use super::alarm::AlarmClock;
 use super::screens::{AlarmList, AlarmListLayout, AlarmRow, AppWindow, Clock, Theme};
 use super::{Ctx, PAGE_CLOCK, PAGE_LIST, PAGE_LIST_ROW, alarm_page, show_page};
-use crate::ui::list_layer::{Layout, ListLayer, ListSource};
+use crate::ui::list_layer::{Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
 use crate::ui::platform;
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 use std::hash::{Hash, Hasher};
@@ -108,6 +108,7 @@ pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
         slop: l.get_slop(),
         background: crate::ui::rgb565(window.global::<Theme>().get_background()),
         page_draws_still: true,
+        reveal: px(l.get_reveal()),
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
     let view = AppWindow::new().expect("alarm row view");
@@ -166,21 +167,62 @@ impl ListSource for Rows {
     fn prepare(&mut self, i: usize) {
         if let Some(r) = self.row(i) {
             self.view.set_list_row(r);
+            self.view.set_list_row_dx(0.0);
+            self.view.set_list_row_highlighted(false);
+            self.view.set_list_row_underlay(false);
         }
+    }
+
+    fn prepare_swipe(&mut self, i: usize, part: SwipePart) {
+        let Some(r) = self.row(i) else { return };
+        self.view.set_list_row(r);
+        self.view.set_list_row_underlay(true);
+        match part {
+            SwipePart::Content { highlighted } => {
+                self.view.set_list_row_dx(0.0);
+                self.view.set_list_row_highlighted(highlighted);
+            }
+            SwipePart::Underlay => {
+                // The row content moved out entirely; the button keeps its
+                // rounded right corners (no square of red behind).
+                self.view.set_list_row_dx(-10_000.0);
+                self.view.set_list_row_highlighted(false);
+                self.view.set_list_row_underlay(false);
+            }
+        }
+    }
+
+    fn open_row(&self) -> Option<usize> {
+        self.with_list(|l| l.get_open_row())
+            .and_then(|r| usize::try_from(r).ok())
     }
 
     fn offset(&self) -> f32 {
         self.with_list(|l| l.get_scroll()).unwrap_or(0.0)
     }
 
-    fn scrolling_started(&mut self) {
-        self.with_list(|l| l.set_scrolling(true));
+    fn layer_started(&mut self) {
+        self.with_list(|l| l.set_layer_active(true));
     }
 
-    fn scrolling_stopped(&mut self, offset: f32) {
+    fn scroll_ended(&mut self, offset: f32) {
         self.with_list(|l| {
             l.set_scroll(offset);
-            l.set_scrolling(false);
+            l.set_layer_active(false);
+        });
+    }
+
+    fn swipe_ended(&mut self, i: usize, end: SwipeEnd) {
+        let id = self.row(i).map(|r| r.id);
+        self.with_list(|l| {
+            l.set_layer_active(false);
+            l.set_open_row(if end == SwipeEnd::Open { i as i32 } else { -1 });
+            if end == SwipeEnd::Delete
+                && let Some(id) = id
+            {
+                // The page's own delete (`app::alarm_list::start`).
+                l.invoke_delete(id);
+            }
         });
     }
 }

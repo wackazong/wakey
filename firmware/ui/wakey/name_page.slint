@@ -92,6 +92,7 @@ export component NamePage inherits Rectangle {
         width: 240px;
         kind: 2;
         text: "Abbrechen";
+        on-press: true;
         clicked => { NameEditor.cancel(); }
     }
     Button {
@@ -100,6 +101,7 @@ export component NamePage inherits Rectangle {
         width: 240px;
         kind: 1;
         text: "Fertig";
+        on-press: true;
         clicked => { NameEditor.done(); }
     }
 

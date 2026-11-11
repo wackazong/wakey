@@ -28,6 +28,9 @@ export component AppWindow inherits Window {
     // row (`list-row`), shown offscreen for the list layer.
     in-out property <int> page: 0;
     in property <AlarmRow> list-row;
+    in property <length> list-row-dx;
+    in property <bool> list-row-highlighted;
+    in property <bool> list-row-underlay;
 
     // Never shown: makes the compiler embed glyphs that only appear in
     // strings set from Rust (dates, Wi-Fi errors, alarm names, file
@@ -45,5 +48,8 @@ export component AppWindow inherits Window {
         x: 0;
         y: 0;
         alarm: root.list-row;
+        dx: root.list-row-dx;
+        highlighted: root.list-row-highlighted;
+        underlay: root.list-row-underlay;
     }
 }

@@ -49,27 +49,34 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         selected: *sound == selected,
         kind,
     };
-    let rows = if picker.get_tab() == TAB_FILES {
+    // Each row and the sound it stands for.
+    let choices: Vec<(SoundRow, Sound)> = if picker.get_tab() == TAB_FILES {
         let files = ctx.sound_files.borrow();
-        let random_sub = if files.is_empty() {
-            "keine Dateien in sounds/"
-        } else {
-            "wechselt jeden Tag"
-        };
-        let mut rows = vec![
+        let mut choices = vec![(
             row("Eingebauter Ton", "Piepen", &Sound::Beep, 0),
-            row("Zufällig", random_sub, &Sound::RandomFile, 1),
-        ];
-        rows.extend(
-            files
-                .iter()
-                .map(|f| row(&f.title, "", &Sound::File(f.path.clone()), 2)),
-        );
-        rows
+            Sound::Beep,
+        )];
+        if files.is_empty() {
+            // "Zufällig" would only play the built-in tone.
+            picker.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());
+        } else {
+            picker.set_empty("".into());
+            choices.push((
+                row("Zufällig", "wechselt jeden Tag", &Sound::RandomFile, 1),
+                Sound::RandomFile,
+            ));
+        }
+        choices.extend(files.iter().map(|f| {
+            let sound = Sound::File(f.path.clone());
+            (row(&f.title, "", &sound, 2), sound)
+        }));
+        choices
     } else {
         picker.set_empty("TIDAL ist noch nicht eingerichtet.".into());
         Vec::new()
     };
+    let (rows, sounds): (Vec<SoundRow>, Vec<Sound>) = choices.into_iter().unzip();
+    *ctx.sound_choices.borrow_mut() = sounds;
     picker.set_rows(ModelRc::new(VecModel::from(rows)));
 }
 
@@ -90,13 +97,8 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         if window.global::<SoundPicker>().get_tab() != TAB_FILES {
             return;
         }
-        let sound = match i {
-            0 => Sound::Beep,
-            1 => Sound::RandomFile,
-            i => match ctx.sound_files.borrow().get(i as usize - 2) {
-                Some(f) => Sound::File(f.path.clone()),
-                None => return,
-            },
+        let Some(sound) = ctx.sound_choices.borrow().get(i as usize).cloned() else {
+            return;
         };
         ctx.draft.borrow_mut().sound = sound;
         fill_rows(window, ctx);

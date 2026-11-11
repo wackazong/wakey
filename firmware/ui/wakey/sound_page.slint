@@ -26,7 +26,7 @@ export global SoundPicker {
     // 0 Datei, 1 TIDAL.
     in property <int> tab;
     in property <[SoundRow]> rows;
-    // Shown instead of the list when it is empty (no TIDAL yet, no files).
+    // A note below the rows (no TIDAL yet, no sound files), or empty.
     in property <string> empty;
     in-out property <int> volume;
     // Index into 0, 10, 30, 60 s.
@@ -106,9 +106,12 @@ export component SoundPage inherits Rectangle {
         clip: true;
         background: Theme.card;
 
-        if SoundPicker.rows.length == 0: Text {
+        // Below the rows, in the space left.
+        if SoundPicker.empty != "": Text {
             x: 40px;
+            y: SoundPicker.rows.length * 112px;
             width: parent.width - 80px;
+            height: parent.height - self.y;
             text: SoundPicker.empty;
             font-size: 30px;
             color: Theme.text-faint;

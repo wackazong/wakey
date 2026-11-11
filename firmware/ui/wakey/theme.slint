@@ -54,6 +54,9 @@ export component Button inherits Rectangle {
     in property <string> text;
     in property <int> kind: 0;
     in property <bool> enabled: true;
+    // Acts when touched, not when released: for buttons that change the
+    // page (the slide starts at once).
+    in property <bool> on-press;
     // Optional icon left of the text (`Icon.kind`), -1 for none.
     in property <int> icon: -1;
     callback clicked();
@@ -88,11 +91,21 @@ export component Button inherits Rectangle {
     }
     ta := TouchArea {
         enabled: root.enabled;
-        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (root.on-press && e.kind == PointerEventKind.down) {
+                root.clicked();
+            }
+        }
+        clicked => {
+            if (!root.on-press) {
+                root.clicked();
+            }
+        }
     }
 }
 
-// "‹ Uhr": back to the previous page, top left.
+// "‹ Uhr": back to the previous page, top left. Acts when touched (it
+// always changes the page).
 export component BackButton inherits Rectangle {
     in property <string> text;
     callback clicked();
@@ -116,7 +129,11 @@ export component BackButton inherits Rectangle {
         vertical-alignment: center;
     }
     ta := TouchArea {
-        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.clicked();
+            }
+        }
     }
 }
 

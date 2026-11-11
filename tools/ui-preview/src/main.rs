@@ -161,6 +161,87 @@ impl Preview {
         println!("         {what}: {checked} rows match the list layer's");
     }
 
+    /// Renders the offscreen row view (the list layer's pictures).
+    fn render_row(
+        &self,
+        alarm: AlarmRow,
+        dx: f32,
+        highlighted: bool,
+        underlay: bool,
+    ) -> Vec<Rgb565Pixel> {
+        let layout = self.ui.global::<AlarmListLayout>();
+        let (w, h) = (layout.get_width() as usize, layout.get_pitch() as usize);
+        self.row_view.set_list_row(alarm);
+        self.row_view.set_list_row_dx(dx);
+        self.row_view.set_list_row_highlighted(highlighted);
+        self.row_view.set_list_row_underlay(underlay);
+        let mut row = vec![Rgb565Pixel::default(); w * h];
+        self.row_window.request_redraw();
+        self.row_window.draw_if_needed(|r| {
+            r.render(&mut row, w);
+        });
+        self.row_view.set_list_row_dx(0.0);
+        self.row_view.set_list_row_underlay(false);
+        row
+    }
+
+    /// Checks that the open row `i` on the page has the same pixels as the
+    /// list layer's last frame of a swipe that left it open: its content
+    /// picture moved left by the delete button's width, the delete button
+    /// picture behind.
+    fn check_open_row(&self, i: usize) {
+        let screen = self.render();
+        let layout = self.ui.global::<AlarmListLayout>();
+        let list = self.ui.global::<AlarmList>();
+        let px = |v: f32| v.round() as usize;
+        let (x0, y0, w) = (
+            px(layout.get_x()),
+            px(layout.get_y()),
+            px(layout.get_width()),
+        );
+        let (pitch, d) = (px(layout.get_pitch()), px(layout.get_reveal()));
+        let top = y0 + i * pitch - px(list.get_scroll());
+        let alarm = list.get_rows().row_data(i).unwrap();
+        let content = self.render_row(alarm.clone(), 0.0, false, true);
+        let underlay = self.render_row(alarm, -10_000.0, false, false);
+        // Differences: count, largest step per channel, where.
+        let channels = |p: Rgb565Pixel| [p.0 >> 11, (p.0 >> 5) & 0x3f, p.0 & 0x1f];
+        let (mut n, mut worst, mut xs, mut ys) = (0, 0, (usize::MAX, 0), (usize::MAX, 0));
+        for y in 0..pitch {
+            for x in 0..w {
+                let want = if x < w - d {
+                    content[y * w + x + d]
+                } else {
+                    underlay[y * w + x]
+                };
+                let got = screen[(top + y) * W + x0 + x];
+                if got == want {
+                    continue;
+                }
+                n += 1;
+                let step = channels(got)
+                    .iter()
+                    .zip(channels(want))
+                    .map(|(a, b)| a.abs_diff(b))
+                    .max()
+                    .unwrap();
+                worst = worst.max(step);
+                xs = (xs.0.min(x), xs.1.max(x));
+                ys = (ys.0.min(y), ys.1.max(y));
+            }
+        }
+        // The edges of the content and the button's corners are
+        // anti-aliased with the row clipped on the page and whole in the
+        // pictures: a step or two per channel, invisible; more is a bug.
+        assert!(
+            worst <= 2,
+            "open row {i}: {n} pixels differ from the layer's swipe, up to {worst} steps, x {xs:?} y {ys:?}"
+        );
+        println!(
+            "         open row {i} matches the list layer's swipe ({n} edge pixels within 2 steps)"
+        );
+    }
+
     fn shot(&self, name: &str) {
         if self
             .filter
@@ -353,15 +434,12 @@ fn main() {
     p.shot("1-list-switch-held");
     p.window.dispatch_event(WindowEvent::PointerExited);
     p.run(300);
-    // Swipe the second row left and let go: the delete button stays.
-    p.press(1000.0, 369.0);
-    for x in (700..1000).rev().step_by(20) {
-        p.move_to(x as f32, 371.0);
-        p.run(16);
-    }
-    p.release(700.0, 371.0);
-    p.run(300);
+    // The second row left open by a swipe (the firmware's list layer
+    // swipes, then sets `open-row`): the delete button shows.
+    list.set_open_row(1);
+    p.run(50);
     p.shot("1-list-swiped");
+    p.check_open_row(1);
     // Tap elsewhere: closes it.
     p.press(600.0, 207.0);
     p.release(600.0, 207.0);
@@ -373,21 +451,13 @@ fn main() {
     p.move_to(600.0, 590.0);
     p.run(50);
     p.window.dispatch_event(WindowEvent::PointerExited);
-    list.set_scrolling(true);
+    list.set_layer_active(true);
     p.run(50);
     list.set_scroll(310.0);
-    list.set_scrolling(false);
+    list.set_layer_active(false);
     p.run(300);
     p.shot("1-list-scrolled");
     p.check_rows("scrolled list");
-    // Swipe a row of the scrolled list all the way: deleted.
-    p.press(1000.0, 400.0);
-    for k in 1..=20 {
-        p.move_to(1000.0 - k as f32 * 45.0, 402.0);
-        p.run(16);
-    }
-    p.release(100.0, 402.0);
-    p.run(300);
     // Tap a switch and a row.
     p.press(1150.0, 207.0);
     p.release(1150.0, 207.0);
@@ -447,6 +517,15 @@ fn main() {
     sp.set_previewing(true);
     p.shot("3-sound-previewing");
     sp.set_previewing(false);
+    // No sound files: the built-in tone and a note, no "Zufällig".
+    sp.set_rows(ModelRc::new(VecModel::from(vec![sound(
+        "Eingebauter Ton",
+        "Piepen",
+        true,
+        0,
+    )])));
+    sp.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());
+    p.shot("3-sound-no-files");
     sp.set_tab(1);
     sp.set_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
     sp.set_empty("TIDAL ist noch nicht eingerichtet.".into());
