@@ -88,6 +88,26 @@ fn show_page(window: &screens::AppWindow, page: i32) {
     window.set_page(page);
 }
 
+/// Repaints the whole window when the pixel dimming changes (the light
+/// meter switches it from its own thread: `ui::dim`).
+fn repaint_when_dimmed(ui: &screens::AppWindow) -> slint::Timer {
+    let weak = ui.as_weak();
+    let mut seen = crate::ui::dim::epoch();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(250),
+        move || {
+            if crate::ui::dim::changed_since(&mut seen)
+                && let Some(ui) = weak.upgrade()
+            {
+                ui.set_repaint_all(!ui.get_repaint_all());
+            }
+        },
+    );
+    timer
+}
+
 /// Settings pages go back to the clock after this long without a touch.
 const IDLE_CLOSE: Duration = Duration::from_secs(60);
 
@@ -207,6 +227,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     sound_page::start(&ui, &ctx);
     name_page::start(&ui, &ctx);
     let _idle = close_when_idle(&ctx);
+    let _dim = repaint_when_dimmed(&ui);
     let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
     // The light meter owns the backlight: full at first, then the room's.

@@ -9,8 +9,9 @@
 //! Then the sensor sleeps again. No frame is kept or sent anywhere: the
 //! buffer is overwritten by the next measurement.
 //!
-//! The light maps to a backlight level on a log scale ([`level_for`]), and
-//! the thread fades the backlight there.
+//! The light maps to a backlight level ([`level_for`]; the panel's
+//! backlight barely dims, so the night halves the pixels instead), and the
+//! thread fades the backlight there.
 
 use crate::board::Backlight;
 use crate::board::camera;
@@ -21,13 +22,23 @@ use std::time::{Duration, Instant};
 
 /// Between measurements.
 const PERIOD: Duration = Duration::from_secs(10);
-/// Backlight in the dark and in bright light (0–1).
-const LEVEL_MIN: f32 = 0.03;
+/// The panel's backlight barely dims with the PWM duty: 1 % is its
+/// dimmest visible level, 2–40 % all look the same (a plateau), only above
+/// 40 % does it get visibly brighter (measured by eye, 200 Hz–44.1 kHz).
+/// So there are three ranges of room light (average pixel value at the
+/// longest exposure and 1× gain):
+/// - night, below [`LIGHT_NIGHT`]: [`LEVEL_NIGHT`] and every pixel halved
+///   ([`crate::ui::dim`]); left only above [`LIGHT_NIGHT_END`];
+/// - a lit room: [`LEVEL_ROOM`];
+/// - from [`LIGHT_ROOM_END`] to [`LIGHT_BRIGHT`]: [`LEVEL_ROOM_TOP`] to
+///   [`LEVEL_MAX`] on a log scale.
+const LEVEL_NIGHT: f32 = 0.01;
+const LEVEL_ROOM: f32 = 0.13;
+const LEVEL_ROOM_TOP: f32 = 0.4;
 const LEVEL_MAX: f32 = 1.0;
-/// Light (average pixel value at the longest exposure and 1× gain) at and
-/// below which the backlight is at [`LEVEL_MIN`], and at and above which it
-/// is at [`LEVEL_MAX`]; in between on a log scale.
-const LIGHT_DARK: f32 = 1.0;
+const LIGHT_NIGHT: f32 = 2.0;
+const LIGHT_NIGHT_END: f32 = 4.0;
+const LIGHT_ROOM_END: f32 = 30.0;
 const LIGHT_BRIGHT: f32 = 300.0;
 /// Exposure settings from least to most sensitive: (lines, gain as a power
 /// of two).
@@ -61,13 +72,31 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight) {
             }
         };
         let mut level = LEVEL_MAX;
+        let mut night = false;
         let _ = backlight.set_level(level);
         loop {
             match meter.measure(&bus) {
                 Ok(light) => {
-                    let target = level_for(light);
-                    log::info!("ambient: backlight {:.1} %", target * 100.0);
+                    night = if night {
+                        light < LIGHT_NIGHT_END
+                    } else {
+                        light < LIGHT_NIGHT
+                    };
+                    let target = level_for(light, night);
+                    log::info!(
+                        "ambient: backlight {:.1} %{}",
+                        target * 100.0,
+                        if night { ", pixels halved" } else { "" }
+                    );
+                    // Darker: dim the pixels first, then the backlight;
+                    // brighter: the other way round.
+                    if night {
+                        crate::ui::dim::set(true);
+                    }
                     fade(&mut backlight, &mut level, target);
+                    if !night {
+                        crate::ui::dim::set(false);
+                    }
                 }
                 Err(e) => log::warn!("ambient: {e}"),
             }
@@ -83,12 +112,17 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight) {
     }
 }
 
-/// The backlight level for `light`: log-linear between the two ends.
-fn level_for(light: f32) -> f32 {
-    let t = (light.max(1e-3).ln() - LIGHT_DARK.ln()) / (LIGHT_BRIGHT.ln() - LIGHT_DARK.ln());
-    let t = t.clamp(0.0, 1.0);
-    // Perceived brightness is roughly logarithmic too.
-    LEVEL_MIN * (LEVEL_MAX / LEVEL_MIN).powf(t)
+/// The backlight level for `light` (see [`LEVEL_ROOM`]).
+fn level_for(light: f32, night: bool) -> f32 {
+    if night {
+        return LEVEL_NIGHT;
+    }
+    if light <= LIGHT_ROOM_END {
+        return LEVEL_ROOM;
+    }
+    let t = (light.ln() - LIGHT_ROOM_END.ln()) / (LIGHT_BRIGHT.ln() - LIGHT_ROOM_END.ln());
+    // Even steps to the eye: geometric in between.
+    LEVEL_ROOM_TOP * (LEVEL_MAX / LEVEL_ROOM_TOP).powf(t.clamp(0.0, 1.0))
 }
 
 /// Moves the backlight to `target` in small steps over about a second.

@@ -211,6 +211,8 @@ pub struct ListLayer<S: ListSource> {
     swipe_pics: Picture,
     /// The underlay is rendered (it is the same for every row).
     underlay_ready: bool,
+    /// [`crate::ui::dim::epoch`] the underlay was rendered in.
+    underlay_epoch: u32,
     settle: u8,
     /// Offset composed in the previous frame.
     shown: Option<i32>,
@@ -288,6 +290,7 @@ impl<S: ListSource> ListLayer<S> {
             swipe: None,
             swipe_pics,
             underlay_ready: false,
+            underlay_epoch: 0,
             settle: 0,
             shown: None,
         }
@@ -337,9 +340,15 @@ impl<S: ListSource> ListLayer<S> {
     }
 
     /// Renders row `i` into its slot, unless it is there and current.
+    /// Row `i`'s stamp, including the dimming ([`crate::ui::dim`]): a row
+    /// drawn before it changed is stale.
+    fn stamp(&self, i: usize) -> u64 {
+        self.source.stamp(i) ^ u64::from(crate::ui::dim::epoch()).rotate_left(48)
+    }
+
     fn ensure(&mut self, i: usize, rot: &mut PpaRotator) {
         let slots = self.layout.slots;
-        let stamp = self.source.stamp(i);
+        let stamp = self.stamp(i);
         if self.slot_row[i % slots] == Some((i, stamp)) {
             return;
         }
@@ -362,8 +371,7 @@ impl<S: ListSource> ListLayer<S> {
     /// alternating between the scroll direction (first) and the other.
     fn next_missing(&self, first: usize, last: usize) -> Option<usize> {
         let rows = self.source.rows();
-        let current =
-            |i: usize| self.slot_row[i % self.layout.slots] == Some((i, self.source.stamp(i)));
+        let current = |i: usize| self.slot_row[i % self.layout.slots] == Some((i, self.stamp(i)));
         if let Some(i) = (first..=last).find(|&i| !current(i)) {
             return Some(i);
         }
@@ -569,7 +577,8 @@ impl<S: ListSource> ListLayer<S> {
         let Some(mut s) = self.swipe else {
             return false;
         };
-        if !self.underlay_ready {
+        let dim_changed = crate::ui::dim::changed_since(&mut self.underlay_epoch);
+        if !self.underlay_ready || dim_changed {
             self.render_swipe_part(s.row, SwipePart::Underlay, UNDERLAY, rot);
             self.underlay_ready = true;
         }

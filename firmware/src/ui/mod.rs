@@ -11,9 +11,12 @@
 //! - [`list_layer`]: a scrolling list composed by DMA (a `FrameHook`).
 //! - [`input`]: touch polling → landscape pointer events.
 //! - [`transition`]: page changes as slides, composed by the 2D-DMA.
+//! - [`dim`]: halving every pixel for the night (with the lowest
+//!   backlight).
 //! - [`stats`]: frame statistics; `trace`: a per-frame log for performance
 //!   work (feature `ui-bench`).
 
+pub mod dim;
 pub mod input;
 pub mod list_layer;
 pub mod platform;

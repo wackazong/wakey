@@ -101,5 +101,6 @@ impl LineBufferProvider for PpaLines<'_> {
         let px = self.rot.line(line, range);
         // SAFETY: Rgb565Pixel is #[repr(transparent)] over u16.
         render_fn(unsafe { core::slice::from_raw_parts_mut(px.as_mut_ptr().cast(), px.len()) });
+        super::dim::apply(px);
     }
 }
