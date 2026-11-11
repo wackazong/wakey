@@ -1,7 +1,8 @@
 //! File playback: a decoder thread reads an [`AudioFile`], converts it to
 //! 48 kHz stereo i16 ([`Converter`] for other rates, mostly 44.1 kHz) and
-//! fills a one-second ring buffer in PSRAM; the USB audio stream takes from
-//! the ring through [`Player::source`]. When the ring runs empty the stream
+//! fills a one-second ring buffer in PSRAM; the speaker's stream (USB or
+//! built-in, one at a time, see `audio::output`) takes from the ring
+//! through [`Player::source`]. When the ring runs empty the stream
 //! plays silence and counts an underrun.
 //!
 //! [`Player::play`] plays a file once (tests); [`Player::ring`] is the
@@ -75,7 +76,8 @@ impl Player {
         }
     }
 
-    /// The sample source for the USB stream ([`uac::UsbAudio::start`]).
+    /// A sample source for a speaker's stream ([`uac::UsbAudio::start`],
+    /// `BuiltinSpeaker::start`). Only one may take from it at a time.
     pub fn source(&self) -> Source {
         let ring = self.ring.clone();
         let mut frames: u64 = 0;

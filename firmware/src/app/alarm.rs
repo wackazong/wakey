@@ -3,12 +3,12 @@
 //!
 //! [`AlarmClock::tick`] runs once a second (from the clock screen's timer)
 //! and [`AlarmClock::input`] on the ringing screen's buttons, both on the UI
-//! thread. While an alarm rings, the USB stream runs and the player rings
-//! that alarm's sound (or the built-in tone) with its fade-in; otherwise
-//! both are stopped.
+//! thread. While an alarm rings, the player rings that alarm's sound (or the
+//! built-in tone) with its fade-in on the USB speaker, or on the built-in
+//! one if none is connected ([`Output`]); otherwise both are stopped.
 
+use crate::audio::output::Output;
 use crate::audio::player::{Player, Sound as PlayerSound};
-use crate::audio::uac::UsbAudio;
 use crate::{clock, config, sounds};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use wakey_core::alarm::{self, AlarmConfig, Alarms, Input, Phase, RingConfig, State};
@@ -25,7 +25,7 @@ pub struct AlarmClock {
     nvs: Option<EspNvs<NvsDefault>>,
     saved: State,
     player: Player,
-    speaker: UsbAudio,
+    output: Output,
     /// The alarm the speaker is ringing for right now.
     sounding: Option<u32>,
     /// A sound page preview is playing.
@@ -54,7 +54,7 @@ impl AlarmClock {
         ring: RingConfig,
         nvs: EspDefaultNvsPartition,
         player: Player,
-        speaker: UsbAudio,
+        output: Output,
     ) -> Self {
         let nvs = EspNvs::new(nvs, NVS_NAMESPACE, true)
             .inspect_err(|e| log::error!("alarm: NVS: {e}; the state will not survive a reboot"))
@@ -71,7 +71,7 @@ impl AlarmClock {
             nvs,
             saved,
             player,
-            speaker,
+            output,
             sounding: None,
             previewing: false,
         }
@@ -127,6 +127,8 @@ impl AlarmClock {
     pub fn tick(&mut self) {
         self.machine.tick(&self.alarms, &self.ring, clock::moment());
         self.follow();
+        // The USB speaker may have come or gone.
+        self.output.update();
     }
 
     pub fn input(&mut self, input: Input) {
@@ -146,7 +148,7 @@ impl AlarmClock {
             None => PlayerSound::Tone,
         };
         log::info!("alarm: preview {:?} at {} %", cfg.sound, cfg.volume);
-        self.speaker.set_streaming(true);
+        self.output.set_streaming(true);
         self.player.ring(sound, tone::volume_gain(cfg.volume), 0);
         self.previewing = true;
     }
@@ -163,7 +165,7 @@ impl AlarmClock {
             self.previewing = false;
             if self.sounding.is_none() {
                 self.player.stop();
-                self.speaker.set_streaming(false);
+                self.output.set_streaming(false);
             }
         }
     }
@@ -218,22 +220,22 @@ impl AlarmClock {
         self.sounding = ringing;
         // An alarm takes over from a preview.
         self.previewing = false;
-        match ringing.and_then(|id| self.get(id)) {
+        match ringing.and_then(|id| self.get(id)).cloned() {
             Some(cfg) => {
                 let sound = match sounds::resolve(&cfg.sound, cfg.id, clock::now().date()) {
                     Some(path) => PlayerSound::File(path),
                     None => PlayerSound::Tone,
                 };
-                self.speaker.set_streaming(true);
+                self.output.set_streaming(true);
                 self.player
                     .ring(sound, tone::volume_gain(cfg.volume), cfg.fade_in_s);
-                if !self.speaker.connected() {
-                    log::warn!("alarm: ringing, but no speaker is connected");
+                if self.output.on_builtin() {
+                    log::info!("alarm: no USB speaker, ringing on the built-in one");
                 }
             }
             None => {
                 self.player.stop();
-                self.speaker.set_streaming(false);
+                self.output.set_streaming(false);
             }
         }
     }

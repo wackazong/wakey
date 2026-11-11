@@ -60,7 +60,8 @@ src/
 ├─ audio/
 │  ├─ uac/             USB Audio Class 1.0 speaker: handle, host, device
 │  ├─ player.rs        file / tone playback: decoder thread → ring → stream
-│  └─ click.rs         wheel click on the built-in speaker (I2S, amplifier)
+│  ├─ builtin.rs       built-in speaker: mixer thread (sound, clicks), amplifier
+│  └─ output.rs        player → USB speaker, or the built-in one without it
 ├─ net.rs              Wi-Fi via the C6, reconnect, NTP
 ├─ clock.rs            system time from the RTC, local time, RTC sync
 ├─ config.rs           config.json from the SD card

@@ -16,7 +16,8 @@ mod clock_screen;
 mod name_page;
 mod sound_page;
 
-use crate::audio::click::Clicker;
+use crate::audio::builtin::BuiltinSpeaker;
+use crate::audio::output::Output;
 use crate::audio::player::Player;
 use crate::audio::uac::UsbAudio;
 use crate::board::Board;
@@ -60,7 +61,8 @@ pub struct Ctx {
     sound_files: RefCell<Vec<SoundFile>>,
     /// The name being typed.
     name: RefCell<String>,
-    click: Clicker,
+    /// The built-in speaker, for the wheel click.
+    click: BuiltinSpeaker,
 }
 
 impl Ctx {
@@ -128,18 +130,18 @@ async fn app(spawner: embassy_executor::Spawner) {
         config.wifi,
         move || clock::store_system_time(&rtc),
     );
-    let click = Clicker::start(codec, i2c.clone(), ioexp.clone());
-    spawner.spawn(input::touch_task(i2c, ioexp.clone()).unwrap());
-
-    // Speaker: powered and set up now, streaming while the alarm rings.
+    // Speakers: set up now; the player's sound goes to the USB speaker,
+    // or the built-in one if none is connected, while an alarm rings.
     let player = Player::new();
+    let builtin = BuiltinSpeaker::start(codec, i2c.clone(), ioexp.clone(), player.source());
+    spawner.spawn(input::touch_task(i2c, ioexp.clone()).unwrap());
     let speaker = UsbAudio::start(ioexp.switch(Pin::Usb5vEn), player.source()).expect("USB host");
     let alarm = Rc::new(RefCell::new(AlarmClock::new(
         config.alarms,
         config.ringing,
         nvs,
         player,
-        speaker.clone(),
+        Output::new(speaker.clone(), builtin.clone()),
     )));
 
     let mut rot = PpaRotator::new().expect("PPA");
@@ -152,7 +154,7 @@ async fn app(spawner: embassy_executor::Spawner) {
         draft: RefCell::new(AlarmConfig::default()),
         sound_files: RefCell::new(Vec::new()),
         name: RefCell::new(String::new()),
-        click,
+        click: builtin,
     });
     alarm_list::start(&ui, &ctx);
     // Rows ready before the list is first opened (rendered in idle time).

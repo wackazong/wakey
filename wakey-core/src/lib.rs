@@ -11,12 +11,15 @@
 //! - [`uac`]: USB Audio Class 1.0 configuration descriptor parsing.
 //! - [`config`]: the `config.json` model.
 //! - [`tone`]: the built-in alarm tone, volume curve and fade-in.
+//! - [`mix`]: sample operations for the built-in speaker (mono, mixing,
+//!   keep-alive).
 //! - [`scroll`]: touch scrolling physics (drag, fling, rubber band, spring).
 
 pub mod alarm;
 pub mod audio_file;
 pub mod config;
 pub mod datetime;
+pub mod mix;
 pub mod resample;
 pub mod scroll;
 pub mod tone;

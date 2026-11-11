@@ -35,7 +35,7 @@ flowchart TD
     BIN["src/bin: wakey · ui_bench · audio_test"] --> APP
     APP["app: wiring, alarm, page view models"] --> UI & AUDIO & NET & CLOCK & CONFIG
     UI["ui: Slint platform, render loop, list layer, touch input"] --> DISPLAY & BOARD
-    AUDIO["audio: USB speaker (uac), file player"] --> BOARD
+    AUDIO["audio: USB speaker (uac), built-in speaker, file player, output routing"] --> BOARD
     NET["net: Wi-Fi via C6, NTP"] --> BOARD
     CLOCK["clock: local time, RTC sync"] --> BOARD
     CONFIG["config: config.json"] --> BOARD
@@ -61,7 +61,7 @@ Each layer uses only the ones below it. Rules that keep it that way:
 | `usb-lib` | 4 KiB | any / 5 | ESP-IDF USB host library daemon |
 | `uac` | 8 KiB | any / 5 | USB audio client; transfer callbacks call the sample source |
 | `decoder` | 8 KiB | 1 / 5 | player: file or tone → 48 kHz → ring (while playing); pinned away from the UI |
-| `click` | 4 KiB | any / 5 | wheel clicks to the built-in speaker (I2S), amplifier on/off |
+| `speaker` | 4 KiB | any / 5 | built-in speaker mixer (I2S): player sound, clicks, keep-alive; amplifier on/off |
 | `ui-watch` | 4 KiB | any / 5 | logs where the render loop is when it has not gone round for 2 s |
 | `wifi` | 16 KiB | any / 5 | Wi-Fi connect/reconnect, SNTP |
 | esp_hosted tasks | PSRAM | – | SDIO transport to the C6 |
@@ -78,9 +78,9 @@ Shared state: the system I2C bus is `Arc<Mutex<SysI2c>>` (`SharedI2c`), locked p
 2. `clock::init`: time zone, system time from the RTC (or the build time).
 3. `config::load`: `config.json` from the card (an old single `alarm` section is migrated to `alarms`; missing settings are added to the file at their defaults).
 4. `net::start`: `wifi` thread (C6 power, driver, connect, NTP → RTC); NVS is taken once here and shared with the alarm.
-5. Built-in speaker: I2S0 stream and ES8388 codec (`audio::click`). Touch task on the executor.
-6. `UsbAudio::start`: USB host, `uac` thread (VBUS, port power, device).
-7. `AlarmClock::new`: alarm state from NVS.
+5. `Player::new`, then the built-in speaker (`BuiltinSpeaker::start`: I2S0 stream, ES8388 codec, `speaker` thread) with a source from the player. Touch task on the executor.
+6. `UsbAudio::start`: USB host, `uac` thread (VBUS, port power, device), with another source from the player.
+7. `AlarmClock::new`: alarm state from NVS; it gets an `Output` over both speakers.
 8. Slint platform, the pages' view models, clock screen, once-a-second tick (alarms, then view model).
 9. Backlight on; the render loop runs forever.
 
@@ -117,22 +117,27 @@ flowchart LR
     SD["WAV/AIFF on SD"] --> DEC["decoder thread: AudioFile → Converter (→ 48 kHz)"]
     DEC --> RING["1 s ring (PSRAM)"]
     RING --> SRC["Player::source()"]
-    SRC --> UAC["uac thread: 3 × 8 ms isochronous transfers"]
+    SRC --> OUT{"Output: USB speaker connected?"}
+    OUT -- yes --> UAC["uac thread: 3 × 8 ms isochronous transfers"]
     UAC --> PEB["Pebble V3 (USB-A)"]
+    OUT -- no --> MIX["speaker thread: mono + clicks + keep-alive, 2 ms blocks"]
+    MIX --> BUILTIN["ES8388 → NS4150B → built-in speaker"]
 ```
+
+- **Output** ([`audio/output.rs`](../firmware/src/audio/output.rs)): the player's sound goes to the USB speaker if one is connected, otherwise to the built-in speaker; never both (they take from the same ring). `Output::update` runs with the alarm clock's tick once a second, so a Pebble unplugged while an alarm rings hands over to the built-in speaker within a second, and back when it returns.
 
 - **USB** ([`audio/uac/`](../firmware/src/audio/uac)): ESP-IDF's USB host library on the high-speed port, switched to full-speed-only (`HCFG.FSLSSupp`) for the full-speed Pebble. The `uac` thread switches VBUS, powers the root port (power-cycling it if nothing enumerates), parses the descriptor (`wakey_core::uac`), claims 48 kHz / 16 bit / stereo, sends `SET_INTERFACE`, sets the sample rate, unmutes, sets the volume (−20 dB below max by default), and tears everything down when the device goes away. `UsbAudio` (`Clone`) controls it: `set_streaming`, `set_volume_db`, `set_mute`, `connected`.
 - **Stream:** 3 isochronous transfers × 8 packets × 192 bytes (1 ms of 48 kHz stereo each) in flight; each completion refills its transfer from the `Source` callback and resubmits. 1000 packets/s, no failures measured.
 - **Player** ([`audio/player.rs`](../firmware/src/audio/player.rs)): a decoder thread reads the file (`wakey_core::audio_file`), converts other rates with rubato's FFT resampler (`wakey_core::resample`; 44.1 kHz: 1029-frame blocks) into a one-second ring; the source drains it and plays silence (counted as underrun) when empty. 0 underruns measured for 48 kHz AIFF and 44.1 kHz WAV. `Player::play` plays a file once; `Player::ring` loops a file, or the built-in double beep (`wakey_core::tone`) when there is no file or it cannot be read, and the source applies the gain and a squared fade-in.
 - **Volume:** the device volume (−20 dB below its maximum) is the cap; the alarm's `volume` (0–100 %) is a digital gain below it (`tone::volume_gain`: −40 dB at 1 %, 0 dB at 100 %). `Player::set_gain` changes it while playing (the sound page's slider during a preview).
 - **Built-in tone:** one period of the double beep (1 s) is computed once and played from a table; per-sample `sin` took a whole core (see pitfalls).
-- **Built-in speaker** ([`audio/click.rs`](../firmware/src/audio/click.rs), [`board/codec.rs`](../firmware/src/board/codec.rs)): the ES8388 codec (I2C 0x10, register values from M5Unified) on I2S0 at 48 kHz, MCLK = 256 × fs as M5Unified (although the codec's register says 128), through the NS4150B amplifier (`SPK_EN`). The stream plays silence by itself (`auto_clear`); while the amplifier is on, the `click` thread streams an inaudible keep-alive signal instead (exact zeros let the chain mute, and lone clicks came out cut off), and writes a 10 ms click at a quarter of full scale (`tone::click`: 1.2 kHz, 0.3 ms attack, 2 ms decay) per wheel tick (at most one per frame), quieter the closer it follows the previous one (`tone::click_gain`: full from 100 ms apart, 0.6 at 20 ms), It switches the amplifier on when the alarm page opens (`Clicker::wake`, renewed by the page's 5 s refresh) or at the first click, and off after 8 s without either. Used for the wheel click only; the fallback alarm speaker is still to come.
+- **Built-in speaker** ([`audio/builtin.rs`](../firmware/src/audio/builtin.rs), [`board/codec.rs`](../firmware/src/board/codec.rs)): the ES8388 codec (I2C 0x10, register values from M5Unified with two changes after Espressif's driver: MCLK ratio 256, state machine restart) on I2S0 at 48 kHz, through the NS4150B amplifier (`SPK_EN`). The `speaker` thread mixes 2 ms blocks (`wakey_core::mix`): the player's sound while streaming (to mono: the amplifier takes the left channel only), a click on top, and always an inaudible keep-alive signal (exact zeros let the chain mute, and lone clicks and the first beep after a pause lost their start). The click: 10 ms at a quarter of full scale (`tone::click`: 1.2 kHz, 0.3 ms attack, 2 ms decay) per wheel tick (at most one per frame), quieter the closer it follows the previous one (`tone::click_gain`: full from 100 ms apart, 0.6 at 20 ms). The amplifier is on while streaming, from `BuiltinSpeaker::wake` (the alarm page opens; renewed by its 5 s refresh) or a click, until 8 s without either; off, the thread sleeps and the stream plays silence by itself (`auto_clear`).
 
 ## Alarm
 
 - **Logic** (`wakey_core::alarm`, host-tested): several alarms (`AlarmConfig`: id, optional name, on/off, time, weekdays, sound, volume, fade-in) and one `RingConfig` (snooze, max snoozes, ring timeout) for all. `Alarms::tick(alarms, ring, now)` once a second, `Alarms::input(Snooze | Stop)`, `Alarms::ringing()`, `Alarms::next()` / `next_of()` for the display. One alarm is active at a time: idle → ringing → (snoozed → ringing)* → idle. Each rings on its weekdays at most once per day; snooze at most `max_snoozes` (3) times for `snooze_min`; stop ends the day, also while snoozed; unanswered it is silenced after `ring_timeout_min` for good. An alarm due while another is snoozed takes over; one due while another rings is folded into that ringing. Local time decides when one is due, Unix time measures durations: an alarm in the skipped spring hour rings at 03:00, one in the repeated autumn hour rings once. After a boot it still rings if its time is less than the ring timeout ago; an alarm time crossed by a large clock jump (NTP) does not ring. Deleting or switching off the active alarm ends it.
 - **Sound** (`wakey_core::alarm::Sound`, a string in `config.json`): `"beep"` (built-in tone), a file path (`"sounds/x.wav"`), `"random"` (a file from `sounds/`, chosen by `pick_daily` from the date and the alarm id: fixed for the day, so a reboot while ringing plays the same one), `"tidal:random"` / `"tidal:<id>"` (not available yet: built-in tone). [`sounds.rs`](../firmware/src/sounds.rs) lists `sounds/*.wav|aif|aiff` and resolves a `Sound` to a file.
-- **Device** ([`app/alarm.rs`](../firmware/src/app/alarm.rs)): `AlarmClock` runs the state machine on the UI thread, saves its state as JSON in NVS (namespace `wakey`, key `alarms`: the active phase and each alarm's last finished day) whenever it changes, so a reboot neither rings a finished alarm again nor loses a snooze or a ringing alarm, and makes the speaker follow: ringing → `set_streaming(true)` + `Player::ring` with that alarm's sound, volume and fade-in, otherwise stop. If the speaker connects late, the remembered streaming request starts it. `save` / `delete` / `set_enabled` write the `alarms` list into `config.json` (`config::save_alarms`: rest of the file kept, through a temporary file) and then apply it (`Alarms::reconfigured`: an alarm already stopped today rings again today only if moved to a time still ahead). `preview` plays an alarm's sound without fade-in for the sound page (not while one rings).
+- **Device** ([`app/alarm.rs`](../firmware/src/app/alarm.rs)): `AlarmClock` runs the state machine on the UI thread, saves its state as JSON in NVS (namespace `wakey`, key `alarms`: the active phase and each alarm's last finished day) whenever it changes, so a reboot neither rings a finished alarm again nor loses a snooze or a ringing alarm, and makes the speaker follow: ringing → `Output::set_streaming(true)` + `Player::ring` with that alarm's sound, volume and fade-in, otherwise stop. Without a USB speaker the alarm rings on the built-in one; a USB speaker that connects later takes over within a second. `save` / `delete` / `set_enabled` write the `alarms` list into `config.json` (`config::save_alarms`: rest of the file kept, through a temporary file) and then apply it (`Alarms::reconfigured`: an alarm already stopped today rings again today only if moved to a time still ahead). `preview` plays an alarm's sound without fade-in for the sound page (not while one rings).
 - **Settings pages** (`ui/wakey/*.slint`, view models in `src/app/`):
   - *Alarm list* (`alarm_list`): tapping the alarm line on the clock page opens it. One row per alarm, sorted by time, the next one's time in amber; tap a row to edit, its switch for on/off (animated: rows are updated in place, not re-created), swipe it left for "Löschen" (all the way: deleted at once); "+ Neu" adds one (07:00, Mo–Fr). Scrolling is the list layer's (above); the page handles taps and swipes of the still list with one touch area. A row held for 40 ms lights up at once (a quick flick passes the 12 px first, so it changes nothing on the page); the lit, swiped or open row is drawn as one extra "active" row over the plain rows, which never depend on touch state.
   - *Alarm* (`alarm_page`): hour and minute wheels (drag, flick, snap, wrap around; each row passing the band clicks on the built-in speaker), "Klingelt in …", name, weekday chips, and rows that open the sound page. Edits go to a draft; Sichern needs a weekday and saves, Abbrechen drops the draft.
