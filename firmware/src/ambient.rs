@@ -60,6 +60,15 @@ const SETTINGS: [(u32, usize); 9] = [
 /// A frame average in this range is a usable reading.
 const MEAN_LOW: f32 = 25.0;
 const MEAN_HIGH: f32 = 200.0;
+/// The room is dark (night mode), from the last measurement.
+static NIGHT: AtomicBool = AtomicBool::new(false);
+
+/// True while the room is dark (night mode; `app::power` lets the display
+/// sleep then).
+pub fn night() -> bool {
+    NIGHT.load(Ordering::Relaxed)
+}
+
 /// A frame finished into our buffer (set by the driver's ISR callback).
 static FRAME_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -78,31 +87,49 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8)
         };
         let mut level = LEVEL_MAX;
         let mut night = false;
+        let mut asleep = false;
         let _ = backlight.set_level(level);
+        let mut next = Instant::now();
         loop {
-            match meter.measure(&bus) {
-                Ok(light) => {
-                    night = if night {
-                        light < LIGHT_NIGHT_END
-                    } else {
-                        light < LIGHT_NIGHT
-                    };
-                    let target = level_for(light, night);
-                    let pixels = if night {
-                        night_pixels
-                    } else {
-                        crate::ui::dim::FULL
-                    };
-                    log::info!(
-                        "ambient: backlight {:.1} %, pixels {} %",
-                        target * 100.0,
-                        u32::from(pixels) * 100 / 256
-                    );
-                    fade(&mut backlight, &mut level, target, pixels);
-                }
-                Err(e) => log::warn!("ambient: {e}"),
+            // The display's sleep (`ui::power`): backlight off at once,
+            // and back on once it is awake again.
+            if crate::ui::power::asleep() != asleep {
+                asleep = !asleep;
+                let _ = backlight.set_level(if asleep { 0.0 } else { level });
             }
-            std::thread::sleep(PERIOD);
+            if Instant::now() >= next {
+                next = Instant::now() + PERIOD;
+                match meter.measure(&bus) {
+                    Ok(light) => {
+                        night = if night {
+                            light < LIGHT_NIGHT_END
+                        } else {
+                            light < LIGHT_NIGHT
+                        };
+                        NIGHT.store(night, Ordering::Relaxed);
+                        let target = level_for(light, night);
+                        let pixels = if night {
+                            night_pixels
+                        } else {
+                            crate::ui::dim::FULL
+                        };
+                        log::info!(
+                            "ambient: backlight {:.1} %, pixels {} %",
+                            target * 100.0,
+                            u32::from(pixels) * 100 / 256
+                        );
+                        if asleep {
+                            // Nothing to see: take the new values at once.
+                            level = target;
+                            crate::ui::dim::set(pixels);
+                        } else {
+                            fade(&mut backlight, &mut level, target, pixels);
+                        }
+                    }
+                    Err(e) => log::warn!("ambient: {e}"),
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
     };
     if let Err(e) = std::thread::Builder::new()
@@ -138,6 +165,10 @@ fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
         return;
     }
     for i in 1..=steps {
+        if crate::ui::power::asleep() {
+            // The display went to sleep: the backlight stays off.
+            break;
+        }
         let t = i as f32 / steps as f32;
         // Geometric steps: even to the eye.
         let _ = backlight.set_level(from * (target / from).powf(t));
@@ -149,6 +180,9 @@ fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
     }
     crate::ui::dim::set(pixels);
     *level = target;
+    if crate::ui::power::asleep() {
+        let _ = backlight.set_level(0.0);
+    }
 }
 
 /// The camera pipeline: CSI receiver → ISP → `buf`.

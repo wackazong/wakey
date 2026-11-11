@@ -10,6 +10,7 @@ mod backlight;
 pub mod camera;
 pub mod codec;
 pub mod i2c;
+pub mod ina226;
 pub mod ioexp;
 pub mod rtc;
 pub mod sd;

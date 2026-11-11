@@ -119,8 +119,47 @@ pub async fn run(
     // press): the rest of it is dropped, or its release would act on the
     // new page (a tap on whatever lies under the finger there).
     let mut drop_touch = false;
+    // Woken: the next frame presented ends the sleep (the backlight comes
+    // on only then, over a fresh picture).
+    let mut waking = false;
     loop {
         ITERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if let Some(sleep) = super::power::take_request()
+            && sleep != (super::power::asleep() && !waking)
+        {
+            // The panel itself stays on: its touch half (the same chip)
+            // stops scanning in sleep mode, and nothing could wake it. The
+            // backlight off is dark enough.
+            if sleep {
+                super::power::set_asleep(true);
+            } else {
+                waking = true;
+                window.request_redraw();
+                other_buffer_stale = true;
+            }
+        }
+        if super::power::asleep() && !waking {
+            // Nothing is drawn; a touch only wakes (the rest of it is
+            // dropped, it must not press anything).
+            slint::platform::update_timers_and_animations();
+            let ev = woken_by.take().or_else(|| input::EVENTS.try_receive().ok());
+            if let Some(ev) = ev {
+                if ev.phase == Phase::Down {
+                    super::power::wake();
+                    drop_touch = true;
+                }
+                continue;
+            }
+            if let Either::Second(ev) = select(
+                Timer::after(Duration::from_millis(100)),
+                input::EVENTS.receive(),
+            )
+            .await
+            {
+                woken_by = Some(ev);
+            }
+            continue;
+        }
         stage(1);
         // Touch: route each event to the hook (e.g. list drags), or Slint.
         while let Some(ev) = woken_by.take().or_else(|| input::EVENTS.try_receive().ok()) {
@@ -252,6 +291,10 @@ pub async fn run(
             // write back from the cache, so only one row is synced (the
             // driver needs a non-empty area to switch buffers).
             display.present(0..1).expect("present");
+            if waking {
+                waking = false;
+                super::power::set_asleep(false);
+            }
             stats.frame(render_time, slint_area.map_or(0, |(x, _)| x.len()));
             #[cfg(feature = "ui-bench")]
             trace.presented(slint_box.unwrap_or_default());

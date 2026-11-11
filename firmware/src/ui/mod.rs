@@ -13,6 +13,8 @@
 //! - [`transition`]: page changes as slides, composed by the 2D-DMA.
 //! - [`dim`]: darkening every pixel for the night (with the lowest
 //!   backlight).
+//! - [`power`]: the display asleep or awake (requests, carried out by the
+//!   render loop).
 //! - [`stats`]: frame statistics; `trace`: a per-frame log for performance
 //!   work (feature `ui-bench`).
 
@@ -20,6 +22,7 @@ pub mod dim;
 pub mod input;
 pub mod list_layer;
 pub mod platform;
+pub mod power;
 pub mod render_loop;
 pub mod stats;
 #[cfg(feature = "ui-bench")]
