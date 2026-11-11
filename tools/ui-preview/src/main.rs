@@ -12,7 +12,7 @@
 
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel};
 use slint::platform::{PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, ModelRc, PhysicalSize, VecModel};
+use slint::{ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalSize, VecModel};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,17 +22,26 @@ slint::include_modules!();
 const W: usize = 1280;
 const H: usize = 720;
 
-struct Platform(Rc<MinimalSoftwareWindow>);
+/// Hands out the prepared windows in order: the main window, then the
+/// alarm list's row window (as the firmware's `ui::platform`).
+struct Platform(std::cell::RefCell<Vec<Rc<MinimalSoftwareWindow>>>);
 
 impl slint::platform::Platform for Platform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-        Ok(self.0.clone())
+        let mut w = self.0.borrow_mut();
+        if w.is_empty() {
+            return Err(slint::PlatformError::Other("no window prepared".into()));
+        }
+        Ok(w.remove(0))
     }
 }
 
 struct Preview {
     window: Rc<MinimalSoftwareWindow>,
     ui: AppWindow,
+    /// The alarm list's row as the list layer renders it.
+    row_window: Rc<MinimalSoftwareWindow>,
+    row_view: AppWindow,
     out: PathBuf,
     filter: Option<String>,
     by_line: bool,
@@ -68,6 +77,65 @@ impl Preview {
             button: PointerEventButton::Left,
         });
         self.window.dispatch_event(WindowEvent::PointerExited);
+    }
+
+    /// Renders the main window into a new buffer.
+    fn render(&self) -> Vec<Rgb565Pixel> {
+        slint::platform::update_timers_and_animations();
+        let mut buf = vec![Rgb565Pixel::default(); W * H];
+        self.window.request_redraw();
+        self.window.draw_if_needed(|r| {
+            r.render(&mut buf, W);
+        });
+        buf
+    }
+
+    /// Checks that every row fully in view on the list page has the same
+    /// pixels as the list layer's rendering of it (a second `AppWindow` showing one row), so the
+    /// hand-over between them does not show.
+    fn check_rows(&self, what: &str) {
+        let screen = self.render();
+        let layout = self.ui.global::<AlarmListLayout>();
+        let list = self.ui.global::<AlarmList>();
+        let px = |v: f32| v.round() as i32;
+        let (x0, y0, w) = (
+            px(layout.get_x()),
+            px(layout.get_y()),
+            px(layout.get_width()),
+        );
+        let (view_h, pitch) = (px(layout.get_height()), px(layout.get_pitch()));
+        let scroll = px(list.get_scroll());
+        let rows = list.get_rows();
+        let mut checked = 0;
+        for i in 0..rows.row_count() {
+            let top = i as i32 * pitch - scroll;
+            if top < 0 || top + pitch > view_h {
+                continue;
+            }
+            self.row_view.set_list_row(rows.row_data(i).unwrap());
+            let mut row = vec![Rgb565Pixel::default(); (w * pitch) as usize];
+            self.row_window.request_redraw();
+            self.row_window.draw_if_needed(|r| {
+                r.render(&mut row, w as usize);
+            });
+            for y in 0..pitch {
+                let s = ((y0 + top + y) * W as i32 + x0) as usize;
+                let r = (y * w) as usize;
+                if let Some(x) = (0..w as usize).find(|&x| screen[s + x] != row[r + x]) {
+                    let n = (0..w as usize)
+                        .filter(|&x| screen[s + x] != row[r + x])
+                        .count();
+                    panic!(
+                        "{what}: row {i} differs from the list layer's at line {y}, x {x} \
+                         ({n} pixels on the line): {:?} vs {:?}",
+                        screen[s + x],
+                        row[r + x]
+                    );
+                }
+            }
+            checked += 1;
+        }
+        println!("         {what}: {checked} rows match the list layer's");
     }
 
     fn shot(&self, name: &str) {
@@ -172,12 +240,27 @@ fn main() {
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     window.set_size(PhysicalSize::new(W as u32, H as u32));
-    slint::platform::set_platform(Box::new(Platform(window.clone()))).expect("platform");
+    let row_window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(Platform(std::cell::RefCell::new(vec![
+        window.clone(),
+        row_window.clone(),
+    ]))))
+    .expect("platform");
     let ui = AppWindow::new().expect("UI");
     ui.show().expect("show");
+    let layout = ui.global::<AlarmListLayout>();
+    row_window.set_size(PhysicalSize::new(
+        layout.get_width() as u32,
+        layout.get_pitch() as u32,
+    ));
+    let row_view = AppWindow::new().expect("row view");
+    row_view.set_page(5);
+    row_view.show().expect("show row view");
     let p = Preview {
         window,
         ui,
+        row_window,
+        row_view,
         out,
         filter,
         by_line,
@@ -223,9 +306,18 @@ fn main() {
     ])));
     ui.set_page(1);
     p.shot("1-list");
+    p.check_rows("still list");
     list.on_delete(|id| println!("delete {id}"));
     list.on_open(|id| println!("open {id}"));
     list.on_toggle(|id, on| println!("toggle {id} {on}"));
+    // Hold a row: it lights up after 100 ms. Then the touch is taken over
+    // (a scroll): the page gets a cancel and the highlight fades.
+    p.press(600.0, 207.0);
+    p.run(160);
+    p.shot("1-list-pressed");
+    p.window.dispatch_event(WindowEvent::PointerExited);
+    p.run(300);
+    p.check_rows("after a cancelled press");
     // Swipe the second row left and let go: the delete button stays.
     p.press(1000.0, 369.0);
     for x in (700..1000).rev().step_by(20) {
@@ -239,15 +331,20 @@ fn main() {
     p.press(600.0, 207.0);
     p.release(600.0, 207.0);
     p.run(300);
-    // Flick up: the list scrolls on by itself.
+    // A press that turns into a scroll, as the firmware hands it over: the
+    // list layer takes the touch (the page gets a cancel: pointer left),
+    // scrolls, and hands the list back where it stopped.
     p.press(600.0, 600.0);
-    for k in 1..=6 {
-        p.move_to(600.0, 600.0 - k as f32 * 30.0);
-        p.run(16);
-    }
-    p.release(600.0, 420.0);
-    p.run(800);
+    p.move_to(600.0, 590.0);
+    p.run(50);
+    p.window.dispatch_event(WindowEvent::PointerExited);
+    list.set_scrolling(true);
+    p.run(50);
+    list.set_scroll(310.0);
+    list.set_scrolling(false);
+    p.run(300);
     p.shot("1-list-scrolled");
+    p.check_rows("scrolled list");
     // Swipe a row of the scrolled list all the way: deleted.
     p.press(1000.0, 400.0);
     for k in 1..=20 {

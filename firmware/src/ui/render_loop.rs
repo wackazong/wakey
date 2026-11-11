@@ -17,25 +17,41 @@ use embassy_time::{Duration, Instant, Timer};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RenderingRotation};
 use std::rc::Rc;
 
-/// Work added to every frame, around Slint's own rendering. The hook must
-/// draw only into screen areas Slint leaves alone, since both write the back
-/// buffer at the same time.
+/// Where a touch event goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Route {
+    /// To the main Slint window.
+    Slint,
+    /// The hook used it.
+    Hook,
+    /// The hook takes over the touch Slint has had so far: Slint gets a
+    /// cancel (the pointer left the window); this and the following events
+    /// of the touch are the hook's.
+    TakeOver,
+}
+
+/// Work added to every frame, around Slint's own rendering. While active,
+/// the hook draws its area of the screen; if Slint renders there in the same
+/// frame, the hook draws again on top (`overlaps`).
 pub trait FrameHook {
     /// True while the hook changes the screen every frame (keeps the loop
     /// running at the panel rate even when Slint is idle).
-    fn active(&self) -> bool;
+    fn active(&mut self) -> bool;
     /// Before Slint renders: start drawing into the back buffer `fb` (e.g.
     /// an asynchronous DMA copy). `rot` is idle and may be used.
     fn start(&mut self, fb: Target, rot: &mut PpaRotator);
+    /// Draws the current state again, with no time passing (Slint has just
+    /// rendered over it); `finish` follows.
+    fn repeat(&mut self, fb: Target, rot: &mut PpaRotator);
     /// After Slint has rendered: optional extra work with the idle `rot`,
     /// then wait until everything started in `start` is in the back buffer.
     fn finish(&mut self, rot: &mut PpaRotator);
-    /// A touch event; return true if the hook consumed it (otherwise it goes
-    /// to the main Slint window).
-    fn pointer(&mut self, ev: &TouchEvent) -> bool;
-    /// True if the landscape columns `x` overlap the hook's area. Then the
-    /// loop draws the hook again after Slint, in the same frame.
-    fn overlaps(&mut self, x: core::ops::Range<usize>) -> bool;
+    /// A touch event, before Slint sees it.
+    fn pointer(&mut self, ev: &TouchEvent) -> Route;
+    /// True if the landscape area `x` × `y` that Slint just rendered
+    /// overlaps what the hook draws. Then the loop draws the hook again
+    /// after Slint, in the same frame.
+    fn overlaps(&mut self, x: core::ops::Range<usize>, y: core::ops::Range<usize>) -> bool;
     /// Called when nothing is drawn; do a small piece of background work
     /// (e.g. pre-render list rows). Return true if there is more to do.
     fn idle_work(&mut self, rot: &mut PpaRotator) -> bool;
@@ -92,28 +108,42 @@ pub async fn run(
     let mut stats = FrameStats::new("slint/ppa");
     // An event that woke the idle loop, handled in the next iteration.
     let mut woken_by: Option<TouchEvent> = None;
+    // Slint renders into the two frame buffers in turn and repaints only
+    // what changed since each one was last drawn. After a change, the other
+    // buffer is brought up to date with one more render right away;
+    // otherwise that happens with the next change, often a touch, whose
+    // first frame would then be slow (a page switch: ~60 ms).
+    let mut other_buffer_stale = false;
     loop {
         ITERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         stage(1);
         // Touch: route each event to the hook (e.g. list drags), or Slint.
         while let Some(ev) = woken_by.take().or_else(|| input::EVENTS.try_receive().ok()) {
-            let consumed = hook.as_mut().is_some_and(|h| h.pointer(&ev));
+            let route = hook.as_mut().map_or(Route::Slint, |h| h.pointer(&ev));
             if DEBUG_TOUCH {
                 log::info!(
-                    "touch event {:?} ({:.0}, {:.0}) → {}",
+                    "touch event {:?} ({:.0}, {:.0}) → {route:?}",
                     ev.phase,
                     ev.x,
-                    ev.y,
-                    if consumed { "hook" } else { "slint" }
+                    ev.y
                 );
             }
-            if !consumed {
-                dispatch(&window, &ev);
+            match route {
+                Route::Slint => dispatch(&window, &ev),
+                Route::Hook => {}
+                // A pressed touch area gets `PointerEventKind.cancel`.
+                Route::TakeOver => {
+                    window.dispatch_event(slint::platform::WindowEvent::PointerExited)
+                }
             }
         }
         stage(2);
         slint::platform::update_timers_and_animations();
-        let hook_active = hook.as_ref().is_some_and(|h| h.active());
+        let hook_active = hook.as_mut().is_some_and(|h| h.active());
+        let catching_up = other_buffer_stale;
+        if catching_up {
+            window.request_redraw();
+        }
         if hook_active {
             // Slint's `SwappedBuffers` assumes one render per flip: render
             // (usually nothing) every frame the hook makes us flip.
@@ -134,15 +164,20 @@ pub async fn run(
             hook_started = true;
         }
         // Bounding box (x, y, width, height) of what Slint rendered, if it
-        // rendered at all.
+        // rendered anything.
         let mut slint_box: Option<(i32, i32, u32, u32)> = None;
+        // Slint rendered, if only an empty region: the buffers must flip.
+        let mut slint_rendered = false;
         window.draw_if_needed(|renderer| {
+            slint_rendered = true;
             renderer.set_rendering_rotation(RenderingRotation::NoRotation);
             rot.begin(target);
             let region = renderer.render_by_line(PpaLines { rot: &mut *rot });
             rot.finish();
             let (o, size) = (region.bounding_box_origin(), region.bounding_box_size());
-            slint_box = Some((o.x, o.y, size.width, size.height));
+            if size.width > 0 && size.height > 0 {
+                slint_box = Some((o.x, o.y, size.width, size.height));
+            }
             if DEBUG_SLOW_FRAMES && t0.elapsed() > Duration::from_millis(35) {
                 let rects: Vec<_> = region
                     .iter()
@@ -155,20 +190,22 @@ pub async fn run(
                 );
             }
         });
-        // Landscape columns Slint touched (= panel rows).
-        let slint_x = slint_box.map_or(0..0, |(x, _, w, _)| {
-            let x0 = x.max(0) as usize;
-            x0..x0 + w as usize
+        // Landscape area Slint rendered.
+        let slint_area = slint_box.map(|(x, y, w, h)| {
+            let (x, y) = (x.max(0) as usize, y.max(0) as usize);
+            (x..x + w as usize, y..y + h as usize)
         });
         if let Some(h) = hook.as_mut() {
             // Slint painted over the hook's area (e.g. its full repaints in
             // the first frames): its strips may have landed after the hook's
             // copy, so draw the hook again on top, in this frame.
-            if !slint_x.is_empty() && h.overlaps(slint_x.clone()) {
+            if let Some((x, y)) = slint_area.clone()
+                && h.overlaps(x, y)
+            {
                 if hook_started {
                     h.finish(rot);
                 }
-                h.start(target, rot);
+                h.repeat(target, rot);
                 hook_started = true;
             }
             if hook_started {
@@ -176,7 +213,8 @@ pub async fn run(
             }
         }
 
-        if slint_box.is_some() || hook_started {
+        other_buffer_stale = slint_box.is_some() && !catching_up;
+        if slint_rendered || hook_started {
             stage(5);
             let render_time = t0.elapsed();
             // Always flip after a render, even an empty one (see above). The
@@ -184,12 +222,12 @@ pub async fn run(
             // write back from the cache, so only one row is synced (the
             // driver needs a non-empty area to switch buffers).
             display.present(0..1).expect("present");
-            stats.frame(render_time, slint_x.len());
+            stats.frame(render_time, slint_area.map_or(0, |(x, _)| x.len()));
             #[cfg(feature = "ui-bench")]
             trace.presented(slint_box.unwrap_or_default());
         }
 
-        if !window.has_active_animations() && !hook_active {
+        if !window.has_active_animations() && !hook_active && !other_buffer_stale {
             stats.maybe_log();
             // Background work first (one piece), then sleep until the next
             // Slint timer or a touch.

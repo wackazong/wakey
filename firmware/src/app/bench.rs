@@ -1,6 +1,7 @@
 //! Scripted touch gestures for measuring the UI on the device (feature
 //! `ui-bench`). Ten seconds after boot it opens the alarm list from the
-//! clock page, flings it down and up, presses, swipes and closes a row,
+//! clock page, flings it, stops a fling with a tap (must not open the
+//! alarm), flings back, presses, swipes and closes a row,
 //! toggles a switch twice (saved; the state ends as it began) and goes
 //! back, with the per-frame trace (`ui::trace`) on. The gestures go through
 //! the touch queue like real ones. Each step is logged as `bench: <step>`;
@@ -62,7 +63,10 @@ pub async fn run() {
     tap(CLOCK_ALARM_LINE).await;
     step("fling up", 1500).await;
     drag(LOWER_LIST, (0.0, -300.0), 15).await;
-    step("fling down", 3000).await;
+    // A tap while it still moves only stops it.
+    step("catch fling", 300).await;
+    tap(FIRST_ROW).await;
+    step("fling down", 2000).await;
     drag((LOWER_LIST.0, LOWER_LIST.1 - 300.0), (0.0, 300.0), 15).await;
     // Held, then moved a little: the row lights up, and the move turns the
     // touch into a scroll, so lifting does not open the alarm.

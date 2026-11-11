@@ -44,6 +44,8 @@ const PAGE_LIST: i32 = 1;
 const PAGE_ALARM: i32 = 2;
 const PAGE_SOUND: i32 = 3;
 const PAGE_NAME: i32 = 4;
+/// One alarm list row, for the list layer's offscreen window.
+const PAGE_LIST_ROW: i32 = 5;
 
 /// Settings pages go back to the clock after this long without a touch.
 const IDLE_CLOSE: Duration = Duration::from_secs(60);
@@ -153,6 +155,9 @@ async fn app(spawner: embassy_executor::Spawner) {
         click,
     });
     alarm_list::start(&ui, &ctx);
+    // Rows ready before the list is first opened (rendered in idle time).
+    alarm_list::refresh(&ui, &ctx.alarm.borrow());
+    let mut list = alarm_list::layer(&ui);
     alarm_page::start(&ui, &ctx);
     sound_page::start(&ui, &ctx);
     name_page::start(&ui, &ctx);
@@ -163,7 +168,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     watch_render_loop();
     #[cfg(feature = "ui-bench")]
     spawner.spawn(bench::run().unwrap());
-    render_loop::run(window, display, &mut rot, None).await
+    render_loop::run(window, display, &mut rot, Some(&mut list)).await
 }
 
 /// Every few seconds: back to the clock after a minute without a touch

@@ -44,17 +44,19 @@ src/
 ├─ app/                the alarm clock
 │  ├─ mod.rs           start-up wiring (app::main)
 │  ├─ alarm.rs         the alarms: state machine, NVS, speaker, saving, preview
-│  ├─ alarm_list.rs    alarm list page view model
+│  ├─ alarm_list.rs    alarm list page view model, its rows for the list layer
 │  ├─ alarm_page.rs    alarm page view model (the draft being edited)
 │  ├─ sound_page.rs    sound page view model (sound, volume, fade-in, preview)
 │  ├─ name_page.rs     name keyboard view model
-│  └─ clock_screen.rs  clock page view model (time, date, alarm, Wi-Fi, speaker)
+│  ├─ clock_screen.rs  clock page view model (time, date, alarm, Wi-Fi, speaker)
+│  └─ bench.rs         scripted gestures for measuring (feature ui-bench)
 ├─ ui/
 │  ├─ platform.rs      Slint platform, windows, rendering through the PPA
-│  ├─ render_loop.rs   frame loop, FrameHook
-│  ├─ list_layer.rs    scrolling list composed by 2D-DMA from a row ring
+│  ├─ render_loop.rs   frame loop, FrameHook, touch routing
+│  ├─ list_layer.rs    list scrolled by 2D-DMA from a row ring, Slint when still
 │  ├─ input.rs         touch task → landscape pointer events
-│  └─ stats.rs         frame statistics
+│  ├─ stats.rs         frame statistics, free heap
+│  └─ trace.rs         per-frame log (feature ui-bench)
 ├─ audio/
 │  ├─ uac/             USB Audio Class 1.0 speaker: handle, host, device
 │  ├─ player.rs        file / tone playback: decoder thread → ring → stream
@@ -90,9 +92,9 @@ sdkconfig.defaults     ESP-IDF configuration (commented)
 
 **Add a page.** A component in `ui/wakey/` with a global for its data and callbacks, using the controls in `theme.slint`; a `page` value and an `if` in `ui/wakey.slint` (export the global there); a view model in `app/` that fills the global and handles its callbacks (`Ctx::with` for callbacks that need the window and the shared state), set up in `app/mod.rs`. Add a scene to `tools/ui-preview` and look at the PNG before flashing. Set only properties that changed, use fixed-width `Text` items for values that change on their own, and keep an edit's repaint small (see the dirty-rectangle entry in `docs/pitfalls.md`). Reuse the font sizes in use; characters that only come from Rust strings need a literal in a `.slint` file. Check the image size: `cargo run` prints `App/part. size`.
 
-**Look at the pages without the device.** `cd tools/ui-preview && cargo run --release -- [--by-line] [dir] [name filter]` renders every scene (sample data, some with simulated drags) to `dir` (default `target/ui-preview`) as PNGs and prints the render time per scene. Same `.slint` files, same Slint and renderer; `--by-line` renders line by line as the firmware does. Timing on the device is a different matter (~50 times slower, see below).
+**Look at the pages without the device.** `cd tools/ui-preview && cargo run --release -- [--by-line] [dir] [name filter]` renders every scene (sample data, some with simulated drags) to `dir` (default `target/ui-preview`) as PNGs and prints the render time per scene. Same `.slint` files, same Slint and renderer; `--by-line` renders line by line as the firmware does. It also checks that the alarm list's rows look exactly like the list layer's rendering of them (panics otherwise). Timing on the device is a different matter (~50 times slower, see below).
 
-**Measure the UI on the device.** `cargo run --release --bin wakey --features ui-bench`: ten seconds after boot a scripted run (`app/bench.rs`) opens the alarm list, flings it, presses, swipes, toggles a switch twice (saved, ends as it began) and goes back, and every frame is logged (`ui/trace.rs`): `frame … ms, gap … ms, dirty (x, y, w, h), … Mcycles, … Minstr`, each step announced as `bench: <step>`. Cycles per instruction near 1.3 mean the work itself is the cost; near 5, stalls (see the internal RAM entry in `docs/pitfalls.md`). The per-second stats line shows free internal and DMA memory. `scripts/profile.sh` resolves the sampling profiler's output (`profiler::start`/`report`). Flash a build without the feature afterwards.
+**Measure the UI on the device.** `cargo run --release --bin wakey --features ui-bench`: ten seconds after boot a scripted run (`app/bench.rs`) opens the alarm list, flings it, stops a fling with a tap (must not open the alarm), presses, swipes, toggles a switch twice (saved, ends as it began) and goes back, and every frame is logged (`ui/trace.rs`): `frame … ms, gap … ms, dirty (x, y, w, h), … Mcycles, … Minstr`, each step announced as `bench: <step>`. Cycles per instruction near 1.3 mean the work itself is the cost; near 5, stalls (see the internal RAM entry in `docs/pitfalls.md`). The per-second stats line shows free internal and DMA memory. `scripts/profile.sh` resolves the sampling profiler's output (`profiler::start`/`report`). Flash a build without the feature afterwards.
 
 **Test the alarm.** `WAKEY_ALARM=HH:MM cargo run --release --bin wakey` a few minutes ahead; the log shows `alarm: Ringing …`, `uac: stream on`, and `alarm: Idle` after the ring timeout. Unit tests for the rules are in `wakey-core/src/alarm.rs`.
 

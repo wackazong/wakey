@@ -1,11 +1,18 @@
 //! The alarm list's view model (`AlarmListPage` in
 //! `ui/wakey/alarm_list.slint`): one row per alarm, sorted by time, the
 //! next one marked. Opens from the alarm line on the clock page.
+//!
+//! Scrolling is the list layer's ([`layer`]): it copies rows rendered by a
+//! second `AppWindow` in an offscreen window (page `PAGE_LIST_ROW`) while
+//! the list moves, and the page draws the still list.
 
 use super::alarm::AlarmClock;
-use super::screens::{AlarmList, AlarmRow, AppWindow, Clock};
-use super::{Ctx, PAGE_CLOCK, PAGE_LIST, alarm_page};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use super::screens::{AlarmList, AlarmListLayout, AlarmRow, AppWindow, Clock, Theme};
+use super::{Ctx, PAGE_CLOCK, PAGE_LIST, PAGE_LIST_ROW, alarm_page};
+use crate::ui::list_layer::{Layout, ListLayer, ListSource};
+use crate::ui::platform;
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use wakey_core::alarm::{self, AlarmConfig};
 
@@ -27,6 +34,12 @@ pub fn refresh(window: &AppWindow, alarm: &AlarmClock) {
     // update only the rows that changed, in place, so their switches
     // animate and the others are not repainted.
     let list = window.global::<AlarmList>();
+    // Fewer rows may leave the list scrolled past its new end.
+    let layout = window.global::<AlarmListLayout>();
+    let max_scroll = (rows.len() as f32 * layout.get_pitch() - layout.get_height()).max(0.0);
+    if list.get_scroll() > max_scroll {
+        list.set_scroll(max_scroll);
+    }
     let current = list.get_rows();
     if let Some(model) = current.as_any().downcast_ref::<VecModel<AlarmRow>>()
         && model.row_count() == rows.len()
@@ -50,6 +63,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         .global::<Clock>()
         .on_open_alarm(ctx.with(|window, ctx| {
             refresh(window, &ctx.alarm.borrow());
+            window.global::<AlarmList>().set_scroll(0.0);
             window.set_page(PAGE_LIST);
         }));
     list.on_back(ctx.with(|window, _| window.set_page(PAGE_CLOCK)));
@@ -76,4 +90,101 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         }
         refresh(window, &ctx.alarm.borrow());
     }));
+}
+
+/// The list layer for the alarm list. Call after `AppWindow` was created
+/// (its offscreen row window is the next one, see `ui::platform`).
+pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
+    let l = window.global::<AlarmListLayout>();
+    let px = |v: f32| v.round() as usize;
+    let layout = Layout {
+        x: px(l.get_x()),
+        y: px(l.get_y()),
+        width: px(l.get_width()),
+        height: px(l.get_height()),
+        row_h: px(l.get_pitch()),
+        // All rows of a typical list: no rendering while scrolling.
+        slots: 16,
+        slop: l.get_slop(),
+        background: rgb565(window.global::<Theme>().get_background()),
+        page_draws_still: true,
+    };
+    let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
+    let view = AppWindow::new().expect("alarm row view");
+    view.set_page(PAGE_LIST_ROW);
+    view.show().expect("show alarm row view");
+    let rows = Rows {
+        window: window.as_weak(),
+        view,
+    };
+    ListLayer::new(layout, row_window, rows)
+}
+
+fn rgb565(c: slint::Color) -> u16 {
+    u16::from(c.red() >> 3) << 11 | u16::from(c.green() >> 2) << 5 | u16::from(c.blue() >> 3)
+}
+
+/// The alarm list as the list layer sees it: the rows in the `AlarmList`
+/// global, drawn one at a time by `view`, an `AppWindow` showing only a row.
+pub struct Rows {
+    window: Weak<AppWindow>,
+    view: AppWindow,
+}
+
+impl Rows {
+    fn with_list<T>(&self, f: impl FnOnce(AlarmList<'_>) -> T) -> Option<T> {
+        self.window.upgrade().map(|w| f(w.global::<AlarmList>()))
+    }
+
+    fn row(&self, i: usize) -> Option<AlarmRow> {
+        self.with_list(|l| l.get_rows().row_data(i)).flatten()
+    }
+}
+
+impl ListSource for Rows {
+    fn shown(&self) -> bool {
+        self.window
+            .upgrade()
+            .is_some_and(|w| w.get_page() == PAGE_LIST)
+    }
+
+    fn rows(&self) -> usize {
+        self.with_list(|l| l.get_rows().row_count()).unwrap_or(0)
+    }
+
+    fn stamp(&self, i: usize) -> u64 {
+        let Some(r) = self.row(i) else { return 0 };
+        let mut h = std::hash::DefaultHasher::new();
+        (
+            r.id,
+            r.time.as_str(),
+            r.name.as_str(),
+            r.days,
+            r.enabled,
+            r.next,
+        )
+            .hash(&mut h);
+        h.finish()
+    }
+
+    fn prepare(&mut self, i: usize) {
+        if let Some(r) = self.row(i) {
+            self.view.set_list_row(r);
+        }
+    }
+
+    fn offset(&self) -> f32 {
+        self.with_list(|l| l.get_scroll()).unwrap_or(0.0)
+    }
+
+    fn scrolling_started(&mut self) {
+        self.with_list(|l| l.set_scrolling(true));
+    }
+
+    fn scrolling_stopped(&mut self, offset: f32) {
+        self.with_list(|l| {
+            l.set_scroll(offset);
+            l.set_scrolling(false);
+        });
+    }
 }

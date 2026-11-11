@@ -145,13 +145,16 @@ export component Chip inherits Rectangle {
 // An on/off switch.
 export component Switch inherits Rectangle {
     in property <bool> on;
+    // Slides between on and off; false shows a change at once (a
+    // component reused for several rows, rendered right after each change).
+    in property <bool> animated: true;
     callback toggled();
 
     width: 128px;
     height: 72px;
     border-radius: 36px;
     background: root.on ? Theme.accent-dark : Theme.surface;
-    animate background { duration: 200ms; }
+    animate background { duration: root.animated ? 200ms : 0ms; }
 
     Rectangle {
         x: root.on ? parent.width - self.width - 8px : 8px;
@@ -160,8 +163,8 @@ export component Switch inherits Rectangle {
         height: 56px;
         border-radius: 28px;
         background: root.on ? Theme.accent : Theme.text-dim;
-        animate x { duration: 200ms; easing: ease-in-out; }
-        animate background { duration: 200ms; }
+        animate x { duration: root.animated ? 200ms : 0ms; easing: ease-in-out; }
+        animate background { duration: root.animated ? 200ms : 0ms; }
     }
     // Off where the owner handles touches itself (the alarm list).
     in property <bool> touchable: true;

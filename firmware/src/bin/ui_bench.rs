@@ -10,7 +10,7 @@ use embassy_time::Instant;
 use slint::{Color, SharedString, Timer, TimerMode};
 use wakey::board::Board;
 use wakey::display::ppa::PpaRotator;
-use wakey::ui::list_layer::ListLayer;
+use wakey::ui::list_layer::{Layout, ListLayer, ListSource};
 use wakey::ui::{platform, render_loop, stats};
 
 include!(concat!(env!("OUT_DIR"), "/ui_bench.rs"));
@@ -55,6 +55,49 @@ const PROFILE: bool = false;
 const ROWS: usize = 300;
 const ROW_H: usize = 96;
 
+/// The bench's rows: generated text and colours, never changing.
+struct Tracks {
+    row: TrackRow,
+}
+
+impl ListSource for Tracks {
+    fn shown(&self) -> bool {
+        true
+    }
+    fn rows(&self) -> usize {
+        ROWS
+    }
+    fn stamp(&self, _: usize) -> u64 {
+        0
+    }
+    fn prepare(&mut self, i: usize) {
+        const ARTISTS: [&str; 5] = [
+            "Ada Lovelace",
+            "Café Tacvba",
+            "Björk",
+            "Sigur Rós",
+            "Mötley Crüe",
+        ];
+        self.row.set_index(i as i32);
+        self.row.set_track_title(SharedString::from(format!(
+            "Track {:03} – Morgenstund",
+            i + 1
+        )));
+        self.row
+            .set_artist(SharedString::from(ARTISTS[i % ARTISTS.len()]));
+        self.row.set_tint(Color::from_rgb_u8(
+            (i * 37 % 256) as u8,
+            (i * 91 % 256) as u8,
+            (i * 53 % 256) as u8,
+        ));
+    }
+    fn offset(&self) -> f32 {
+        0.0
+    }
+    fn scrolling_started(&mut self) {}
+    fn scrolling_stopped(&mut self, _: f32) {}
+}
+
 fn main() -> ! {
     wakey::runtime::start(|spawner| spawner.spawn(app(spawner).unwrap()))
 }
@@ -81,29 +124,20 @@ async fn app(spawner: embassy_executor::Spawner) {
     let row_window = platform::offscreen_window(640, ROW_H as u32);
     let row = TrackRow::new().expect("Slint row");
     row.show().expect("show row");
-    let artists = [
-        "Ada Lovelace",
-        "Café Tacvba",
-        "Björk",
-        "Sigur Rós",
-        "Mötley Crüe",
-    ];
-    let set_row = move |i: usize| {
-        row.set_index(i as i32);
-        row.set_track_title(SharedString::from(format!(
-            "Track {:03} – Morgenstund",
-            i + 1
-        )));
-        row.set_artist(SharedString::from(artists[i % artists.len()]));
-        row.set_tint(Color::from_rgb_u8(
-            (i * 37 % 256) as u8,
-            (i * 91 % 256) as u8,
-            (i * 53 % 256) as u8,
-        ));
-    };
     // #141a20, the list area's background in the .slint file, as RGB565.
     const LIST_BACKGROUND: u16 = (0x14 >> 3) << 11 | (0x1a >> 2) << 5 | (0x20 >> 3);
-    let mut list = ListLayer::new(640, 640, ROW_H, ROWS, row_window, set_row, LIST_BACKGROUND);
+    let layout = Layout {
+        x: 640,
+        y: 0,
+        width: 640,
+        height: 720,
+        row_h: ROW_H,
+        slots: 64,
+        slop: 12.0,
+        background: LIST_BACKGROUND,
+        page_draws_still: false,
+    };
+    let mut list = ListLayer::new(layout, row_window, Tracks { row });
     list.prerender(&mut rot);
 
     // Once per second: uptime as the clock and the frame stats.

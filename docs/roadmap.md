@@ -11,7 +11,7 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 **V1 (next):**
 
 1. **No speaker:** if the Pebble is not connected when the alarm rings, nothing is audible today; the built-in ES8388 speaker (already used for the wheel click) as the fallback.
-2. **Screens:** the alarm list on the list layer for smooth scrolling (Slint redraws it at ~24 fps now; the layer copies rows by DMA), and the sound list once it can be long (TIDAL); check page switches while audio plays (~130 ms during a preview, measured before the internal RAM fix).
+2. **Screens:** the sound list on the list layer (as the alarm list) once it can be long (TIDAL); check page switches while audio plays (~130 ms during a preview, measured before the internal RAM fix).
 3. **Config:** the remaining `config.json` fields (below).
 4. **Power states** (below), measured step by step.
 5. **Wi-Fi only when needed:** sync at most every 24 h while the display is on, then C6 unpowered (`WLAN_PWR_EN` off).

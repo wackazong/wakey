@@ -9,29 +9,46 @@
 // │ 07:15  Mo Di Mi Do Fr Sa So                 (  ●) │
 // └────────────────────────────────────────────────────┘
 //
-// One touch area handles the whole list, so scrolling and swiping cannot
-// fight over a gesture: the first 12 px of movement (`slop`) decide whether it is a
-// vertical scroll (with momentum; flicks in the same direction add up) or
-// a horizontal swipe of the row under the finger.
+// Scrolling is the firmware's list layer (`ui/list_layer.rs`): it sees every
+// touch first and takes a touch over once it moves more than `slop`
+// mostly vertically (this page then gets a cancel); while the list moves it
+// copies pre-rendered rows (`ListRowPage`) by DMA, and when it stops it
+// sets `AlarmList.scroll` and this page draws the list again, the same
+// pixels. A touch that moves sideways first stays here: a swipe. So this
+// page handles taps, swipes and switches on the still list.
 //
 // The rows only draw the alarms; none of them depends on the touch state,
 // so a press or a swipe does not repaint the list. One more row, the
 // "active" one, is drawn over the row being touched, swiped or left open,
-// with the same alarm plus highlight and offset, and only it repaints: a
-// frame takes ~19 ms on the device, against ~42 ms for the whole list.
+// with the same alarm plus highlight and offset, and only it repaints.
 
 import { Theme, Button, BackButton, Switch } from "theme.slint";
 
-// What the finger on the list is doing.
+// What the finger on the still list is doing (scrolls are the layer's).
 enum Gesture {
     // Down, not moved far enough to tell.
     undecided,
-    // Scrolling the list.
-    scroll,
     // Swiping the touched row sideways.
     swipe,
     // The touch only closed an open row.
     ignore,
+}
+
+// Where the list is, read by the list layer too (`app/alarm_list.rs`).
+export global AlarmListLayout {
+    out property <length> x: 40px;
+    out property <length> y: 132px;
+    out property <length> width: 1200px;
+    out property <length> height: 588px;
+    // Row height, the space below each row, and both together.
+    out property <length> row-height: 150px;
+    out property <length> gap: 12px;
+    out property <length> pitch: self.row-height + self.gap;
+    // How far a finger moves before the touch counts as a scroll or a
+    // swipe.
+    out property <length> slop: 12px;
+    // Width of the delete button behind a swiped row.
+    out property <length> reveal: 220px;
 }
 
 export struct AlarmRow {
@@ -52,6 +69,11 @@ export struct AlarmRow {
 // Set from Rust (`app/alarm_list.rs`).
 export global AlarmList {
     in property <[AlarmRow]> rows;
+    // How far the still list is scrolled (0 = top); set by the list layer
+    // when a scroll ends.
+    in property <length> scroll;
+    // The list layer is showing the list (moving): no touch feedback here.
+    in property <bool> scrolling;
     callback back();
     callback add();
     callback open(int);
@@ -59,6 +81,8 @@ export global AlarmList {
     callback delete(int);
 }
 
+// One alarm. `dx`, `dragging`, `highlighted` are touch feedback (only the
+// active row uses them).
 component Row inherits Rectangle {
     in property <AlarmRow> alarm;
     // Width of the delete button behind the row.
@@ -69,12 +93,14 @@ component Row inherits Rectangle {
     in property <bool> dragging;
     // Touched or being swiped.
     in property <bool> highlighted;
+    // Changes animate (false: shown at once, see `ListRowPage`).
+    in property <bool> animated: true;
 
     pure function day-on(i: int) -> bool {
         return Math.mod(Math.floor(root.alarm.days / Math.pow(2, i)), 2) == 1;
     }
 
-    height: 150px;
+    height: AlarmListLayout.row-height;
     // No `clip` needed: the list area clips the sliding content.
     border-radius: 28px;
     background: root.dx < 0 ? Theme.danger : Theme.card;
@@ -94,8 +120,8 @@ component Row inherits Rectangle {
         width: parent.width;
         border-radius: 28px;
         background: root.highlighted ? Theme.surface : Theme.card;
-        animate x { duration: root.dragging ? 0ms : 180ms; easing: ease-out; }
-        animate background { duration: 120ms; }
+        animate x { duration: root.dragging || !root.animated ? 0ms : 180ms; easing: ease-out; }
+        animate background { duration: root.animated ? 120ms : 0ms; }
 
         Text {
             x: 40px;
@@ -132,6 +158,7 @@ component Row inherits Rectangle {
             y: (parent.height - self.height) / 2;
             on: root.alarm.enabled;
             touchable: false;
+            animated: root.animated;
         }
     }
 }
@@ -172,43 +199,31 @@ export component AlarmListPage inherits Rectangle {
     }
 
     view := Rectangle {
-        x: 40px;
-        y: 132px;
-        width: parent.width - 80px;
-        height: parent.height - 132px;
+        x: AlarmListLayout.x;
+        y: AlarmListLayout.y;
+        width: AlarmListLayout.width;
+        height: AlarmListLayout.height;
         clip: true;
 
-        // Space between rows.
-        property <length> gap: 12px;
-        // How far a finger moves before the touch counts as a scroll or a
-        // swipe.
-        property <length> slop: 12px;
-        // Row height plus gap.
-        property <length> pitch: 150px + self.gap;
-        // Width of the delete button behind a swiped row.
-        property <length> reveal: 220px;
+        property <length> pitch: AlarmListLayout.pitch;
+        property <length> reveal: AlarmListLayout.reveal;
         // A tap this close to a row's right edge toggles its switch.
         property <length> switch-area: 220px;
         // A swipe past this part of the width deletes without the button.
         property <float> delete-fraction: 0.6;
-        property <length> content: AlarmList.rows.length * self.pitch + self.gap;
-        property <length> max-scroll: Math.max(0px, self.content - self.height);
-        // How far the list is scrolled (0 = top).
-        property <length> scroll: 0;
-        // Momentum, px per 16 ms.
-        property <float> vel;
-        property <bool> flinging;
-        // A fling still running when the finger came down (adds to the next).
-        property <float> carried;
-        property <length> press-scroll;
-        property <duration> last-t;
         property <Gesture> gesture;
         // The row under the finger, -1 for none.
         property <int> touched: -1;
         // The row whose delete button shows, -1 for none.
         property <int> open-row: -1;
-        // The row drawn as active (touched, swiped or open), -1 for none.
+        // The row drawn as active (lit up, swiped, open or animating back),
+        // -1 for none. Set only when there is something to show: changes to
+        // the hidden row then repaint nothing.
         property <int> active: -1;
+        // The finger has rested on the row for `hold-timer`: only then it
+        // lights up (as on iOS), so a touch that turns into a scroll right
+        // away changes nothing on the page.
+        property <bool> held;
         // The active row is still animating (closing, highlight fading)
         // after the finger left; it is drawn until then. Drawing it on top
         // of its row for longer would blend the rounded corners twice.
@@ -216,16 +231,36 @@ export component AlarmListPage inherits Rectangle {
         // Offset of the swiped row while the finger is down.
         property <length> swipe-dx;
         property <bool> swiping: ta.pressed && self.gesture == Gesture.swipe;
+        // The touched row shows touch feedback (highlight, offset).
+        property <bool> pressing: ta.pressed && self.touched == self.active
+            && (self.gesture == Gesture.swipe || (self.gesture == Gesture.undecided && self.held));
+
+        // The layer shows the rows plain while it scrolls: an open row
+        // closes (it would jump when the page takes over again).
+        property <bool> scrolling: AlarmList.scrolling;
+        changed scrolling => {
+            if (self.scrolling) {
+                self.open-row = -1;
+                self.active = -1;
+            }
+        }
 
         pure function row-at(y: length) -> int {
-            let i = Math.floor((y + self.scroll) / self.pitch);
+            let i = Math.floor((y + AlarmList.scroll) / self.pitch);
             if (i < 0 || i >= AlarmList.rows.length
-                    || y + self.scroll - i * self.pitch > self.pitch - self.gap) {
+                    || y + AlarmList.scroll - i * self.pitch > AlarmListLayout.row-height) {
                 return -1;
             }
             return i;
         }
-        // The finger left: keep the active row while it animates.
+        // No feedback left to show: the active row goes away.
+        function release-active() {
+            if (!view.pressing && view.open-row != view.active) {
+                view.active = -1;
+            }
+        }
+        // Keep the active row drawn while it animates back (closing, the
+        // highlight fading).
         function settle() {
             view.settling = true;
             settle-timer.running = true;
@@ -240,54 +275,44 @@ export component AlarmListPage inherits Rectangle {
         }
 
         for alarm[i] in AlarmList.rows: Row {
-            y: i * view.pitch - view.scroll;
+            y: i * view.pitch - AlarmList.scroll;
             width: parent.width;
             alarm: alarm;
             reveal: view.reveal;
         }
 
         Row {
-            visible: view.active >= 0 && view.active < AlarmList.rows.length
-                && (ta.pressed || view.open-row == view.active || view.settling);
-            y: view.active * view.pitch - view.scroll;
+            visible: view.active >= 0 && view.active < AlarmList.rows.length && !AlarmList.scrolling
+                && (view.pressing || view.open-row == view.active || view.settling);
+            y: view.active * view.pitch - AlarmList.scroll;
             width: parent.width;
             alarm: AlarmList.rows[view.active];
             reveal: view.reveal;
             dx: view.swiping ? view.swipe-dx : view.active == view.open-row ? -view.reveal : 0;
             dragging: view.swiping;
-            highlighted: ta.pressed && view.touched == view.active
-                && (view.gesture == Gesture.undecided || view.gesture == Gesture.swipe);
+            highlighted: view.pressing;
         }
 
         ta := TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
-                    view.carried = view.flinging ? view.vel : 0;
-                    view.flinging = false;
-                    view.vel = 0;
                     view.gesture = Gesture.undecided;
-                    view.press-scroll = view.scroll;
-                    view.last-t = animation-tick();
+                    view.held = false;
+                    hold-timer.running = true;
+                    hold-timer.restart();
                     view.touched = view.row-at(self.mouse-y);
                     view.swipe-dx = view.touched == view.open-row && view.open-row >= 0 ? -view.reveal : 0;
                     if (view.open-row >= 0 && view.touched != view.open-row) {
                         // A touch elsewhere only closes the open row.
                         view.open-row = -1;
                         view.gesture = Gesture.ignore;
-                    } else if (view.touched >= 0) {
-                        view.active = view.touched;
+                        view.settle();
                     }
                 } else if (e.kind == PointerEventKind.up) {
                     let i = view.touched;
-                    if (view.gesture == Gesture.scroll) {
-                        if (animation-tick() - view.last-t > 80ms) {
-                            view.vel = 0;
-                        }
-                        if (view.carried * view.vel > 0) {
-                            view.vel += view.carried;
-                        }
-                        view.flinging = Math.abs(view.vel) > 0.5;
-                    } else if (view.gesture == Gesture.swipe && i >= 0) {
+                    // Feedback was shown, or an open row closes: animate it.
+                    let animates = view.pressing || (i >= 0 && i == view.open-row);
+                    if (view.gesture == Gesture.swipe && i >= 0) {
                         if (view.swipe-dx < -self.width * view.delete-fraction) {
                             view.delete(i);
                         } else {
@@ -306,32 +331,47 @@ export component AlarmListPage inherits Rectangle {
                         }
                     }
                     view.gesture = Gesture.undecided;
-                    view.settle();
+                    view.held = false;
+                    if (animates) {
+                        view.settle();
+                    } else {
+                        view.release-active();
+                    }
                 } else if (e.kind == PointerEventKind.cancel) {
+                    let animates = view.pressing;
                     view.gesture = Gesture.undecided;
-                    view.settle();
+                    view.held = false;
+                    if (animates) {
+                        view.settle();
+                    } else {
+                        view.release-active();
+                    }
                 }
             }
             moved => {
                 let dx = self.mouse-x - self.pressed-x;
                 let dy = self.mouse-y - self.pressed-y;
-                if (view.gesture == Gesture.undecided) {
-                    if (Math.abs(dy) > view.slop && Math.abs(dy) >= Math.abs(dx)) {
-                        view.gesture = Gesture.scroll;
-                    } else if (Math.abs(dx) > view.slop && view.touched >= 0) {
-                        view.gesture = Gesture.swipe;
-                    }
+                // Same rule as the list layer, which takes the touch over
+                // when it is mostly vertical.
+                if (view.gesture == Gesture.undecided && view.touched >= 0
+                        && Math.abs(dx) > AlarmListLayout.slop && Math.abs(dx) > Math.abs(dy)) {
+                    view.gesture = Gesture.swipe;
+                    view.active = view.touched;
                 }
-                if (view.gesture == Gesture.scroll) {
-                    let new = Math.clamp(view.press-scroll - dy, 0px, view.max-scroll);
-                    let dt = (animation-tick() - view.last-t) / 16ms;
-                    if (dt > 0) {
-                        view.vel = 0.5 * view.vel + 0.5 * (new - view.scroll) / 1px / dt;
-                        view.last-t = animation-tick();
-                    }
-                    view.scroll = new;
-                } else if (view.gesture == Gesture.swipe) {
+                if (view.gesture == Gesture.swipe) {
                     view.swipe-dx = Math.min(0px, (view.open-row == view.touched ? -view.reveal : 0px) + dx);
+                }
+            }
+        }
+
+        hold-timer := Timer {
+            interval: 100ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                if (ta.pressed && view.gesture == Gesture.undecided && view.touched >= 0) {
+                    view.held = true;
+                    view.active = view.touched;
                 }
             }
         }
@@ -341,24 +381,31 @@ export component AlarmListPage inherits Rectangle {
             interval: 200ms;
             running: false;
             triggered => {
-                view.settling = false;
                 self.running = false;
+                view.settling = false;
+                view.release-active();
             }
         }
+    }
+}
 
-        Timer {
-            interval: 16ms;
-            running: view.flinging;
-            triggered => {
-                let new = Math.clamp(view.scroll + view.vel * 1px, 0px, view.max-scroll);
-                if (new == view.scroll || Math.abs(view.vel) < 0.5) {
-                    view.flinging = false;
-                    view.vel = 0;
-                } else {
-                    view.scroll = new;
-                    view.vel = view.vel * 0.95;
-                }
-            }
-        }
+// One row as the list layer renders it into its ring: on the list's
+// background, with the gap below. Same component as the page's rows, so
+// the pixels match when the page takes over. Not animated: it shows one
+// alarm after the other and is rendered right after each change. Shown by
+// a second `AppWindow` in an offscreen window (page 5): a window component
+// of its own would embed every font a second time (3 MB of flash).
+export component ListRowPage inherits Rectangle {
+    in property <AlarmRow> alarm;
+    width: AlarmListLayout.width;
+    height: AlarmListLayout.pitch;
+    background: Theme.background;
+
+    Row {
+        y: 0;
+        width: parent.width;
+        alarm: root.alarm;
+        reveal: AlarmListLayout.reveal;
+        animated: false;
     }
 }

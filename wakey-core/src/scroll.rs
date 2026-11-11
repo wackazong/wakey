@@ -60,6 +60,20 @@ impl Scroller {
         }
     }
 
+    /// Puts the content at `offset` (clamped to `0..=max_offset`) and stops
+    /// any drag or motion: the list was scrolled elsewhere.
+    pub fn set_offset(&mut self, offset: f32) {
+        self.offset = offset.clamp(0.0, self.max_offset());
+        self.velocity = 0.0;
+        self.drag = None;
+    }
+
+    /// The content got longer or shorter. A position past the new end
+    /// springs back on the next ticks.
+    pub fn set_content(&mut self, content: f32) {
+        self.content = content;
+    }
+
     /// Content position at the top of the view, px (outside
     /// `0..=max_offset` while overscrolled).
     pub fn offset(&self) -> f32 {
@@ -307,6 +321,28 @@ mod tests {
         settle(&mut s, 100 * MS);
         assert_eq!(s.offset(), s.max_offset());
         assert!(!s.is_moving());
+    }
+
+    #[test]
+    fn set_offset_clamps_and_stops() {
+        let mut s = Scroller::new(720.0, 1000.0);
+        s.press(600.0, 0);
+        s.drag_to(300.0, 10 * MS);
+        s.set_offset(500.0);
+        assert_eq!(s.offset(), 280.0);
+        assert!(!s.is_moving() && !s.is_dragging());
+        s.set_offset(-20.0);
+        assert_eq!(s.offset(), 0.0);
+    }
+
+    #[test]
+    fn shorter_content_springs_back_to_the_new_end() {
+        let mut s = Scroller::new(720.0, 2000.0);
+        s.set_offset(1280.0);
+        s.set_content(1500.0);
+        assert!(s.is_moving());
+        settle(&mut s, 0);
+        assert_eq!(s.offset(), 780.0);
     }
 
     #[test]
