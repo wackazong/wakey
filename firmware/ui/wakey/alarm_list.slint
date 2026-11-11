@@ -10,11 +10,29 @@
 // └────────────────────────────────────────────────────┘
 //
 // One touch area handles the whole list, so scrolling and swiping cannot
-// fight over a gesture: the first 12 px of movement decide whether it is a
+// fight over a gesture: the first 12 px of movement (`slop`) decide whether it is a
 // vertical scroll (with momentum; flicks in the same direction add up) or
-// a horizontal swipe of the row under the finger. The rows only draw.
+// a horizontal swipe of the row under the finger.
+//
+// The rows only draw the alarms; none of them depends on the touch state,
+// so a press or a swipe does not repaint the list. One more row, the
+// "active" one, is drawn over the row being touched, swiped or left open,
+// with the same alarm plus highlight and offset, and only it repaints: a
+// frame takes ~19 ms on the device, against ~42 ms for the whole list.
 
 import { Theme, Button, BackButton, Switch } from "theme.slint";
+
+// What the finger on the list is doing.
+enum Gesture {
+    // Down, not moved far enough to tell.
+    undecided,
+    // Scrolling the list.
+    scroll,
+    // Swiping the touched row sideways.
+    swipe,
+    // The touch only closed an open row.
+    ignore,
+}
 
 export struct AlarmRow {
     id: int,
@@ -22,26 +40,18 @@ export struct AlarmRow {
     time: string,
     // Empty: the days take its place.
     name: string,
-    // Monday to Sunday.
-    days: [bool],
+    // Weekdays as bits: Monday = 1, Tuesday = 2, … Sunday = 64. (A plain
+    // value, so Rust can compare rows; an array model compares by
+    // identity.)
+    days: int,
     enabled: bool,
     // Rings next (amber time).
     next: bool,
-    // Touch state, set by the page (Rust leaves it at the defaults). Kept
-    // per row so a press or swipe repaints only that row: a binding on a
-    // page-wide "touched row" property made every row repaint (the whole
-    // list, ~170 ms on the ESP32-P4).
-    // Horizontal offset of the row content (≤ 0).
-    dx: length,
-    // Follows the finger (no animation).
-    dragging: bool,
-    // Touched or being swiped.
-    highlighted: bool,
 }
 
 // Set from Rust (`app/alarm_list.rs`).
 export global AlarmList {
-    in-out property <[AlarmRow]> rows;
+    in property <[AlarmRow]> rows;
     callback back();
     callback add();
     callback open(int);
@@ -51,8 +61,18 @@ export global AlarmList {
 
 component Row inherits Rectangle {
     in property <AlarmRow> alarm;
+    // Width of the delete button behind the row.
     in property <length> reveal;
-    property <length> dx: root.alarm.dx;
+    // Horizontal offset of the row content (≤ 0: swiped left).
+    in property <length> dx;
+    // The content follows the finger (no animation).
+    in property <bool> dragging;
+    // Touched or being swiped.
+    in property <bool> highlighted;
+
+    pure function day-on(i: int) -> bool {
+        return Math.mod(Math.floor(root.alarm.days / Math.pow(2, i)), 2) == 1;
+    }
 
     height: 150px;
     // No `clip` needed: the list area clips the sliding content.
@@ -73,8 +93,8 @@ component Row inherits Rectangle {
         x: root.dx;
         width: parent.width;
         border-radius: 28px;
-        background: root.alarm.highlighted ? Theme.surface : Theme.card;
-        animate x { duration: root.alarm.dragging ? 0ms : 180ms; easing: ease-out; }
+        background: root.highlighted ? Theme.surface : Theme.card;
+        animate x { duration: root.dragging ? 0ms : 180ms; easing: ease-out; }
         animate background { duration: 120ms; }
 
         Text {
@@ -103,8 +123,8 @@ component Row inherits Rectangle {
             height: 44px;
             text: name;
             font-size: 30px;
-            color: root.alarm.days[i] && root.alarm.enabled ? Theme.text
-                : root.alarm.days[i] ? Theme.text-dim : Theme.text-faint;
+            color: root.day-on(i) && root.alarm.enabled ? Theme.text
+                : root.day-on(i) ? Theme.text-dim : Theme.text-faint;
             vertical-alignment: center;
         }
         Switch {
@@ -158,9 +178,20 @@ export component AlarmListPage inherits Rectangle {
         height: parent.height - 132px;
         clip: true;
 
-        property <length> pitch: 162px;
+        // Space between rows.
+        property <length> gap: 12px;
+        // How far a finger moves before the touch counts as a scroll or a
+        // swipe.
+        property <length> slop: 12px;
+        // Row height plus gap.
+        property <length> pitch: 150px + self.gap;
+        // Width of the delete button behind a swiped row.
         property <length> reveal: 220px;
-        property <length> content: AlarmList.rows.length * self.pitch + 12px;
+        // A tap this close to a row's right edge toggles its switch.
+        property <length> switch-area: 220px;
+        // A swipe past this part of the width deletes without the button.
+        property <float> delete-fraction: 0.6;
+        property <length> content: AlarmList.rows.length * self.pitch + self.gap;
         property <length> max-scroll: Math.max(0px, self.content - self.height);
         // How far the list is scrolled (0 = top).
         property <length> scroll: 0;
@@ -171,35 +202,41 @@ export component AlarmListPage inherits Rectangle {
         property <float> carried;
         property <length> press-scroll;
         property <duration> last-t;
-        // 0 undecided, 1 scroll, 2 swipe, 3 ignore (closed an open row).
-        property <int> mode;
+        property <Gesture> gesture;
         // The row under the finger, -1 for none.
         property <int> touched: -1;
         // The row whose delete button shows, -1 for none.
         property <int> open-row: -1;
+        // The row drawn as active (touched, swiped or open), -1 for none.
+        property <int> active: -1;
+        // The active row is still animating (closing, highlight fading)
+        // after the finger left; it is drawn until then. Drawing it on top
+        // of its row for longer would blend the rounded corners twice.
+        property <bool> settling;
+        // Offset of the swiped row while the finger is down.
         property <length> swipe-dx;
+        property <bool> swiping: ta.pressed && self.gesture == Gesture.swipe;
 
         pure function row-at(y: length) -> int {
             let i = Math.floor((y + self.scroll) / self.pitch);
             if (i < 0 || i >= AlarmList.rows.length
-                    || y + self.scroll - i * self.pitch > self.pitch - 12px) {
+                    || y + self.scroll - i * self.pitch > self.pitch - self.gap) {
                 return -1;
             }
             return i;
         }
-        // Per-row touch state (see `AlarmRow`); only rows that change are
-        // written, so only they repaint.
-        function set-highlight(i: int, on: bool) {
-            if (i >= 0 && i < AlarmList.rows.length && AlarmList.rows[i].highlighted != on) {
-                AlarmList.rows[i].highlighted = on;
-            }
+        // The finger left: keep the active row while it animates.
+        function settle() {
+            view.settling = true;
+            settle-timer.running = true;
+            settle-timer.restart();
         }
-        function set-dx(i: int, dx: length, dragging: bool) {
-            if (i >= 0 && i < AlarmList.rows.length
-                    && (AlarmList.rows[i].dx != dx || AlarmList.rows[i].dragging != dragging)) {
-                AlarmList.rows[i].dx = dx;
-                AlarmList.rows[i].dragging = dragging;
-            }
+        // Deletes row `i`. The active row is hidden first: the next alarm
+        // moves into its place and must not slide back from the swipe.
+        function delete(i: int) {
+            view.open-row = -1;
+            view.active = -1;
+            AlarmList.delete(AlarmList.rows[i].id);
         }
 
         for alarm[i] in AlarmList.rows: Row {
@@ -209,29 +246,40 @@ export component AlarmListPage inherits Rectangle {
             reveal: view.reveal;
         }
 
+        Row {
+            visible: view.active >= 0 && view.active < AlarmList.rows.length
+                && (ta.pressed || view.open-row == view.active || view.settling);
+            y: view.active * view.pitch - view.scroll;
+            width: parent.width;
+            alarm: AlarmList.rows[view.active];
+            reveal: view.reveal;
+            dx: view.swiping ? view.swipe-dx : view.active == view.open-row ? -view.reveal : 0;
+            dragging: view.swiping;
+            highlighted: ta.pressed && view.touched == view.active
+                && (view.gesture == Gesture.undecided || view.gesture == Gesture.swipe);
+        }
+
         ta := TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
                     view.carried = view.flinging ? view.vel : 0;
                     view.flinging = false;
                     view.vel = 0;
-                    view.mode = 0;
+                    view.gesture = Gesture.undecided;
                     view.press-scroll = view.scroll;
                     view.last-t = animation-tick();
                     view.touched = view.row-at(self.mouse-y);
                     view.swipe-dx = view.touched == view.open-row && view.open-row >= 0 ? -view.reveal : 0;
                     if (view.open-row >= 0 && view.touched != view.open-row) {
                         // A touch elsewhere only closes the open row.
-                        view.set-dx(view.open-row, 0, false);
                         view.open-row = -1;
-                        view.mode = 3;
-                    } else {
-                        view.set-highlight(view.touched, true);
+                        view.gesture = Gesture.ignore;
+                    } else if (view.touched >= 0) {
+                        view.active = view.touched;
                     }
                 } else if (e.kind == PointerEventKind.up) {
                     let i = view.touched;
-                    view.set-highlight(i, false);
-                    if (view.mode == 1) {
+                    if (view.gesture == Gesture.scroll) {
                         if (animation-tick() - view.last-t > 80ms) {
                             view.vel = 0;
                         }
@@ -239,48 +287,42 @@ export component AlarmListPage inherits Rectangle {
                             view.vel += view.carried;
                         }
                         view.flinging = Math.abs(view.vel) > 0.5;
-                    } else if (view.mode == 2 && i >= 0) {
-                        if (view.swipe-dx < -self.width * 0.6) {
-                            view.open-row = -1;
-                            AlarmList.delete(AlarmList.rows[i].id);
+                    } else if (view.gesture == Gesture.swipe && i >= 0) {
+                        if (view.swipe-dx < -self.width * view.delete-fraction) {
+                            view.delete(i);
                         } else {
                             view.open-row = view.swipe-dx < -view.reveal / 2 ? i : -1;
-                            view.set-dx(i, view.open-row == i ? -view.reveal : 0, false);
                         }
-                    } else if (view.mode == 0 && i >= 0) {
+                    } else if (view.gesture == Gesture.undecided && i >= 0) {
                         if (view.open-row == i) {
                             view.open-row = -1;
-                            view.set-dx(i, 0, false);
                             if (self.mouse-x > self.width - view.reveal) {
-                                AlarmList.delete(AlarmList.rows[i].id);
+                                view.delete(i);
                             }
-                        } else if (self.mouse-x > self.width - 220px) {
+                        } else if (self.mouse-x > self.width - view.switch-area) {
                             AlarmList.toggle(AlarmList.rows[i].id, !AlarmList.rows[i].enabled);
                         } else {
                             AlarmList.open(AlarmList.rows[i].id);
                         }
                     }
-                    view.mode = 0;
+                    view.gesture = Gesture.undecided;
+                    view.settle();
                 } else if (e.kind == PointerEventKind.cancel) {
-                    view.set-highlight(view.touched, false);
-                    if (view.mode == 2) {
-                        view.set-dx(view.touched, view.open-row == view.touched ? -view.reveal : 0, false);
-                    }
-                    view.mode = 0;
+                    view.gesture = Gesture.undecided;
+                    view.settle();
                 }
             }
             moved => {
                 let dx = self.mouse-x - self.pressed-x;
                 let dy = self.mouse-y - self.pressed-y;
-                if (view.mode == 0) {
-                    if (Math.abs(dy) > 12px && Math.abs(dy) >= Math.abs(dx)) {
-                        view.mode = 1;
-                        view.set-highlight(view.touched, false);
-                    } else if (Math.abs(dx) > 12px && view.touched >= 0) {
-                        view.mode = 2;
+                if (view.gesture == Gesture.undecided) {
+                    if (Math.abs(dy) > view.slop && Math.abs(dy) >= Math.abs(dx)) {
+                        view.gesture = Gesture.scroll;
+                    } else if (Math.abs(dx) > view.slop && view.touched >= 0) {
+                        view.gesture = Gesture.swipe;
                     }
                 }
-                if (view.mode == 1) {
+                if (view.gesture == Gesture.scroll) {
                     let new = Math.clamp(view.press-scroll - dy, 0px, view.max-scroll);
                     let dt = (animation-tick() - view.last-t) / 16ms;
                     if (dt > 0) {
@@ -288,10 +330,19 @@ export component AlarmListPage inherits Rectangle {
                         view.last-t = animation-tick();
                     }
                     view.scroll = new;
-                } else if (view.mode == 2) {
+                } else if (view.gesture == Gesture.swipe) {
                     view.swipe-dx = Math.min(0px, (view.open-row == view.touched ? -view.reveal : 0px) + dx);
-                    view.set-dx(view.touched, view.swipe-dx, true);
                 }
+            }
+        }
+
+        // Longer than the row's animations (180 ms offset, 120 ms highlight).
+        settle-timer := Timer {
+            interval: 200ms;
+            running: false;
+            triggered => {
+                view.settling = false;
+                self.running = false;
             }
         }
 

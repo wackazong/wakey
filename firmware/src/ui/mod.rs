@@ -10,13 +10,16 @@
 //!   extension point.
 //! - [`list_layer`]: a scrolling list composed by DMA (a `FrameHook`).
 //! - [`input`]: touch polling → landscape pointer events.
-//! - [`stats`]: frame statistics.
+//! - [`stats`]: frame statistics; `trace`: a per-frame log for performance
+//!   work (feature `ui-bench`).
 
 pub mod input;
 pub mod list_layer;
 pub mod platform;
 pub mod render_loop;
 pub mod stats;
+#[cfg(feature = "ui-bench")]
+pub mod trace;
 
 use crate::display;
 

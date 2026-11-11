@@ -147,6 +147,15 @@ impl AlarmConfig {
         self.weekdays.iter().any(|&d| d != 0)
     }
 
+    /// The weekdays as bits: Monday = 1, Tuesday = 2, … Sunday = 64.
+    pub fn weekday_bits(&self) -> u8 {
+        self.weekdays
+            .iter()
+            .enumerate()
+            .filter(|&(_, &d)| d != 0)
+            .fold(0, |bits, (i, _)| bits | 1 << i)
+    }
+
     fn second_of_day(&self) -> u32 {
         u32::from(self.hour) * 3600 + u32::from(self.minute) * 60
     }
@@ -663,6 +672,7 @@ mod tests {
         run(&mut a, &c, ALARM - 1, ALARM + 1);
         assert!(!a.is_ringing());
         assert!(!c[0].rings_on(1) && c[0].rings_on(0) && c[0].rings_on(2));
+        assert_eq!(c[0].weekday_bits(), 0b111_1110);
     }
 
     #[test]

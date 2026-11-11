@@ -18,12 +18,9 @@ pub fn refresh(window: &AppWindow, alarm: &AlarmClock) {
             id: a.id as i32,
             time: format!("{:02}:{:02}", a.hour, a.minute).into(),
             name: a.name.as_str().into(),
-            days: ModelRc::new(VecModel::from(a.weekdays.map(|d| d != 0).to_vec())),
+            days: a.weekday_bits().into(),
             enabled: a.enabled,
             next: next == Some(a.id),
-            dx: 0.0,
-            dragging: false,
-            highlighted: false,
         })
         .collect();
     // Same alarms in the same order (on/off toggled, the next one moved):
@@ -36,24 +33,13 @@ pub fn refresh(window: &AppWindow, alarm: &AlarmClock) {
         && model.iter().zip(&rows).all(|(a, b)| a.id == b.id)
     {
         for (i, row) in rows.into_iter().enumerate() {
-            if model.row_data(i).is_none_or(|old| !same(&old, &row)) {
+            if model.row_data(i).as_ref() != Some(&row) {
                 model.set_row_data(i, row);
             }
         }
         return;
     }
     list.set_rows(ModelRc::new(VecModel::from(rows)));
-}
-
-/// Equal rows; `days` by content (`ModelRc`s compare by identity, and every
-/// refresh builds new ones).
-fn same(a: &AlarmRow, b: &AlarmRow) -> bool {
-    let days = |r: &AlarmRow| r.days.iter().collect::<Vec<bool>>();
-    AlarmRow {
-        days: b.days.clone(),
-        ..a.clone()
-    } == *b
-        && days(a) == days(b)
 }
 
 /// Connects the page's callbacks.

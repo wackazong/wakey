@@ -3,7 +3,12 @@
 //! software renderer, same RGB565 pixels as on the Tab5, so layout, fonts
 //! and missing glyphs show up here first.
 //!
-//! `cargo run --release -- <output dir> [scene name filter]`
+//! `cargo run --release -- [--by-line] [output dir] [scene name filter]`
+//!
+//! The output dir defaults to `target/ui-preview`. `--by-line` renders line
+//! by line through a `LineBufferProvider`, as the firmware does, instead of
+//! into one buffer (same pixels; the timing then follows the device's
+//! code path).
 
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel};
 use slint::platform::{PointerEventButton, WindowAdapter, WindowEvent};
@@ -30,6 +35,7 @@ struct Preview {
     ui: AppWindow,
     out: PathBuf,
     filter: Option<String>,
+    by_line: bool,
 }
 
 impl Preview {
@@ -77,7 +83,7 @@ impl Preview {
         self.window.request_redraw();
         let t = std::time::Instant::now();
         self.window.draw_if_needed(|r| {
-            if std::env::var_os("LINES").is_some() {
+            if self.by_line {
                 r.render_by_line(Lines(&mut buf));
             } else {
                 r.render(&mut buf, W);
@@ -90,7 +96,7 @@ impl Preview {
     }
 }
 
-/// Line-by-line rendering, as on the device (`LINES=1`).
+/// Line-by-line rendering into a full-screen buffer, as on the device.
 struct Lines<'a>(&'a mut [Rgb565Pixel]);
 
 impl slint::platform::software_renderer::LineBufferProvider for Lines<'_> {
@@ -135,12 +141,14 @@ fn row(id: i32, time: &str, name: &str, d: [u8; 7], enabled: bool, next: bool) -
         id,
         time: time.into(),
         name: name.into(),
-        days: days(d),
+        // Bit i for weekday i, as `AlarmConfig::weekday_bits`.
+        days: d
+            .iter()
+            .enumerate()
+            .filter(|&(_, &x)| x != 0)
+            .fold(0, |bits, (i, _)| bits | 1 << i),
         enabled,
         next,
-        dx: 0.0,
-        dragging: false,
-        highlighted: false,
     }
 }
 
@@ -154,8 +162,11 @@ fn sound(title: &str, sub: &str, selected: bool, kind: i32) -> SoundRow {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let out = PathBuf::from(args.next().unwrap_or_else(|| "ui-preview".into()));
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let by_line = args.iter().any(|a| a == "--by-line");
+    args.retain(|a| a != "--by-line");
+    let mut args = args.into_iter();
+    let out = PathBuf::from(args.next().unwrap_or_else(|| "target/ui-preview".into()));
     let filter = args.next();
     std::fs::create_dir_all(&out).expect("output dir");
 
@@ -169,6 +180,7 @@ fn main() {
         ui,
         out,
         filter,
+        by_line,
     };
     let ui = &p.ui;
 

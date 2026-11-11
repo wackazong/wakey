@@ -106,7 +106,7 @@ flowchart LR
 
 Measured (ST7123, 360 MHz): clock screen tick 110 panel rows, ~1 ms; `ui_bench` scrolling a 300-row list next to Slint content **66 fps** at ~0.8–7 ms CPU per frame.
 
-**UI structure:** `ui/wakey.slint` is one `AppWindow` showing one page at a time (`page`: 0 clock, 1 alarm list, 2 alarm, 3 sound, 4 name); pages live in `ui/wakey/`, with shared colours, icons (`Path`) and controls (buttons, chips, switch, slider, pills) in `theme.slint` and the time wheel in `wheel.slint`. Pages and Rust talk through globals (`Clock`, `AlarmList`, `AlarmEditor`, `SoundPicker`, `NameEditor`); each page has its view model in `src/app/`, and the settings pages share an `app::Ctx` (the alarms, the draft being edited, the click). Switching pages repaints the screen once (~45 ms; the keyboard ~160 ms, it has ~30 items per line); an edit repaints only what changed (5–12 ms). `tools/ui-preview` renders every page on the host with sample data (same Slint, same renderer, RGB565) to check layouts without the device.
+**UI structure:** `ui/wakey.slint` is one `AppWindow` showing one page at a time (`page`: 0 clock, 1 alarm list, 2 alarm, 3 sound, 4 name); pages live in `ui/wakey/`, with shared colours, icons (`Path`) and controls (buttons, chips, switch, slider, pills) in `theme.slint` and the time wheel in `wheel.slint`. Pages and Rust talk through globals (`Clock`, `AlarmList`, `AlarmEditor`, `SoundPicker`, `NameEditor`); each page has its view model in `src/app/`, and the settings pages share an `app::Ctx` (the alarms, the draft being edited, the click). Switching pages repaints the screen once (40–60 ms; more on the keyboard page, it has ~30 items per line); an edit repaints only what changed (5–20 ms). The alarm list draws its rows from data only and one extra "active" row over the touched one, so touches repaint one row (~19 ms); scrolling repaints the list (~42 ms per frame, bound by the PPA's rotation rate). `tools/ui-preview` renders every page on the host with sample data (same Slint, same renderer, RGB565) to check layouts without the device.
 
 **Slint and flash size:** Slint pre-renders every imported font face at every pixel size a `.slint` file uses (ASCII plus the characters of string literals). The clock screen therefore imports one face (Inter Medium), and `build.rs` compiles one `.slint` file per program; each program `include!`s its own generated module. Characters that only come from Rust strings (umlauts in dates and names) must appear in a literal in the `.slint` file (hidden `Text`s in `wakey.slint`). `default-font-family` must be the font's exact family name, "Inter 24pt Medium": with any other name the compiler embeds the system's sans-serif as well and the UI draws with it (see pitfalls). Sizes in use: 30 px secondary text, 40 px primary text and buttons, 64 px numbers, 280 px the clock face; the firmware image is 5.7 MB (45 % of the app partition).
 
@@ -162,9 +162,9 @@ The C6 behaves as the normal `esp_wifi` driver through `esp_wifi_remote`, so `Es
 | List ring (`ui_bench`) | – | 7.5 MB |
 | Player ring | – | 192 KiB |
 | esp_hosted pools, task stacks | – | yes |
-| Free while running `wakey` | ~160 KiB | ~17 MB |
+| Free while running `wakey` | ~110 KiB (~70 KiB of it DMA-capable) | ~23 MB |
 
-`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384`: allocations up to 16 KiB stay internal, larger ones go to PSRAM. Lints `large_stack_frames` and `mem_forget` are denied.
+`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0`: `malloc` takes PSRAM first; internal RAM is left to what asks for it (DMA buffers, FreeRTOS objects, stacks). Small allocations kept internal (the default) let Slint fill internal RAM, after which drivers and `std` failed (see pitfalls). Cached PSRAM loads take as long as internal ones. The per-second stats line shows free internal and DMA memory. Lints `large_stack_frames` and `mem_forget` are denied.
 
 ## Build
 

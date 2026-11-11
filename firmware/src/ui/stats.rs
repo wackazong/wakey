@@ -49,22 +49,14 @@ impl FrameStats {
         let ppa_wait_ms =
             crate::display::ppa::WAIT_US.swap(0, Ordering::Relaxed) as f32 / 1000.0 / n as f32;
         log::info!(
-            "{}: {:.1} fps (panel {:.1} Hz), render avg {:.2} ms max {:.2} ms (PPA wait {ppa_wait_ms:.2}), {} rows/frame, heap free {} KiB (internal {} KiB, DMA {} KiB, largest DMA block {} B)",
+            "{}: {:.1} fps (panel {:.1} Hz), render avg {:.2} ms max {:.2} ms (PPA wait {ppa_wait_ms:.2}), {} rows/frame, {}",
             self.name,
             self.frames as f32 / secs,
             scanned as f32 / secs,
             self.render_total.as_micros() as f32 / n as f32 / 1000.0,
             self.render_max.as_micros() as f32 / 1000.0,
             self.rows_total / u64::from(n),
-            unsafe { esp_idf_svc::sys::esp_get_free_heap_size() } / 1024,
-            unsafe {
-                esp_idf_svc::sys::heap_caps_get_free_size(esp_idf_svc::sys::MALLOC_CAP_INTERNAL)
-            } / 1024,
-            unsafe { esp_idf_svc::sys::heap_caps_get_free_size(esp_idf_svc::sys::MALLOC_CAP_DMA) }
-                / 1024,
-            unsafe {
-                esp_idf_svc::sys::heap_caps_get_largest_free_block(esp_idf_svc::sys::MALLOC_CAP_DMA)
-            },
+            FreeHeap::now(),
         );
         LAST_FPS_X10.store((self.frames as f32 / secs * 10.0) as u32, Ordering::Relaxed);
         LAST_RENDER_US.store(
@@ -85,4 +77,43 @@ pub fn last() -> (f32, f32) {
         LAST_FPS_X10.load(Ordering::Relaxed) as f32 / 10.0,
         LAST_RENDER_US.load(Ordering::Relaxed) as f32 / 1000.0,
     )
+}
+
+/// Free heap memory. DMA-capable memory is internal RAM on the ESP32-P4;
+/// when it runs out, drivers fail (see `sdkconfig.defaults`,
+/// `SPIRAM_MALLOC_ALWAYSINTERNAL`).
+struct FreeHeap {
+    total: usize,
+    internal: usize,
+    dma: usize,
+    /// Largest DMA-capable block (fragmentation).
+    dma_block: usize,
+}
+
+impl FreeHeap {
+    fn now() -> Self {
+        use esp_idf_svc::sys::{self, MALLOC_CAP_DMA, MALLOC_CAP_INTERNAL};
+        // SAFETY: plain queries of the heap allocator.
+        unsafe {
+            Self {
+                total: sys::esp_get_free_heap_size() as usize,
+                internal: sys::heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                dma: sys::heap_caps_get_free_size(MALLOC_CAP_DMA),
+                dma_block: sys::heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+            }
+        }
+    }
+}
+
+impl core::fmt::Display for FreeHeap {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "heap free {} KiB (internal {} KiB, DMA {} KiB, largest DMA block {} B)",
+            self.total / 1024,
+            self.internal / 1024,
+            self.dma / 1024,
+            self.dma_block
+        )
+    }
 }

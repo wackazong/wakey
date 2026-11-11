@@ -15,12 +15,13 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_USE_MALLOC=y
-# malloc() takes PSRAM first. With small allocations kept internal (the
-# default, 16 KiB), Slint's items and strings filled internal RAM as soon as
-# the alarm list opened, and the SD card driver found no DMA memory for a
-# sector ("allocate_dma_buf: not enough mem"): saving failed. Cached PSRAM
-# reads and writes as fast as internal RAM here; drivers that need internal
-# or DMA memory ask for it explicitly.
+# malloc() takes PSRAM first; internal RAM is left to what asks for it
+# (DMA buffers, FreeRTOS objects, stacks). With the default (up to 16 KiB
+# internal first), Slint's small allocations filled internal RAM when the
+# alarm list opened: the SD card driver found no DMA buffer (saving failed),
+# std could not create a mutex (abort), and frames ran ~4x slower. A larger
+# CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL did not help: malloc used it up too.
+# Loads from cached PSRAM take as long as from internal RAM (6 cycles).
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
 CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 # Bigger L2 cache and lines help the PSRAM-bound frame buffer traffic.

@@ -53,6 +53,11 @@ heapless = "0.9"
 embuild = "0.33.7"
 slint-build = "1.18.1"
 
+[features]
+# Scripted touch gestures after boot and a per-frame trace in the log
+# (`app::bench`, `ui::trace`); see README.md, "Measure the UI on the device".
+ui-bench = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"
