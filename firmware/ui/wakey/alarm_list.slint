@@ -125,7 +125,8 @@ component Row inherits Rectangle {
         border-radius: 28px;
         background: root.highlighted ? Theme.surface : Theme.card;
         animate x { duration: root.dragging || !root.animated ? 0ms : 180ms; easing: ease-out; }
-        animate background { duration: root.animated ? 120ms : 0ms; }
+        // Lights up at once, fades out.
+        animate background { duration: root.animated && !root.highlighted ? 120ms : 0ms; }
 
         Text {
             x: 40px;
@@ -224,9 +225,9 @@ export component AlarmListPage inherits Rectangle {
         // -1 for none. Set only when there is something to show: changes to
         // the hidden row then repaint nothing.
         property <int> active: -1;
-        // The finger has rested on the row for `hold-timer`: only then it
-        // lights up (as on iOS), so a touch that turns into a scroll right
-        // away changes nothing on the page. Not on the switch (or the delete
+        // The finger has rested on the row for `hold-timer` (40 ms): only
+        // then it lights up, so a touch that turns into a scroll right away
+        // changes nothing on the page. Not on the switch (or the delete
         // button of an open row): a toggle does not light the row up.
         property <bool> held;
         // The active row is still animating (closing, highlight fading)
@@ -376,8 +377,9 @@ export component AlarmListPage inherits Rectangle {
             }
         }
 
+        // Short enough to feel immediate; a flick passes `slop` sooner.
         hold-timer := Timer {
-            interval: 100ms;
+            interval: 40ms;
             running: false;
             triggered => {
                 self.running = false;

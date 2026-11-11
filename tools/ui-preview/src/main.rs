@@ -339,7 +339,7 @@ fn main() {
     p.shot("1-list-first-press");
     p.window.dispatch_event(WindowEvent::PointerExited);
     p.run(300);
-    // Hold a row: it lights up after 100 ms. Then the touch is taken over
+    // Hold a row: it lights up after 40 ms. Then the touch is taken over
     // (a scroll): the page gets a cancel and the highlight fades.
     p.press(600.0, 207.0);
     p.run(160);
