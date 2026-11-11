@@ -57,6 +57,9 @@ slint-build = "1.18.1"
 # Scripted touch gestures after boot and a per-frame trace in the log
 # (`app::bench`, `ui::trace`); see README.md, "Measure the UI on the device".
 ui-bench = []
+# The clock's sky runs through today in one minute, over and over; the
+# bottom line shows that time and the sun's elevation (`app::clock_screen`).
+sky-demo = []
 
 [profile.release]
 opt-level = 3

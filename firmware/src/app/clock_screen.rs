@@ -15,6 +15,7 @@ use crate::net::{Status, Wifi};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 use wakey_core::alarm::Input;
 use wakey_core::datetime::{DateTime, WEEKDAYS_DE};
 use wakey_core::sky;
@@ -23,6 +24,8 @@ use wakey_core::sky;
 pub struct Ticker {
     _align: Timer,
     _every_second: Rc<Timer>,
+    /// `sky-demo` builds: runs the sky through the day.
+    _sky_demo: Option<Timer>,
 }
 
 /// Fills the screen now and then every second, and connects the ringing
@@ -78,7 +81,57 @@ pub fn start(
     Ticker {
         _align: align,
         _every_second: every_second,
+        _sky_demo: cfg!(feature = "sky-demo").then(|| sky_demo(window)),
     }
+}
+
+/// One real minute for the whole of today, the sun as over Zurich: the sky
+/// steps every 200 ms (~5 minutes of the day), the bottom line shows that
+/// time and the sun's elevation.
+fn sky_demo(window: &AppWindow) -> Timer {
+    const DAY_IN: Duration = Duration::from_secs(60);
+    const STEP: Duration = Duration::from_millis(200);
+    let weak = window.as_weak();
+    let start = Instant::now();
+    let timer = Timer::default();
+    timer.start(TimerMode::Repeated, STEP, move || {
+        let Some(window) = weak.upgrade() else { return };
+        let now = clock::moment();
+        let t = now.local;
+        let midnight =
+            now.unix - i64::from(t.hour) * 3600 - i64::from(t.minute) * 60 - i64::from(t.second);
+        let day_part =
+            (start.elapsed().as_millis() % DAY_IN.as_millis()) as f64 / DAY_IN.as_millis() as f64;
+        let of_day = (day_part * 86_400.0) as i64;
+        let elevation = set_sky(&window, midnight + of_day);
+        window.global::<Clock>().set_alarm(
+            format!(
+                "{:02}:{:02} · Sonne {elevation:.0}°",
+                of_day / 3600,
+                of_day / 60 % 60
+            )
+            .into(),
+        );
+    });
+    timer
+}
+
+/// Sets the sky for Unix time `unix`; returns the sun's elevation.
+fn set_sky(window: &AppWindow, unix: i64) -> f32 {
+    let screen = window.global::<Clock>();
+    let elevation = sky::sun_elevation(unix, sky::LATITUDE, sky::LONGITUDE);
+    let [top, middle, bottom] =
+        sky::gradient(elevation).map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
+    if screen.get_sky_top() != top {
+        screen.set_sky_top(top);
+    }
+    if screen.get_sky_middle() != middle {
+        screen.set_sky_middle(middle);
+    }
+    if screen.get_sky_bottom() != bottom {
+        screen.set_sky_bottom(bottom);
+    }
+    elevation
 }
 
 /// The time's characters, one model entry each: a changed entry is a
@@ -125,29 +178,21 @@ fn update(window: &AppWindow, face: &Face, speaker: &UsbAudio, wifi: &Wifi, alar
     }
     let now = clock::moment();
     let t = now.local;
-    // The sky changes at most once a minute (a whole-screen repaint, ~50
+    // The sky changes at most once a minute (a whole-screen repaint, ~66
     // ms per frame buffer): it is computed for the minute, not the second.
-    let minute = now.unix - now.unix.rem_euclid(60);
-    let elevation = sky::sun_elevation(minute, sky::LATITUDE, sky::LONGITUDE);
-    let [top, middle, bottom] =
-        sky::gradient(elevation).map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
-    if screen.get_sky_top() != top {
-        screen.set_sky_top(top);
-    }
-    if screen.get_sky_middle() != middle {
-        screen.set_sky_middle(middle);
-    }
-    if screen.get_sky_bottom() != bottom {
-        screen.set_sky_bottom(bottom);
+    if !cfg!(feature = "sky-demo") {
+        set_sky(window, now.unix - now.unix.rem_euclid(60));
     }
     set_chars(&face.time, &format!("{:02}:{:02}", t.hour, t.minute));
     set_chars(&face.seconds, &format!("{:02}", t.second));
     set_text(screen.get_date(), t.date_de(), |v| screen.set_date(v));
 
     let view = alarm.view();
-    set_text(screen.get_alarm(), alarm_line(&view, &t), |v| {
-        screen.set_alarm(v)
-    });
+    if !cfg!(feature = "sky-demo") {
+        set_text(screen.get_alarm(), alarm_line(&view, &t), |v| {
+            screen.set_alarm(v)
+        });
+    }
     if matches!(view, View::Ringing { .. }) && window.get_page() != PAGE_CLOCK {
         show_page(window, PAGE_CLOCK);
     }
