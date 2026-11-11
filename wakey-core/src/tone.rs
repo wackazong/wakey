@@ -85,15 +85,16 @@ pub fn faded(gain: f32, frames: u64, fade_frames: u64) -> f32 {
 }
 
 /// The wheel click: a short "tock" in the mids, mono, peaking at
-/// `amplitude` (0–1 of full scale). A 1.2 kHz tone with a soft 0.5 ms
-/// attack (no pop from a sudden start) dying away over ~15 ms: long enough
-/// that a single click carries energy (a 1 ms tick was barely audible on
-/// its own), short enough to stay a click.
+/// `amplitude` (0–1 of full scale). A 1.8 kHz tone (mids, where the small
+/// speaker is efficient) with a soft 0.5 ms attack (no pop from a sudden
+/// start) dying away over ~20 ms: long enough that a single click carries
+/// energy (a 1 ms tick was barely audible on its own), short enough to stay
+/// a click.
 pub fn click(sample_rate: u32, amplitude: f32) -> Vec<i16> {
-    const FREQ: f32 = 1200.0;
+    const FREQ: f32 = 1800.0;
     const ATTACK_S: f32 = 0.0005;
-    const DECAY_S: f32 = 0.003;
-    const LEN_S: f32 = 0.015;
+    const DECAY_S: f32 = 0.005;
+    const LEN_S: f32 = 0.02;
     let rate = sample_rate as f32;
     let n = (rate * LEN_S) as usize;
     (0..n)
@@ -112,13 +113,14 @@ pub fn click(sample_rate: u32, amplitude: f32) -> Vec<i16> {
 }
 
 /// Loudness of a click that follows the previous one after `gap_ms`
-/// (`None`: the first): full from 120 ms apart, down to 0.35 at 25 ms or
+/// (`None`: the first): full from 150 ms apart, down to 0.12 at 25 ms or
 /// less. Clicks in quick succession add up in the ear; without this a
-/// fast-turning wheel was much louder than a slow one.
+/// fast-turning wheel was much louder than a slow one (0.35 was still
+/// about twice too loud).
 pub fn click_gain(gap_ms: Option<u32>) -> f32 {
-    const FULL_MS: f32 = 120.0;
+    const FULL_MS: f32 = 150.0;
     const FAST_MS: f32 = 25.0;
-    const FAST_GAIN: f32 = 0.35;
+    const FAST_GAIN: f32 = 0.12;
     let Some(gap) = gap_ms else { return 1.0 };
     let x = ((gap as f32 - FAST_MS) / (FULL_MS - FAST_MS)).clamp(0.0, 1.0);
     FAST_GAIN + (1.0 - FAST_GAIN) * x
@@ -182,7 +184,7 @@ mod tests {
     #[test]
     fn click_is_a_soft_short_tock() {
         let c = click(48_000, 0.5);
-        assert_eq!(c.len(), 720);
+        assert_eq!(c.len(), 960);
         let peak = c.iter().map(|s| s.unsigned_abs()).max().unwrap();
         assert!(peak > 12_000 && peak <= 16_384, "peak {peak}");
         // Soft start: the first samples are small.
@@ -192,7 +194,7 @@ mod tests {
             &c[..6]
         );
         // Dies away by the end.
-        let tail = c[650..].iter().map(|s| s.unsigned_abs()).max().unwrap();
+        let tail = c[900..].iter().map(|s| s.unsigned_abs()).max().unwrap();
         assert!(tail < 500, "tail {tail}");
     }
 
@@ -200,9 +202,9 @@ mod tests {
     fn fast_clicks_are_quieter() {
         assert_eq!(click_gain(None), 1.0);
         assert_eq!(click_gain(Some(500)), 1.0);
-        assert_eq!(click_gain(Some(120)), 1.0);
-        assert!((click_gain(Some(10)) - 0.35).abs() < 1e-6);
+        assert_eq!(click_gain(Some(150)), 1.0);
+        assert!((click_gain(Some(10)) - 0.12).abs() < 1e-6);
         let mid = click_gain(Some(70));
-        assert!(mid > 0.35 && mid < 1.0);
+        assert!(mid > 0.12 && mid < 1.0);
     }
 }

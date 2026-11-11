@@ -21,8 +21,9 @@ use std::time::{Duration, Instant};
 use wakey_core::tone;
 
 const SAMPLE_RATE: u32 = 48_000;
-/// Peak loudness of a single click, 0–1 of full scale.
-const AMPLITUDE: f32 = 0.6;
+/// Peak loudness of a single click, 0–1 of full scale (0.6 was barely
+/// audible when turning slowly; the codec's output is at its maximum).
+const AMPLITUDE: f32 = 1.0;
 /// The amplifier goes off after this long without a click.
 const AMP_OFF_AFTER: Duration = Duration::from_secs(3);
 /// DMA: 3 × 5 ms; a click starts within ~15 ms.
