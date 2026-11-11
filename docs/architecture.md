@@ -64,11 +64,16 @@ Each layer uses only the ones below it. Rules that keep it that way:
 | `speaker` | 4 KiB | any / 5 | built-in speaker mixer (I2S): player sound, clicks, keep-alive; amplifier on/off |
 | `ui-watch` | 4 KiB | any / 5 | logs where the render loop is when it has not gone round for 2 s |
 | `wifi` | 16 KiB | any / 5 | Wi-Fi connect/reconnect, SNTP |
+| `ambient` | 6 KiB | any / 5 | camera light meter every 10 s; owns and fades the backlight |
 | esp_hosted tasks | PSRAM | – | SDIO transport to the C6 |
 
 The executor runs on its own task, not on `main`: esp_hosted allocates internal RAM in a C constructor before ESP-IDF creates the main task, and a 64 KiB main stack no longer fits then. The display ISRs are installed from the `app` task, so they run on core 0 with the render loop.
 
-Interrupts end in atomics or `HalIsrNotification`s: DPI frame done (wakes the render loop), PPA done, 2D-DMA done (counters polled by their users).
+Interrupts end in atomics or `HalIsrNotification`s: DPI frame done (wakes the render loop), PPA done, 2D-DMA done (counters polled by their users), camera frame done (a flag the light meter polls).
+
+## Backlight from the room's light
+
+The Tab5 has no light sensor, so the camera is the light meter ([`ambient.rs`](../firmware/src/ambient.rs), sensor in [`board/camera.rs`](../firmware/src/board/camera.rs)). The sensor is a SmartSens SC202CS (sold as SC2356) at I2C 0x36, set up from Espressif's `esp_cam_sensor` register table (1280×720 RAW8, one MIPI lane at 576 Mbit/s; the 24 MHz clock comes from an oscillator on the board). ESP-IDF's own drivers carry the frames: the MIPI-CSI receiver (`esp_driver_cam`, sharing the display's PHY supply, LDO 3 at 2.5 V) through the ISP (RAW8 → RGB565) into a 1.8 MB buffer in PSRAM; the driver keeps a second, internal buffer for frames nobody asked for. Every 10 s the `ambient` thread wakes the sensor, skips two frames, then steps exposure (8–1244 lines of 26.7 µs) and analog gain (1–16×) until the average of every 8th pixel of every 8th line is between 25 and 200 (~220 ms in all), and puts the sensor back to sleep. Light = average × 1244 / (lines × gain). The backlight follows on a log scale, 3 % at light ≤ 1 to 100 % at ≥ 300, faded over a second (`Backlight::set_level`, full PWM resolution). No frame is kept: the buffer is overwritten by the next measurement. Without a working camera the backlight stays full.
 
 Shared state: the system I2C bus is `Arc<Mutex<SysI2c>>` (`SharedI2c`), locked per transaction by the expanders, RTC and touch polling. Handles that cross threads (`UsbAudio`, `Wifi`, `IoExpanders`, `Rx8130`) are cheap clones over `Arc`s; commands go through `mpsc` channels, status through `Mutex`/atomics.
 
@@ -82,7 +87,7 @@ Shared state: the system I2C bus is `Arc<Mutex<SysI2c>>` (`SharedI2c`), locked p
 6. `UsbAudio::start`: USB host, `uac` thread (VBUS, port power, device), with another source from the player.
 7. `AlarmClock::new`: alarm state from NVS; it gets an `Output` over both speakers.
 8. Slint platform, the pages' view models, clock screen, once-a-second tick (alarms, then view model).
-9. Backlight on; the render loop runs forever.
+9. `ambient::start` takes the backlight (full, then the room's light); the render loop runs forever.
 
 ## Display pipeline
 

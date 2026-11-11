@@ -45,6 +45,7 @@ LP-GPIOs 0–15 are all taken (bus/header, SDIO to the C6, C6 reset/IO2).
 | RX8130CE RTC | 0x32 | UTC time; alarm registers (not armed yet) |
 | ST7123 touch | 0x55 | polled every 10 ms (16-bit registers) |
 | INA226 | 0x41 | battery voltage/current (5 mΩ shunt); unused |
+| SC202CS camera (SC2356) | 0x36 | chip ID 0xEB52 at 0x3107; MIPI-CSI one lane, 24 MHz from oscillator X2; used as light meter |
 | ES8388 | 0x10 | built-in speaker codec (DAC only, values from M5Unified) |
 | ES7210, BMI270 | – | unused |
 
