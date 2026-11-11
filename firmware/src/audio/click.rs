@@ -2,7 +2,8 @@
 //! amplifier; see [`crate::board::codec`]).
 //!
 //! The I2S stream runs all the time and plays silence by itself
-//! (`auto_clear`); a thread writes a click when asked. The amplifier is
+//! (`auto_clear`); a thread writes a click when asked, quieter the closer
+//! it follows the previous one ([`tone::click_gain`]). The amplifier is
 //! switched on with the first click and off after a few seconds without
 //! one, so the speaker does not hiss and draw current while unused.
 
@@ -16,23 +17,21 @@ use esp_idf_svc::hal::i2s::config::{
 };
 use esp_idf_svc::hal::i2s::{I2sDriver, I2sTx};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wakey_core::tone;
 
 const SAMPLE_RATE: u32 = 48_000;
-/// Click loudness, 0–1 of full scale (0.8 was a bit loud; at 0.4, with
-/// 128-frame DMA buffers, the click was gone).
+/// Peak loudness of a single click, 0–1 of full scale.
 const AMPLITUDE: f32 = 0.6;
 /// The amplifier goes off after this long without a click.
 const AMP_OFF_AFTER: Duration = Duration::from_secs(3);
-/// DMA: 3 × 5 ms; a click starts within ~15 ms. (240 frames is what was
-/// heard to work; 120 frames, which the driver rounds to 128, was not.)
+/// DMA: 3 × 5 ms; a click starts within ~15 ms.
 const DMA_BUFFERS: u32 = 3;
 const DMA_FRAMES: u32 = 240;
 
 #[derive(Default)]
 pub struct Clicker {
-    tx: Option<SyncSender<()>>,
+    tx: Option<SyncSender<Instant>>,
 }
 
 impl Clicker {
@@ -70,14 +69,13 @@ impl Clicker {
         codec::init(&bus)?;
         log::info!("click: built-in speaker ready");
 
-        let (tx, rx) = mpsc::sync_channel::<()>(4);
-        let samples: Vec<u8> = tone::click(SAMPLE_RATE, AMPLITUDE)
-            .iter()
-            .flat_map(|&s| {
-                let b = s.to_le_bytes();
-                [b[0], b[1], b[0], b[1]]
-            })
-            .collect();
+        // Ticks carry their time: the gap between ticks sets the loudness,
+        // not when the thread gets to play them.
+        let (tx, rx) = mpsc::sync_channel::<Instant>(4);
+        let click = tone::click(SAMPLE_RATE, AMPLITUDE);
+        // Interleaved stereo bytes of the click at the current gain.
+        let mut samples = vec![0u8; click.len() * 4];
+        let mut last: Option<Instant> = None;
         std::thread::Builder::new()
             .name("click".into())
             .stack_size(4096)
@@ -91,13 +89,21 @@ impl Clicker {
                         rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
                     };
                     match next {
-                        Ok(()) => {
+                        Ok(at) => {
                             if !amp_on {
                                 amp_on = ioexp.set(Pin::SpkEn, true).is_ok();
                                 log::info!("click: amplifier on");
                                 // Let the amplifier start; the first click
                                 // would be cut off.
                                 std::thread::sleep(Duration::from_millis(30));
+                            }
+                            let gap =
+                                last.map(|l| at.saturating_duration_since(l).as_millis() as u32);
+                            last = Some(at);
+                            let gain = tone::click_gain(gap);
+                            for (s, out) in click.iter().zip(samples.as_chunks_mut::<4>().0) {
+                                let b = ((f32::from(*s) * gain) as i16).to_le_bytes();
+                                *out = [b[0], b[1], b[0], b[1]];
                             }
                             if let Err(e) = i2s.write_all(&samples, timeout) {
                                 log::warn!("click: {e}");
@@ -120,7 +126,7 @@ impl Clicker {
     /// One tick; returns at once (dropped if clicks pile up).
     pub fn click(&self) {
         if let Some(tx) = &self.tx {
-            let _ = tx.try_send(());
+            let _ = tx.try_send(Instant::now());
         }
     }
 }

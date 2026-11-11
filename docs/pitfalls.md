@@ -48,6 +48,11 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 - **Touch lagged, then stopped, while touched quickly:** reads of the ST7123 timed out (`ESP_ERR_TIMEOUT`, then NACKs) and the app looked hung. The legacy I2C driver sets the hardware's clock-stretch timeout to 2^10 clock cycles (~26 µs); the touch controller stretches SCL longer while it processes a touch. `SysI2c::new` sets ~13 ms. As a safety net, the touch task releases a held press when reads fail and pulses `TP_RST` after 5 failed reads within a second.
 - **Drags broke off** because the touch controller skips readings or times out mid-drag: a release needs 3 empty polls.
 
+## Built-in speaker
+
+- **Silent until a power cycle:** the wheel clicks stopped; every tick reached the I2S driver, the codec registers read back as written, `SPK_EN` was high, and even the last firmware that had clicked was silent. Unplugging USB-C (no battery) brought the sound back. Flashing only resets the P4; the ES8388 and the NS4150B stay powered (`SOC_3.3V`, `SYS_INT5V`) and can stay stuck. Power-cycle before debugging silence.
+- **A 1 ms tick was barely audible alone, loud in a fast train:** the ear integrates energy over ~0.1–0.2 s. The click is now ~15 ms in the mids, and quieter when it follows closely on the previous one.
+
 ## USB audio
 
 - **"Root port reset failed" forever:** the HS controller must be full/low-speed only (`HCFG.FSLSSupp`, register 0x400 bit 2) after `usb_host_install` and before powering the port. espressif/usb's `fsls_only` needs a newer ESP-IDF HAL than 5.5.5.
