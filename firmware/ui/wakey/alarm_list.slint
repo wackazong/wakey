@@ -226,7 +226,8 @@ export component AlarmListPage inherits Rectangle {
         property <int> active: -1;
         // The finger has rested on the row for `hold-timer`: only then it
         // lights up (as on iOS), so a touch that turns into a scroll right
-        // away changes nothing on the page.
+        // away changes nothing on the page. Not on the switch (or the delete
+        // button of an open row): a toggle does not light the row up.
         property <bool> held;
         // The active row is still animating (closing, highlight fading)
         // after the finger left; it is drawn until then. Drawing it on top
@@ -380,7 +381,8 @@ export component AlarmListPage inherits Rectangle {
             running: false;
             triggered => {
                 self.running = false;
-                if (ta.pressed && view.gesture == Gesture.undecided && view.touched >= 0) {
+                if (ta.pressed && view.gesture == Gesture.undecided && view.touched >= 0
+                        && ta.pressed-x <= view.width - view.switch-area) {
                     view.held = true;
                     view.active = view.touched;
                 }

@@ -347,6 +347,12 @@ fn main() {
     p.window.dispatch_event(WindowEvent::PointerExited);
     p.run(300);
     p.check_rows("after a cancelled press");
+    // Hold a switch: the row does not light up (a toggle).
+    p.press(1150.0, 369.0);
+    p.run(160);
+    p.shot("1-list-switch-held");
+    p.window.dispatch_event(WindowEvent::PointerExited);
+    p.run(300);
     // Swipe the second row left and let go: the delete button stays.
     p.press(1000.0, 369.0);
     for x in (700..1000).rev().step_by(20) {
