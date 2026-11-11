@@ -3,8 +3,10 @@
 //! MCLK GPIO30, BCLK GPIO27, LRCK GPIO29, data to the codec GPIO26.
 //!
 //! Register values from M5Unified's Tab5 speaker setup (DAC only, I2S
-//! slave, 16-bit Philips, ADC powered down). Clock as M5Unified: MCLK =
-//! 256 × sample rate, although register 24 says 128.
+//! slave, 16-bit Philips, ADC powered down), with two changes after
+//! Espressif's ES8388 driver (esp-adf `es8388.c`): register 24 says MCLK =
+//! 256 × sample rate, which is what the I2S driver sends (M5Unified's table
+//! says 128), and the init ends by restarting the codec's state machine.
 
 use super::i2c::{self, SharedI2c};
 use esp_idf_svc::hal::gpio::AnyIOPin;
@@ -23,7 +25,7 @@ pub struct CodecPins {
 }
 
 /// Register, value; written in this order.
-const INIT: [(u8, u8); 30] = [
+const INIT: [(u8, u8); 31] = [
     (0, 0x80), // reset, CSM power on
     (0, 0x00),
     (0, 0x00),
@@ -37,7 +39,7 @@ const INIT: [(u8, u8); 30] = [
     (7, 0x7C),
     (8, 0x00),  // I2S slave
     (23, 0x18), // I2S, 16 bit
-    (24, 0x00), // MCLK / LRCK = 128
+    (24, 0x02), // MCLK / LRCK = 256 (single speed)
     (25, 0x20), // DAC unmuted
     (26, 0x00), // left DAC volume 0 dB
     (27, 0x00), // right DAC volume 0 dB
@@ -53,6 +55,11 @@ const INIT: [(u8, u8); 30] = [
     (48, 0x21), // LOUT2
     (49, 0x21), // ROUT2
     (25, 0x20),
+    // Restart the state machine, then power up (ADC parts stay down). The
+    // codec stays powered while the P4 restarts (a flash) and lost its
+    // clock mid-stream; without the restart it stayed silent until the
+    // board was power-cycled.
+    (2, 0xF0),
     (2, 0x0A),
 ];
 

@@ -194,6 +194,8 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
                 window.set_page(PAGE_CLOCK);
             } else if page == PAGE_ALARM {
                 alarm_page::fill(window, ctx);
+                // Keeps the speaker on while the wheels are shown.
+                ctx.click.wake();
             }
         }),
     );

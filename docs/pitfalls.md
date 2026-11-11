@@ -50,7 +50,8 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 
 ## Built-in speaker
 
-- **Silent until a power cycle:** the wheel clicks stopped; every tick reached the I2S driver, the codec registers read back as written, `SPK_EN` was high, and even the last firmware that had clicked was silent. Unplugging USB-C (no battery) brought the sound back. Flashing only resets the P4; the ES8388 and the NS4150B stay powered (`SOC_3.3V`, `SYS_INT5V`) and can stay stuck. Power-cycle before debugging silence.
+- **Silent until a power cycle:** the wheel clicks stopped; every tick reached the I2S driver, the codec registers read back as written, `SPK_EN` was high, and even the last firmware that had clicked was silent. Unplugging USB-C (no battery) brought the sound back. Flashing only resets the P4; the ES8388 and the NS4150B stay powered (`SOC_3.3V`, `SYS_INT5V`) and can stay stuck. Power-cycle before debugging silence. The codec init now ends by restarting its state machine (register 2: `0xF0`, then `0x0A`, as Espressif's driver does), and register 24 says MCLK = 256 × fs, which is what the I2S driver sends (M5Unified's table said 128).
+- **Lone clicks came out cut off and faint:** between clicks the stream was exact digital zeros (`auto_clear`), and something in the chain mutes on digital silence and takes a moment to open again; clicks in fast succession kept it open. While the amplifier is on, the click thread now streams ±2 LSB at half the sample rate (inaudible, filtered by the codec) instead, and the alarm page switches the amplifier on when it opens.
 - **A 1 ms tick was barely audible alone, loud in a fast train:** the ear integrates energy over ~0.1–0.2 s. The click is now ~15 ms in the mids, and quieter when it follows closely on the previous one.
 
 ## USB audio

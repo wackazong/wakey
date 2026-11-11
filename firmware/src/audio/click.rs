@@ -2,10 +2,13 @@
 //! amplifier; see [`crate::board::codec`]).
 //!
 //! The I2S stream runs all the time and plays silence by itself
-//! (`auto_clear`); a thread writes a click when asked, quieter the closer
-//! it follows the previous one ([`tone::click_gain`]). The amplifier is
-//! switched on with the first click and off after a few seconds without
-//! one, so the speaker does not hiss and draw current while unused.
+//! (`auto_clear`); while the amplifier is on, a thread streams an
+//! inaudible keep-alive signal instead (see [`keepalive`]) and writes a
+//! click when asked, quieter the closer it follows the previous one
+//! ([`tone::click_gain`]). The amplifier is switched on when clicks may
+//! come ([`Clicker::wake`], the alarm page) or with the first click, and off
+//! after a few seconds without either, so the speaker does not hiss and
+//! draw current while unused.
 
 use crate::board::codec::{self, CodecPins};
 use crate::board::i2c::SharedI2c;
@@ -16,7 +19,7 @@ use esp_idf_svc::hal::i2s::config::{
     StdSlotConfig,
 };
 use esp_idf_svc::hal::i2s::{I2sDriver, I2sTx};
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{self, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 use wakey_core::tone;
 
@@ -24,15 +27,17 @@ const SAMPLE_RATE: u32 = 48_000;
 /// Peak loudness of a single click, 0–1 of full scale (0.6 was barely
 /// audible when turning slowly; the codec's output is at its maximum).
 const AMPLITUDE: f32 = 1.0;
-/// The amplifier goes off after this long without a click.
-const AMP_OFF_AFTER: Duration = Duration::from_secs(3);
+/// The amplifier goes off after this long without a click or a wake.
+const AMP_OFF_AFTER: Duration = Duration::from_secs(8);
+/// Time the amplifier gets to start before the first click.
+const AMP_START: Duration = Duration::from_millis(50);
 /// DMA: 3 × 5 ms; a click starts within ~15 ms.
 const DMA_BUFFERS: u32 = 3;
 const DMA_FRAMES: u32 = 240;
 
 #[derive(Default)]
 pub struct Clicker {
-    tx: Option<SyncSender<Instant>>,
+    tx: Option<SyncSender<Msg>>,
 }
 
 impl Clicker {
@@ -70,64 +75,147 @@ impl Clicker {
         codec::init(&bus)?;
         log::info!("click: built-in speaker ready");
 
-        // Ticks carry their time: the gap between ticks sets the loudness,
-        // not when the thread gets to play them.
-        let (tx, rx) = mpsc::sync_channel::<Instant>(4);
-        let click = tone::click(SAMPLE_RATE, AMPLITUDE);
-        // Interleaved stereo bytes of the click at the current gain.
-        let mut samples = vec![0u8; click.len() * 4];
-        let mut last: Option<Instant> = None;
+        let (tx, rx) = mpsc::sync_channel::<Msg>(4);
+        let mut thread = ClickThread {
+            i2s,
+            ioexp,
+            click: tone::click(SAMPLE_RATE, AMPLITUDE),
+            samples: Vec::new(),
+            keepalive: keepalive(),
+            amp_on: false,
+            last_click: None,
+            last_activity: Instant::now(),
+        };
         std::thread::Builder::new()
             .name("click".into())
             .stack_size(4096)
-            .spawn(move || {
-                let timeout = TickType::from(Duration::from_millis(100)).ticks();
-                let mut amp_on = false;
-                loop {
-                    let next = if amp_on {
-                        rx.recv_timeout(AMP_OFF_AFTER)
-                    } else {
-                        rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
-                    };
-                    match next {
-                        Ok(at) => {
-                            if !amp_on {
-                                amp_on = ioexp.set(Pin::SpkEn, true).is_ok();
-                                log::info!("click: amplifier on");
-                                // Let the amplifier start; the first click
-                                // would be cut off.
-                                std::thread::sleep(Duration::from_millis(30));
-                            }
-                            let gap =
-                                last.map(|l| at.saturating_duration_since(l).as_millis() as u32);
-                            last = Some(at);
-                            let gain = tone::click_gain(gap);
-                            for (s, out) in click.iter().zip(samples.as_chunks_mut::<4>().0) {
-                                let b = ((f32::from(*s) * gain) as i16).to_le_bytes();
-                                *out = [b[0], b[1], b[0], b[1]];
-                            }
-                            if let Err(e) = i2s.write_all(&samples, timeout) {
-                                log::warn!("click: {e}");
-                            }
-                        }
-                        Err(RecvTimeoutError::Timeout) => {
-                            if amp_on {
-                                let _ = ioexp.set(Pin::SpkEn, false);
-                                amp_on = false;
-                                log::info!("click: amplifier off");
-                            }
-                        }
-                        Err(RecvTimeoutError::Disconnected) => return,
-                    }
-                }
-            })?;
+            .spawn(move || thread.run(&rx))?;
         Ok(Self { tx: Some(tx) })
     }
 
     /// One tick; returns at once (dropped if clicks pile up).
     pub fn click(&self) {
+        self.send(Msg::Click(Instant::now()));
+    }
+
+    /// Clicks may follow soon (the alarm page is open): switch the
+    /// amplifier on now, so the first click is not cut off, and keep it on
+    /// for [`AMP_OFF_AFTER`].
+    pub fn wake(&self) {
+        self.send(Msg::Wake);
+    }
+
+    fn send(&self, msg: Msg) {
         if let Some(tx) = &self.tx {
-            let _ = tx.try_send(Instant::now());
+            let _ = tx.try_send(msg);
         }
+    }
+}
+
+enum Msg {
+    /// A tick at this time: the gap between ticks sets the loudness, not
+    /// when the thread gets to play them.
+    Click(Instant),
+    Wake,
+}
+
+/// One DMA buffer of near-silence: ±2 (of 32767) alternating at half the
+/// sample rate, inaudible and filtered out by the codec, but not the exact
+/// zeros the stream plays by itself. On exact zeros a lone click came out
+/// cut off and faint (something in the chain mutes on digital silence and
+/// takes a moment to open again); a fast series of clicks did not.
+fn keepalive() -> Vec<u8> {
+    (0..DMA_FRAMES)
+        .flat_map(|i| {
+            let b = if i % 2 == 0 { 2i16 } else { -2 }.to_le_bytes();
+            [b[0], b[1], b[0], b[1]]
+        })
+        .collect()
+}
+
+struct ClickThread {
+    i2s: I2sDriver<'static, I2sTx>,
+    ioexp: IoExpanders,
+    /// The click at full gain, mono.
+    click: Vec<i16>,
+    /// The click at the current gain, interleaved stereo bytes.
+    samples: Vec<u8>,
+    keepalive: Vec<u8>,
+    amp_on: bool,
+    last_click: Option<Instant>,
+    /// Last click or wake: the amplifier goes off [`AMP_OFF_AFTER`] later.
+    last_activity: Instant,
+}
+
+impl ClickThread {
+    fn run(&mut self, rx: &mpsc::Receiver<Msg>) {
+        loop {
+            let msg = if self.amp_on {
+                match rx.try_recv() {
+                    Ok(msg) => Some(msg),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => return,
+                }
+            } else {
+                // Off: nothing to stream, wait for work.
+                match rx.recv() {
+                    Ok(msg) => Some(msg),
+                    Err(_) => return,
+                }
+            };
+            match msg {
+                Some(Msg::Click(at)) => {
+                    self.amp(true);
+                    self.play(at);
+                }
+                Some(Msg::Wake) => self.amp(true),
+                None if self.last_activity.elapsed() > AMP_OFF_AFTER => self.amp(false),
+                // Keeps the stream from going digitally silent; blocks
+                // until the DMA has room, so this paces itself.
+                None => write(&mut self.i2s, &self.keepalive),
+            }
+        }
+    }
+
+    /// Switches the amplifier; on: lets it start up with the stream
+    /// running, so the first click is whole.
+    fn amp(&mut self, on: bool) {
+        self.last_activity = Instant::now();
+        if on == self.amp_on {
+            return;
+        }
+        if self.ioexp.set(Pin::SpkEn, on).is_err() {
+            return;
+        }
+        self.amp_on = on;
+        log::info!("click: amplifier {}", if on { "on" } else { "off" });
+        if on {
+            let started = Instant::now();
+            while started.elapsed() < AMP_START {
+                write(&mut self.i2s, &self.keepalive);
+            }
+        }
+    }
+
+    fn play(&mut self, at: Instant) {
+        let gap = self
+            .last_click
+            .map(|l| at.saturating_duration_since(l).as_millis() as u32);
+        self.last_click = Some(at);
+        let gain = tone::click_gain(gap);
+        self.samples.clear();
+        self.samples.extend(self.click.iter().flat_map(|&s| {
+            let b = ((f32::from(s) * gain) as i16).to_le_bytes();
+            [b[0], b[1], b[0], b[1]]
+        }));
+        write(&mut self.i2s, &self.samples);
+    }
+}
+
+/// Queues `bytes` for the DMA; blocks while its buffers are full.
+fn write(i2s: &mut I2sDriver<'static, I2sTx>, bytes: &[u8]) {
+    let timeout = TickType::from(Duration::from_millis(100)).ticks();
+    if let Err(e) = i2s.write_all(bytes, timeout) {
+        log::warn!("click: {e}");
     }
 }

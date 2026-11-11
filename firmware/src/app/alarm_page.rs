@@ -14,6 +14,8 @@ use wakey_core::alarm::AlarmConfig;
 
 /// Shows the page for `cfg` (id 0: a new alarm).
 pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
+    // The wheels click: the speaker starts now, not at the first click.
+    ctx.click.wake();
     let editor = window.global::<AlarmEditor>();
     editor.set_hour(cfg.hour.into());
     editor.set_minute(cfg.minute.into());
