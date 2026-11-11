@@ -27,12 +27,17 @@ const PERIOD: Duration = Duration::from_secs(10);
 /// 40 % does it get visibly brighter (measured by eye, 200 Hz–44.1 kHz).
 /// So there are three ranges of room light (average pixel value at the
 /// longest exposure and 1× gain):
-/// - night, below [`LIGHT_NIGHT`]: [`LEVEL_NIGHT`] and every pixel halved
-///   ([`crate::ui::dim`]); left only above [`LIGHT_NIGHT_END`];
+/// - night, below [`LIGHT_NIGHT`]: [`LEVEL_NIGHT`] and every pixel at
+///   [`NIGHT_PIXELS`] ([`crate::ui::dim`]); left only above
+///   [`LIGHT_NIGHT_END`];
 /// - a lit room: [`LEVEL_ROOM`];
 /// - from [`LIGHT_ROOM_END`] to [`LIGHT_BRIGHT`]: [`LEVEL_ROOM_TOP`] to
 ///   [`LEVEL_MAX`] on a log scale.
 const LEVEL_NIGHT: f32 = 0.01;
+/// Pixel brightness at night, in 1/256 (35 %).
+const NIGHT_PIXELS: u16 = 90;
+/// A change of brightness takes this long.
+const FADE: Duration = Duration::from_secs(3);
 const LEVEL_ROOM: f32 = 0.13;
 const LEVEL_ROOM_TOP: f32 = 0.4;
 const LEVEL_MAX: f32 = 1.0;
@@ -83,20 +88,17 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight) {
                         light < LIGHT_NIGHT
                     };
                     let target = level_for(light, night);
+                    let pixels = if night {
+                        NIGHT_PIXELS
+                    } else {
+                        crate::ui::dim::FULL
+                    };
                     log::info!(
-                        "ambient: backlight {:.1} %{}",
+                        "ambient: backlight {:.1} %, pixels {} %",
                         target * 100.0,
-                        if night { ", pixels halved" } else { "" }
+                        u32::from(pixels) * 100 / 256
                     );
-                    // Darker: dim the pixels first, then the backlight;
-                    // brighter: the other way round.
-                    if night {
-                        crate::ui::dim::set(true);
-                    }
-                    fade(&mut backlight, &mut level, target);
-                    if !night {
-                        crate::ui::dim::set(false);
-                    }
+                    fade(&mut backlight, &mut level, target, pixels);
                 }
                 Err(e) => log::warn!("ambient: {e}"),
             }
@@ -125,16 +127,27 @@ fn level_for(light: f32, night: bool) -> f32 {
     LEVEL_ROOM_TOP * (LEVEL_MAX / LEVEL_ROOM_TOP).powf(t.clamp(0.0, 1.0))
 }
 
-/// Moves the backlight to `target` in small steps over about a second.
-fn fade(backlight: &mut Backlight, level: &mut f32, target: f32) {
-    const STEPS: u32 = 20;
-    let from = *level;
-    for i in 1..=STEPS {
-        // Geometric steps: even to the eye.
-        let l = from * (target / from).powf(i as f32 / STEPS as f32);
-        let _ = backlight.set_level(l);
-        std::thread::sleep(Duration::from_millis(50));
+/// Moves the backlight to `target` and the pixel brightness to `pixels`
+/// (1/256) over [`FADE`]. The backlight steps every 50 ms; the pixels
+/// change in 10 steps (each repaints the whole window, ~0.2 s).
+fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
+    const STEP: Duration = Duration::from_millis(50);
+    let steps = (FADE.as_millis() / STEP.as_millis()) as u32;
+    let (from, pixels_from) = (*level, crate::ui::dim::factor());
+    if from == target && pixels_from == pixels {
+        return;
     }
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        // Geometric steps: even to the eye.
+        let _ = backlight.set_level(from * (target / from).powf(t));
+        // The pixels in tenths of the way: 10 repaints, not 60.
+        let tenth = (t * 10.0).floor() / 10.0;
+        let p = f32::from(pixels_from) * (f32::from(pixels) / f32::from(pixels_from)).powf(tenth);
+        crate::ui::dim::set(p.round() as u16);
+        std::thread::sleep(STEP);
+    }
+    crate::ui::dim::set(pixels);
     *level = target;
 }
 

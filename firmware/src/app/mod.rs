@@ -96,7 +96,7 @@ fn repaint_when_dimmed(ui: &screens::AppWindow) -> slint::Timer {
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
-        Duration::from_millis(250),
+        Duration::from_millis(100),
         move || {
             if crate::ui::dim::changed_since(&mut seen)
                 && let Some(ui) = weak.upgrade()

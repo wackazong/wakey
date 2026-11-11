@@ -1,6 +1,6 @@
 //! Dimming by pixels: in a dark room the backlight is at its lowest usable
 //! level ([`crate::ambient`]), which is still too bright for the night, so
-//! every pixel Slint draws is halved on its way to the PPA
+//! every pixel Slint draws is scaled down on its way to the PPA
 //! ([`super::platform`]). Everything on screen comes through there: the
 //! pages, the list layer's rows and swipe pictures, and the slides (copies
 //! of drawn frames).
@@ -9,17 +9,25 @@
 //! whole window ([`changed_since`]), the list layer re-renders its rows (the
 //! [`epoch`] is part of their stamps).
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 
-static ON: AtomicBool = AtomicBool::new(false);
+/// Brightness factor in 1/256: 256 = undimmed.
+pub const FULL: u16 = 256;
+static FACTOR: AtomicU16 = AtomicU16::new(FULL);
 static EPOCH: AtomicU32 = AtomicU32::new(0);
 
-/// Switches dimming (any thread).
-pub fn set(on: bool) {
-    if ON.swap(on, Ordering::Relaxed) != on {
+/// Sets the brightness factor in 1/256 (any thread; [`FULL`] = undimmed).
+pub fn set(factor: u16) {
+    let factor = factor.min(FULL);
+    if FACTOR.swap(factor, Ordering::Relaxed) != factor {
         EPOCH.fetch_add(1, Ordering::Relaxed);
-        log::info!("dim: {}", if on { "on" } else { "off" });
+        log::debug!("dim: {factor}/256");
     }
+}
+
+/// The brightness factor in 1/256.
+pub fn factor() -> u16 {
+    FACTOR.load(Ordering::Relaxed)
 }
 
 /// Counts the changes: drawn content from another epoch is stale.
@@ -33,13 +41,20 @@ pub fn changed_since(seen: &mut u32) -> bool {
     core::mem::replace(seen, now) != now
 }
 
-/// Halves a freshly drawn line if dimming is on.
+/// Scales a freshly drawn line (RGB565) by the factor, to 1/32: the
+/// channels are spread over a 32-bit word with gaps (green in the upper
+/// half), so one multiply scales all three (~20 ms less per full screen
+/// than three).
 pub fn apply(px: &mut [u16]) {
-    if ON.load(Ordering::Relaxed) {
-        for p in px {
-            // Each channel shifted right by one, without bleeding into the
-            // next: RRRRRGGGGGGBBBBB → 0RRRR0GGGGG0BBBB.
-            *p = (*p >> 1) & 0x7bef;
-        }
+    let f = u32::from(FACTOR.load(Ordering::Relaxed));
+    if f >= u32::from(FULL) {
+        return;
+    }
+    let f32_ = (f + 4) >> 3;
+    const MASK: u32 = 0x07e0_f81f;
+    for p in px {
+        let x = (u32::from(*p) | (u32::from(*p) << 16)) & MASK;
+        let x = ((x * f32_) >> 5) & MASK;
+        *p = (x | (x >> 16)) as u16;
     }
 }
