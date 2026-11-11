@@ -81,6 +81,11 @@ pub fn set_background(rgb565: u16) {
     BACKGROUND.store(rgb565, Ordering::Relaxed);
 }
 
+/// A transition is requested and not taken yet.
+pub(super) fn pending() -> bool {
+    PENDING.load(Ordering::Relaxed) != 0
+}
+
 /// The transition requested since the last call, if any.
 pub(super) fn take() -> Option<Direction> {
     match PENDING.swap(0, Ordering::Relaxed) {

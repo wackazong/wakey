@@ -107,19 +107,21 @@ export component AlarmPage inherits Rectangle {
         clicked => { AlarmEditor.save(); }
     }
 
-    // Time: two wheels and the colon, centred in the left column.
+    // Time: two wheels and the colon, centred in the left column, as tall
+    // as the space above "Klingelt in" allows.
     property <length> time-x: 40px;
     property <length> time-width: 440px;
-    property <length> wheels-x: self.time-x + (self.time-width - 2 * 150px - 40px) / 2;
+    property <length> wheels-x: self.time-x + (self.time-width - 2 * hours.width - 40px) / 2;
+    property <length> band-y: hours.y + 2 * hours.row-h;
     Rectangle {
         x: root.time-x;
-        y: 308px;
+        y: root.band-y;
         width: root.time-width;
-        height: 88px;
+        height: hours.row-h;
         border-radius: 22px;
         background: Theme.surface;
     }
-    Wheel {
+    hours := Wheel {
         x: root.wheels-x;
         y: 132px;
         count: 24;
@@ -128,19 +130,19 @@ export component AlarmPage inherits Rectangle {
         edited => { AlarmEditor.edited(); }
     }
     Text {
-        x: root.wheels-x + 150px;
-        y: 308px;
+        x: root.wheels-x + hours.width;
+        y: root.band-y;
         width: 40px;
-        height: 88px;
+        height: hours.row-h;
         text: ":";
-        font-size: 64px;
+        font-size: 80px;
         font-weight: 500;
         color: Theme.text-faint;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
     Wheel {
-        x: root.wheels-x + 190px;
+        x: root.wheels-x + hours.width + 40px;
         y: 132px;
         count: 60;
         value <=> AlarmEditor.minute;

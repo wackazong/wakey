@@ -115,11 +115,21 @@ pub async fn run(
     // otherwise that happens with the next change, often a touch, whose
     // first frame would then be slow (a page switch: ~60 ms).
     let mut other_buffer_stale = false;
+    // The touch that is down changed the page (buttons that do so act on
+    // press): the rest of it is dropped, or its release would act on the
+    // new page (a tap on whatever lies under the finger there).
+    let mut drop_touch = false;
     loop {
         ITERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         stage(1);
         // Touch: route each event to the hook (e.g. list drags), or Slint.
         while let Some(ev) = woken_by.take().or_else(|| input::EVENTS.try_receive().ok()) {
+            if ev.phase == Phase::Down {
+                drop_touch = false;
+            } else if drop_touch {
+                drop_touch = ev.phase != Phase::Up;
+                continue;
+            }
             let route = hook.as_mut().map_or(Route::Slint, |h| h.pointer(&ev));
             if DEBUG_TOUCH {
                 log::info!(
@@ -130,7 +140,14 @@ pub async fn run(
                 );
             }
             match route {
-                Route::Slint => dispatch(&window, &ev),
+                Route::Slint => {
+                    dispatch(&window, &ev);
+                    if ev.phase == Phase::Down && super::transition::pending() {
+                        drop_touch = true;
+                        // Whatever the old page's touch area holds ends.
+                        window.dispatch_event(slint::platform::WindowEvent::PointerExited);
+                    }
+                }
                 Route::Hook => {}
                 // A pressed touch area gets `PointerEventKind.cancel`.
                 Route::TakeOver => {

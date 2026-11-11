@@ -22,7 +22,8 @@ export component Wheel inherits Rectangle {
     // The wheel settled on a new value.
     callback edited(int);
 
-    property <length> row-h: 88px;
+    // Row height; the page puts its selection band on the middle row.
+    out property <length> row-h: 96px;
     // Continuous position in rows: `value` when at rest.
     property <float> pos: root.value;
     // Rows per 16 ms tick.
@@ -41,7 +42,7 @@ export component Wheel inherits Rectangle {
         return Math.mod(Math.mod(n, root.count) + root.count, root.count);
     }
 
-    width: 150px;
+    width: 170px;
     height: 5 * self.row-h;
     clip: true;
 
@@ -57,7 +58,7 @@ export component Wheel inherits Rectangle {
         width: root.width;
         height: root.row-h;
         text: self.n < 10 ? "0\{self.n}" : "\{self.n}";
-        font-size: 64px;
+        font-size: 80px;
         font-weight: 500;
         color: Math.abs(self.d) < 0.5 ? Theme.text
             : Theme.text-dim.with-alpha(Math.max(0, 1 - Math.abs(self.d) * 0.3));
