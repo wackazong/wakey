@@ -240,8 +240,10 @@ export component Pills inherits Rectangle {
 }
 
 // A horizontal slider, 0–100.
+// 0–100, or from `minimum`.
 export component Slider inherits Rectangle {
     in-out property <int> value;
+    in property <int> minimum: 0;
     callback changed-by-user(int);
     height: 72px;
     property <length> knob: 64px;
@@ -271,7 +273,7 @@ export component Slider inherits Rectangle {
     }
     ta := TouchArea {
         function set(x: length) {
-            let v = Math.round(Math.clamp((x - root.knob / 2) / root.span, 0, 1) * 100);
+            let v = Math.max(root.minimum, Math.round(Math.clamp((x - root.knob / 2) / root.span, 0, 1) * 100));
             if (v != root.value) {
                 root.value = v;
                 root.changed-by-user(v);

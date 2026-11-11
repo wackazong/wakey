@@ -65,13 +65,12 @@ impl Beeper {
     }
 }
 
-/// Linear gain for a volume of 0–100 %: roughly even loudness steps
-/// (−40 dB at 1 %, 0 dB at 100 %), 0 % is silent.
+/// Linear gain for a volume of 1–100 %: roughly even loudness steps
+/// (−40 dB at 1 %, 0 dB at 100 %). An alarm is never silent: 0 % plays as
+/// 1 % ([`crate::alarm::VOLUME_MIN`]).
 pub fn volume_gain(percent: u8) -> f32 {
-    match percent.min(100) {
-        0 => 0.0,
-        p => 10f32.powf((f32::from(p) / 100.0 - 1.0) * 2.0),
-    }
+    let p = percent.clamp(crate::alarm::VOLUME_MIN, 100);
+    10f32.powf((f32::from(p) / 100.0 - 1.0) * 2.0)
 }
 
 /// Gain `frames` frames into a fade-in of `fade_frames` (squared, so the
@@ -151,7 +150,7 @@ mod tests {
 
     #[test]
     fn volume_curve() {
-        assert_eq!(volume_gain(0), 0.0);
+        assert_eq!(volume_gain(0), volume_gain(1));
         assert!((volume_gain(100) - 1.0).abs() < 1e-6);
         assert!((volume_gain(50) - 0.1).abs() < 1e-3);
         assert!(volume_gain(1) > 0.0 && volume_gain(1) < 0.011);

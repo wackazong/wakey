@@ -102,7 +102,7 @@ pub struct AlarmConfig {
     /// Monday to Sunday; non-zero rings.
     pub weekdays: [u8; 7],
     pub sound: Sound,
-    /// 0–100 % of the volume cap.
+    /// [`VOLUME_MIN`]–100 % of the volume cap.
     pub volume: u8,
     pub fade_in_s: u16,
 }
@@ -124,6 +124,9 @@ impl Default for AlarmConfig {
     }
 }
 
+/// Lowest volume, %: an alarm is never silent.
+pub const VOLUME_MIN: u8 = 1;
+
 /// Longest name kept, in characters.
 pub const NAME_MAX: usize = 24;
 
@@ -133,7 +136,7 @@ impl AlarmConfig {
     pub fn sanitize(&mut self) {
         self.hour = self.hour.min(23);
         self.minute = self.minute.min(59);
-        self.volume = self.volume.min(100);
+        self.volume = self.volume.clamp(VOLUME_MIN, 100);
         self.fade_in_s = self.fade_in_s.min(600);
         self.name = self.name.trim().chars().take(NAME_MAX).collect();
     }
@@ -938,13 +941,15 @@ mod tests {
     #[test]
     fn config_json_and_sanitize() {
         let mut c: Vec<AlarmConfig> = serde_json::from_str(
-            r#"[{ "hour": 25, "minute": 5, "name": "  Ein sehr, sehr langer Weckername  " },
+            r#"[{ "hour": 25, "minute": 5, "volume": 0, "name": "  Ein sehr, sehr langer Weckername  " },
                 { "id": 1, "sound": "random" }, { "id": 1, "sound": "sounds/a.wav" }]"#,
         )
         .unwrap();
         sanitize_list(&mut c);
         assert_eq!((c[0].enabled, c[0].hour, c[0].minute), (true, 23, 5));
         assert_eq!(c[0].weekdays, [1, 1, 1, 1, 1, 0, 0]);
+        // Never silent.
+        assert_eq!(c[0].volume, VOLUME_MIN);
         assert_eq!(c[0].name, "Ein sehr, sehr langer We");
         let ids: Vec<u32> = c.iter().map(|a| a.id).collect();
         assert_eq!(ids, [2, 1, 3]);

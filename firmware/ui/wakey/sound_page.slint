@@ -192,6 +192,8 @@ export component SoundPage inherits Rectangle {
             y: 92px;
             width: parent.width - 64px;
             value <=> SoundPicker.volume;
+            // Never silent (`wakey_core::alarm::VOLUME_MIN`).
+            minimum: 1;
             changed-by-user(v) => { SoundPicker.volume-changed(v); }
         }
         Text {
