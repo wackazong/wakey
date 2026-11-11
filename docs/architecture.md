@@ -86,7 +86,7 @@ Shared state: the system I2C bus is `Arc<Mutex<SysI2c>>` (`SharedI2c`), locked p
 1. `Board::init()`: I2C bus recovery (9 clocks + STOP; the RTC and expanders stay powered across resets) → expanders (rails off, LCD and touch in reset, then released) → RTC configuration → backlight PWM, dark → panel variant from the touch controller → display (DSI PHY LDO, panel init, DPI streaming) → microSD (optional).
 2. `clock::init`: time zone, system time from the RTC (or the build time).
 3. `config::load`: `config.json` from the card (an old single `alarm` section is migrated to `alarms`; missing settings are added to the file at their defaults).
-4. `net::start`: `wifi` thread (C6 power, driver, connect, NTP → RTC); NVS is taken once here and shared with the alarm.
+4. `net::start`: `wifi` thread in sessions (C6 power, esp_hosted transport, driver, connect, NTP → RTC, then all down and the C6 off; next session after `sync_interval_h`, only while the display is awake); NVS is taken once here and shared with the alarm.
 5. `Player::new`, then the built-in speaker (`BuiltinSpeaker::start`: I2S0 stream, ES8388 codec, `speaker` thread) with a source from the player. Touch task on the executor.
 6. `UsbAudio::start`: USB host, `uac` thread (VBUS, port power, device), with another source from the player.
 7. `AlarmClock::new`: alarm state from NVS; it gets an `Output` over both speakers.

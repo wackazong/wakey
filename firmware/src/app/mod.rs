@@ -191,6 +191,7 @@ async fn app(spawner: embassy_executor::Spawner) {
         ioexp.switch(Pin::WlanPwrEn),
         nvs.clone(),
         config.wifi,
+        Duration::from_secs(u64::from(config.sync_interval_h) * 3600),
         move || clock::store_system_time(&rtc),
     );
     // Speakers: set up now; the player's sound goes to the USB speaker,

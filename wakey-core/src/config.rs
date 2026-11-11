@@ -6,6 +6,7 @@
 //! ```json
 //! {
 //!   "wifi": { "ssid": "MeinNetz", "password": "geheim" },
+//!   "sync_interval_h": 24,
 //!   "alarms": [ { "id": 1, "enabled": true, "hour": 6, "minute": 30, … } ],
 //!   "ringing": { "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10 },
 //!   "display": { "night_pixels_percent": 35 },
@@ -20,16 +21,32 @@ use crate::alarm::{self, AlarmConfig, RingConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wifi: Option<WifiConfig>,
+    /// Hours between clock syncs over Wi-Fi (1–168); Wi-Fi is off in
+    /// between.
+    pub sync_interval_h: u16,
     /// See [`crate::alarm`].
     pub alarms: Vec<AlarmConfig>,
     pub ringing: RingConfig,
     pub display: DisplayConfig,
     pub power: PowerConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            wifi: None,
+            sync_interval_h: 24,
+            alarms: Vec::new(),
+            ringing: RingConfig::default(),
+            display: DisplayConfig::default(),
+            power: PowerConfig::default(),
+        }
+    }
 }
 
 /// The `display` section.
@@ -120,6 +137,7 @@ impl Config {
         let mut c: Self = serde_json::from_value(value)?;
         alarm::sanitize_list(&mut c.alarms);
         c.ringing.sanitize();
+        c.sync_interval_h = c.sync_interval_h.clamp(1, 168);
         c.display.sanitize();
         c.power.sanitize();
         Ok(c)
@@ -238,6 +256,9 @@ mod tests {
         assert_eq!(c.power.sleep_when, SleepWhen::Dark);
         let c = Config::parse(r#"{ "power": { "sleep_when": "never" } }"#).unwrap();
         assert_eq!(c.power.sleep_when, SleepWhen::Never);
+        let c = Config::parse(r#"{ "sync_interval_h": 0 }"#).unwrap();
+        assert_eq!(c.sync_interval_h, 1);
+        assert_eq!(Config::parse("{}").unwrap().sync_interval_h, 24);
     }
 
     #[test]

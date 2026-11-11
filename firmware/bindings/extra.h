@@ -5,3 +5,5 @@
 #include "esp_cam_ctlr_csi.h"
 #include "esp_cam_ctlr.h"
 #include "driver/isp.h"
+// esp_hosted's transport init/deinit (src/net.rs: Wi-Fi off between syncs).
+#include "esp_hosted.h"

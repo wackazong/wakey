@@ -1,15 +1,18 @@
-//! Wi-Fi station through the ESP32-C6, and NTP.
+//! Wi-Fi station through the ESP32-C6, and NTP, only when needed.
 //!
 //! The P4 has no radio. The C6 runs Espressif's esp_hosted slave firmware
 //! (flashed by M5Stack) on SDIO; the esp_hosted and esp_wifi_remote
 //! components make it look like the normal `esp_wifi` driver, so `EspWifi`
 //! works unchanged.
 //!
-//! [`start`] runs a `wifi` thread: power the C6, bring up the driver,
-//! connect (retrying with back-off), and once connected sync the clock by
-//! SNTP and report it through `on_time_synced`. Without credentials it
-//! scans once, so the UI can show that networks are in range.
-//! [`Wifi::status`] is the latest state, for display.
+//! [`start`] runs a `wifi` thread that works in sessions: power the C6,
+//! bring up the driver, connect, sync the clock by SNTP (reported through
+//! `on_time_synced`), then drop the driver and switch the C6 off. The next
+//! session follows `sync_interval_h` later (sooner after a failure), and
+//! only while the display is awake. Without credentials a session is one
+//! scan, so the UI can show that networks are in range. Between sessions
+//! nothing of Wi-Fi runs, which light sleep needs. [`Wifi::status`] is the
+//! latest state, for display.
 
 use crate::board::ioexp::Switch;
 use crate::config::WifiConfig;
@@ -19,14 +22,17 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sntp::{EspSntp, SyncStatus};
 use esp_idf_svc::sys::{ESP_ERR_TIMEOUT, EspError};
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Retry delays after a failed connection attempt: doubling up to the cap.
-const BACKOFF_START: Duration = Duration::from_secs(5);
-const BACKOFF_MAX: Duration = Duration::from_secs(300);
-/// Status refresh while connected (signal strength).
-const POLL: Duration = Duration::from_secs(2);
+/// Connection attempts per session, and the pause between them.
+const ATTEMPTS: u32 = 3;
+const ATTEMPT_PAUSE: Duration = Duration::from_secs(5);
+/// How long a session waits for the NTP answer.
+const NTP_TIMEOUT: Duration = Duration::from_secs(60);
+/// After a failed session: the first retry, doubling up to the interval.
+const RETRY_FIRST: Duration = Duration::from_secs(10 * 60);
 
 /// What the station is doing.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,9 +52,9 @@ pub enum Status {
         ip: String,
         /// Signal strength, dBm.
         rssi: Option<i32>,
-        /// The clock was synced by NTP on this connection.
-        time_synced: bool,
     },
+    /// Off until the next session; the last one synced the clock.
+    Off,
     /// The last attempt failed; retrying later (or never, for `Driver`).
     Failed {
         ssid: String,
@@ -80,6 +86,7 @@ impl From<&EspError> for Failure {
 #[derive(Clone)]
 pub struct Wifi {
     status: Arc<Mutex<Status>>,
+    active: Arc<AtomicBool>,
 }
 
 impl Wifi {
@@ -89,62 +96,150 @@ impl Wifi {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+
+    /// True during a session (the C6 powered, the driver up).
+    pub fn active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+    }
 }
 
 /// Starts the `wifi` thread. `power` switches the C6's 3.3 V (expander pin
 /// WLAN_PWR_EN); the driver keeps its calibration in `nvs`;
 /// `on_time_synced` runs (on the `wifi` thread) after each successful NTP
-/// sync.
+/// sync; `interval` is the time between sessions.
 pub fn start(
-    modem: Modem<'static>,
+    mut modem: Modem<'static>,
     power: Switch,
     nvs: EspDefaultNvsPartition,
     cfg: Option<WifiConfig>,
+    interval: Duration,
     on_time_synced: impl Fn() + Send + 'static,
 ) -> Wifi {
     let status = Arc::new(Mutex::new(Status::Starting));
-    let shared = status.clone();
+    let active = Arc::new(AtomicBool::new(false));
+    let wifi = Wifi {
+        status: status.clone(),
+        active: active.clone(),
+    };
     std::thread::Builder::new()
         .name("wifi".into())
         .stack_size(16 * 1024)
         .spawn(move || {
-            let set = |s: Status| *shared.lock().unwrap_or_else(|e| e.into_inner()) = s;
+            let set = |s: Status| *status.lock().unwrap_or_else(|e| e.into_inner()) = s;
+            let sysloop = match EspSystemEventLoop::take() {
+                Ok(l) => l,
+                Err(e) => {
+                    log::error!("wifi: event loop: {e}");
+                    return;
+                }
+            };
             let ssid = cfg.as_ref().map_or("WLAN".into(), |c| c.ssid.clone());
-            let result = bring_up(modem, &power, nvs).and_then(|wifi| match &cfg {
-                Some(cfg) => stay_connected(wifi, cfg, &set, &on_time_synced),
-                None => scan_once(wifi, &set),
-            });
-            if let Err(e) = result {
-                log::error!("wifi: driver failed: {e:?}");
-                set(Status::Failed {
-                    ssid,
-                    error: Failure::Driver,
-                });
+            let mut retry = RETRY_FIRST;
+            loop {
+                set(Status::Starting);
+                active.store(true, Ordering::Relaxed);
+                let t = Instant::now();
+                let result = session(
+                    &mut modem,
+                    &power,
+                    &sysloop,
+                    nvs.clone(),
+                    cfg.as_ref(),
+                    &set,
+                );
+                end_session(&power);
+                active.store(false, Ordering::Relaxed);
+                let wait = match result {
+                    Ok(synced) => {
+                        if synced {
+                            on_time_synced();
+                            set(Status::Off);
+                        }
+                        retry = RETRY_FIRST;
+                        interval
+                    }
+                    Err(e) => {
+                        log::warn!("wifi: session failed: {e:?}");
+                        if !matches!(
+                            *status.lock().unwrap_or_else(|e| e.into_inner()),
+                            Status::Failed { .. }
+                        ) {
+                            set(Status::Failed {
+                                ssid: ssid.clone(),
+                                error: Failure::Driver,
+                            });
+                        }
+                        let w = retry;
+                        retry = (retry * 2).min(interval);
+                        w
+                    }
+                };
+                let free = |caps| unsafe { esp_idf_svc::sys::heap_caps_get_free_size(caps) } / 1024;
+                log::info!(
+                    "wifi: session took {} s, C6 off; next in {} min (free: internal {} KiB, PSRAM {} KiB)",
+                    t.elapsed().as_secs(),
+                    wait.as_secs() / 60,
+                    free(esp_idf_svc::sys::MALLOC_CAP_INTERNAL),
+                    free(esp_idf_svc::sys::MALLOC_CAP_SPIRAM)
+                );
+                std::thread::sleep(wait);
+                // Not while the display sleeps: the next session waits for it.
+                while crate::ui::power::asleep() {
+                    std::thread::sleep(Duration::from_secs(10));
+                }
             }
         })
         .expect("wifi thread");
-    Wifi { status }
+    wifi
 }
 
-/// Powers the C6 and creates the driver (~2.8 s; `esp_wifi_init` resets
-/// the C6 through GPIO15 and waits for the SDIO link).
-fn bring_up(
-    modem: Modem<'static>,
+/// After a session (the driver dropped): tears down esp_hosted's transport
+/// to the C6, then powers the C6 off. Powered off with the transport still
+/// up, the next session's link finds the C6 "unresponsive" and aborts.
+fn end_session(power: &Switch) {
+    let err = unsafe { esp_idf_svc::sys::esp_hosted_deinit() };
+    if err != 0 {
+        log::warn!("wifi: esp_hosted_deinit: {err}");
+    }
+    let _ = power(false);
+}
+
+/// One session: C6 on, driver up, connect and sync the clock (or scan once
+/// without credentials), driver down. True if the clock was synced. The
+/// caller switches the C6 off.
+fn session(
+    modem: &mut Modem<'static>,
     power: &Switch,
+    sysloop: &EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
-) -> anyhow::Result<BlockingWifi<EspWifi<'static>>> {
+    cfg: Option<&WifiConfig>,
+    set: &dyn Fn(Status),
+) -> anyhow::Result<bool> {
     power(true)?;
     std::thread::sleep(Duration::from_millis(500));
-    let sysloop = EspSystemEventLoop::take()?;
+    // The transport to the C6 (SDIO, RPC): set up at boot by esp_hosted
+    // itself, torn down after each session (`end_session`); again here.
+    // A no-op when it is up.
+    let err = unsafe { esp_idf_svc::sys::esp_hosted_init() };
+    anyhow::ensure!(err == 0, "esp_hosted_init: {err}");
     let t = Instant::now();
-    let wifi = BlockingWifi::wrap(EspWifi::new(modem, sysloop.clone(), Some(nvs))?, sysloop)?;
+    // SAFETY: the reborrowed modem lives only as long as this session's
+    // driver, which is dropped before the next session reborrows it.
+    let modem = unsafe { modem.reborrow() };
+    let wifi = BlockingWifi::wrap(
+        EspWifi::new(modem, sysloop.clone(), Some(nvs))?,
+        sysloop.clone(),
+    )?;
     log::info!("wifi: driver up after {} ms", t.elapsed().as_millis());
-    Ok(wifi)
+    // The driver goes down when `wifi` is dropped (`esp_wifi_deinit`).
+    match cfg {
+        Some(cfg) => sync_clock(wifi, cfg, set),
+        None => scan_once(wifi, set).map(|()| false),
+    }
 }
 
-/// No credentials: one scan for the status line, then the radio stays off
-/// (the C6 stays powered; re-initialising it is slow).
-fn scan_once(mut wifi: BlockingWifi<EspWifi<'static>>, set: &dyn Fn(Status)) -> anyhow::Result<()> {
+/// No credentials: one scan for the status line.
+fn scan_once(mut wifi: BlockingWifi<EspWifi<'_>>, set: &dyn Fn(Status)) -> anyhow::Result<()> {
     log::info!(
         "wifi: no credentials ({}), scanning once",
         crate::config::FILE
@@ -170,18 +265,16 @@ fn scan_once(mut wifi: BlockingWifi<EspWifi<'static>>, set: &dyn Fn(Status)) -> 
     };
     set(Status::NotConfigured { networks });
     wifi.stop()?;
-    loop {
-        std::thread::park();
-    }
+    Ok(())
 }
 
-/// Connects and reconnects forever; SNTP while connected.
-fn stay_connected(
-    mut wifi: BlockingWifi<EspWifi<'static>>,
+/// Connects (up to [`ATTEMPTS`] tries) and waits for SNTP. True if the
+/// clock was synced.
+fn sync_clock(
+    mut wifi: BlockingWifi<EspWifi<'_>>,
     cfg: &WifiConfig,
     set: &dyn Fn(Status),
-    on_time_synced: &dyn Fn(),
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let too_long = |what| anyhow::anyhow!("Wi-Fi {what} too long");
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: cfg.ssid.as_str().try_into().map_err(|_| too_long("SSID"))?,
@@ -198,50 +291,63 @@ fn stay_connected(
         ..Default::default()
     }))?;
     wifi.start()?;
-
     let ssid = cfg.ssid.clone();
-    let mut backoff = BACKOFF_START;
+    let mut attempt = 0;
     loop {
+        attempt += 1;
         set(Status::Connecting { ssid: ssid.clone() });
-        log::info!("wifi: connecting to \"{ssid}\"");
-        if let Err(e) = wifi.connect().and_then(|()| wifi.wait_netif_up()) {
-            log::warn!("wifi: connecting failed: {e}");
-            set(Status::Failed {
-                ssid: ssid.clone(),
-                error: Failure::from(&e),
-            });
-            let _ = wifi.disconnect();
-            std::thread::sleep(backoff);
-            backoff = (backoff * 2).min(BACKOFF_MAX);
-            continue;
-        }
-        backoff = BACKOFF_START;
-        let ip = wifi
-            .wifi()
-            .sta_netif()
-            .get_ip_info()
-            .map(|i| i.ip.to_string())
-            .unwrap_or_default();
-        log::info!("wifi: connected, IP {ip}");
-
-        let sntp = EspSntp::new_default()?;
-        let mut time_synced = false;
-        while wifi.is_connected().unwrap_or(false) {
-            if !time_synced && sntp.get_sync_status() == SyncStatus::Completed {
-                time_synced = true;
-                log::info!("wifi: NTP sync done");
-                on_time_synced();
+        log::info!("wifi: connecting to \"{ssid}\" (attempt {attempt})");
+        match wifi.connect().and_then(|()| wifi.wait_netif_up()) {
+            Ok(()) => break,
+            Err(e) => {
+                log::warn!("wifi: connecting failed: {e}");
+                set(Status::Failed {
+                    ssid: ssid.clone(),
+                    error: Failure::from(&e),
+                });
+                let _ = wifi.disconnect();
+                if attempt >= ATTEMPTS {
+                    let _ = wifi.stop();
+                    anyhow::bail!("no connection to \"{ssid}\"");
+                }
+                std::thread::sleep(ATTEMPT_PAUSE);
             }
-            set(Status::Connected {
-                ssid: ssid.clone(),
-                ip: ip.clone(),
-                rssi: wifi.wifi().driver().get_rssi().ok(),
-                time_synced,
-            });
-            std::thread::sleep(POLL);
         }
-        drop(sntp);
-        log::warn!("wifi: connection lost");
-        let _ = wifi.disconnect();
     }
+    let ip = wifi
+        .wifi()
+        .sta_netif()
+        .get_ip_info()
+        .map(|i| i.ip.to_string())
+        .unwrap_or_default();
+    log::info!("wifi: connected, IP {ip}");
+    set(Status::Connected {
+        ssid: ssid.clone(),
+        ip,
+        rssi: wifi.wifi().driver().get_rssi().ok(),
+    });
+    let sntp = EspSntp::new_default()?;
+    let t = Instant::now();
+    let synced = loop {
+        if sntp.get_sync_status() == SyncStatus::Completed {
+            log::info!("wifi: NTP sync done after {} ms", t.elapsed().as_millis());
+            break true;
+        }
+        if t.elapsed() > NTP_TIMEOUT {
+            log::warn!("wifi: no NTP answer within {} s", NTP_TIMEOUT.as_secs());
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    drop(sntp);
+    let _ = wifi.disconnect();
+    let _ = wifi.stop();
+    if !synced {
+        set(Status::Failed {
+            ssid,
+            error: Failure::Timeout,
+        });
+        anyhow::bail!("no NTP sync");
+    }
+    Ok(true)
 }

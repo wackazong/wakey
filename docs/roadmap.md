@@ -13,7 +13,7 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 1. **Built-in speaker volume:** the alarm's volume curve is the Pebble's; check by ear how loud 60 % is on the built-in speaker (preview without the Pebble) and calibrate it separately if needed.
 2. **Screens:** the sound list on the list layer (as the alarm list) once it can be long (TIDAL); check page switches while audio plays (~130 ms during a preview, measured before the internal RAM fix).
 3. **Light sleep** (below): the chip asleep while the display is, measured step by step.
-4. **Wi-Fi only when needed:** sync at most every 24 h while the display is on, then C6 unpowered (`WLAN_PWR_EN` off).
+4. **Wi-Fi only when needed:** done (sessions every `sync_interval_h`, C6 off in between); open: each session leaks ~2.3 KiB internal RAM (`docs/pitfalls.md`).
 5. FLAC playback (`claxon`; `sounds/` is scanned for WAV/AIFF today).
 
 **V2: TIDAL.** Songs are chosen in the TIDAL app in a playlist ("Wecker"); the device syncs that playlist silently each time the sound page's TIDAL tab opens, shows it with covers (160×160 RGB565, decoded once) and "Zufällige Auswahl" on top, and downloads tracks as FLAC to `sounds/`. Before login the tab shows the login code. An alarm stores `"tidal:<track id>"` or `"tidal:random"` (already parsed; it plays the built-in tone until then). Groundwork: [`spikes/tidal-download`](../spikes/tidal-download) (host tool, working login and download). On the device: HTTP via `esp_idf_svc::http::client`, login code shown on the display, token in the config.
