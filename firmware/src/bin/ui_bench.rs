@@ -95,9 +95,6 @@ impl ListSource for Tracks {
         0.0
     }
     fn prepare_swipe(&mut self, _: usize, _: wakey::ui::list_layer::SwipePart) {}
-    fn open_row(&self) -> Option<usize> {
-        None
-    }
     fn layer_started(&mut self) {}
     fn scroll_ended(&mut self, _: f32) {}
     fn swipe_ended(&mut self, _: usize, _: wakey::ui::list_layer::SwipeEnd) {}
@@ -141,7 +138,6 @@ async fn app(spawner: embassy_executor::Spawner) {
         slop: 12.0,
         background: LIST_BACKGROUND,
         page_draws_still: false,
-        reveal: 0,
     };
     let mut list = ListLayer::new(layout, row_window, Tracks { row });
     list.prerender(&mut rot);

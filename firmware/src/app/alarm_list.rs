@@ -108,7 +108,6 @@ pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
         slop: l.get_slop(),
         background: crate::ui::rgb565(window.global::<Theme>().get_background()),
         page_draws_still: true,
-        reveal: px(l.get_reveal()),
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
     let view = AppWindow::new().expect("alarm row view");
@@ -195,11 +194,6 @@ impl ListSource for Rows {
         }
     }
 
-    fn open_row(&self) -> Option<usize> {
-        self.with_list(|l| l.get_open_row())
-            .and_then(|r| usize::try_from(r).ok())
-    }
-
     fn offset(&self) -> f32 {
         self.with_list(|l| l.get_scroll()).unwrap_or(0.0)
     }
@@ -219,7 +213,6 @@ impl ListSource for Rows {
         let id = self.row(i).map(|r| r.id);
         self.with_list(|l| {
             l.set_layer_active(false);
-            l.set_open_row(if end == SwipeEnd::Open { i as i32 } else { -1 });
             if end == SwipeEnd::Delete
                 && let Some(id) = id
             {

@@ -185,12 +185,18 @@ impl Preview {
         row
     }
 
-    /// Checks that the open row `i` on the page has the same pixels as the
-    /// list layer's last frame of a swipe that left it open: its content
-    /// picture moved left by the delete button's width, the delete button
-    /// picture behind.
-    fn check_open_row(&self, i: usize) {
-        let screen = self.render();
+    /// Saves the screen with row `i` as the firmware's list layer shows it
+    /// swiped `d` px left: its content picture (corners on red) moved left,
+    /// the delete button picture in the gap.
+    fn shot_swipe(&self, name: &str, i: usize, d: usize) {
+        if self
+            .filter
+            .as_ref()
+            .is_some_and(|f| !name.contains(f.as_str()))
+        {
+            return;
+        }
+        let mut screen = self.render();
         let layout = self.ui.global::<AlarmListLayout>();
         let list = self.ui.global::<AlarmList>();
         let px = |v: f32| v.round() as usize;
@@ -199,47 +205,23 @@ impl Preview {
             px(layout.get_y()),
             px(layout.get_width()),
         );
-        let (pitch, d) = (px(layout.get_pitch()), px(layout.get_reveal()));
+        let pitch = px(layout.get_pitch());
         let top = y0 + i * pitch - px(list.get_scroll());
         let alarm = list.get_rows().row_data(i).unwrap();
-        let content = self.render_row(alarm.clone(), 0.0, false, true);
+        let content = self.render_row(alarm.clone(), 0.0, true, true);
         let underlay = self.render_row(alarm, -10_000.0, false, false);
-        // Differences: count, largest step per channel, where.
-        let channels = |p: Rgb565Pixel| [p.0 >> 11, (p.0 >> 5) & 0x3f, p.0 & 0x1f];
-        let (mut n, mut worst, mut xs, mut ys) = (0, 0, (usize::MAX, 0), (usize::MAX, 0));
         for y in 0..pitch {
             for x in 0..w {
-                let want = if x < w - d {
+                screen[(top + y) * W + x0 + x] = if x < w - d {
                     content[y * w + x + d]
                 } else {
                     underlay[y * w + x]
                 };
-                let got = screen[(top + y) * W + x0 + x];
-                if got == want {
-                    continue;
-                }
-                n += 1;
-                let step = channels(got)
-                    .iter()
-                    .zip(channels(want))
-                    .map(|(a, b)| a.abs_diff(b))
-                    .max()
-                    .unwrap();
-                worst = worst.max(step);
-                xs = (xs.0.min(x), xs.1.max(x));
-                ys = (ys.0.min(y), ys.1.max(y));
             }
         }
-        // The edges of the content and the button's corners are
-        // anti-aliased with the row clipped on the page and whole in the
-        // pictures: a step or two per channel, invisible; more is a bug.
-        assert!(
-            worst <= 2,
-            "open row {i}: {n} pixels differ from the layer's swipe, up to {worst} steps, x {xs:?} y {ys:?}"
-        );
-        println!(
-            "         open row {i} matches the list layer's swipe ({n} edge pixels within 2 steps)"
-        );
+        let path = self.out.join(format!("{name}.png"));
+        write_png(&path, &screen);
+        println!("         {}", path.display());
     }
 
     fn shot(&self, name: &str) {
@@ -434,16 +416,8 @@ fn main() {
     p.shot("1-list-switch-held");
     p.window.dispatch_event(WindowEvent::PointerExited);
     p.run(300);
-    // The second row left open by a swipe (the firmware's list layer
-    // swipes, then sets `open-row`): the delete button shows.
-    list.set_open_row(1);
-    p.run(50);
-    p.shot("1-list-swiped");
-    p.check_open_row(1);
-    // Tap elsewhere: closes it.
-    p.press(600.0, 207.0);
-    p.release(600.0, 207.0);
-    p.run(300);
+    // The second row halfway to deleting, as the list layer draws it.
+    p.shot_swipe("1-list-swiped", 1, 500);
     // A press that turns into a scroll, as the firmware hands it over: the
     // list layer takes the touch (the page gets a cancel: pointer left),
     // scrolls, and hands the list back where it stopped.

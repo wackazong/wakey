@@ -1,7 +1,7 @@
 // The alarms, one row each, sorted by time. The one that rings next has
 // its time in amber. Tap a row to edit it, its switch to turn it on or off,
-// swipe it left to delete (a "Löschen" button appears; swiping all the way
-// deletes at once). "+ Neu" adds one.
+// swipe it left past two thirds of the width to delete it (less springs
+// back). "+ Neu" adds one.
 //
 // ┌ ‹ Uhr ──────────────────────────────────────── + Neu ┐
 // │ 06:30  Arbeit                               (  ●) │
@@ -14,15 +14,14 @@
 // (this page then gets a cancel). Mostly vertical: it scrolls the list;
 // mostly sideways on a row: it swipes that row. Either way it copies
 // pre-rendered pictures (`ListRowPage`) by DMA, and when the motion ends
-// it sets `AlarmList.scroll` or `AlarmList.open-row` and this page draws
-// the list again, the same pixels. This page handles what is left on the
-// still list: taps (open, switch, close an open row, its delete button)
-// and the highlight of a held row.
+// it sets `AlarmList.scroll` (or deletes the swiped row) and this page
+// draws the list again, the same pixels. This page handles what is left on
+// the still list: taps (open, switch) and the highlight of a held row.
 //
 // The rows only draw the alarms; none of them depends on the touch state,
 // so a press does not repaint the list. One more row, the "active" one, is
-// drawn over the row being held or left open, with the same alarm plus
-// highlight and offset, and only it repaints.
+// drawn over the row being held, with the same alarm plus highlight, and
+// only it repaints.
 
 import { Theme, Button, BackButton, Switch } from "theme.slint";
 
@@ -31,8 +30,8 @@ import { Theme, Button, BackButton, Switch } from "theme.slint";
 enum Gesture {
     // Down, not moved far enough to tell: a tap on release.
     undecided,
-    // The touch only closed an open row, or moved without the layer taking
-    // it (a list that fits the view): nothing happens on release.
+    // The touch moved without the layer taking it (a list that fits the
+    // view, no row under the finger): nothing happens on release.
     ignore,
 }
 
@@ -49,8 +48,6 @@ export global AlarmListLayout {
     // How far a finger moves before the touch counts as a scroll or a
     // swipe.
     out property <length> slop: 12px;
-    // Width of the delete button behind a swiped row.
-    out property <length> reveal: 220px;
 }
 
 export struct AlarmRow {
@@ -77,9 +74,6 @@ export global AlarmList {
     // The list layer is showing the list (scrolling, or a row being
     // swiped): no touch feedback here.
     in property <bool> layer-active;
-    // The row whose delete button shows, -1 for none: set by the list layer
-    // when a swipe ends, cleared here when a tap closes it.
-    in-out property <int> open-row: -1;
     callback back();
     callback add();
     callback open(int);
@@ -87,16 +81,12 @@ export global AlarmList {
     callback delete(int);
 }
 
-// One alarm. `dx`, `highlighted` are touch feedback (only the active row
-// and the list layer's pictures use them).
+// One alarm. `dx`, `underlay` are for the list layer's swipe pictures,
+// `highlighted` touch feedback (the active row and those pictures).
 component Row inherits Rectangle {
     in property <AlarmRow> alarm;
-    // Width of the delete button behind the row.
-    in property <length> reveal;
     // Horizontal offset of the row content (≤ 0: swiped left).
     in property <length> dx;
-    // Changes of `dx` animate (closing an open row); otherwise it jumps.
-    in property <bool> animate-offset;
     // The delete button's red behind the content even at `dx` 0 (the list
     // layer's picture of a swiped row: its corners show that red).
     in property <bool> underlay;
@@ -119,8 +109,8 @@ component Row inherits Rectangle {
     background: root.dx < 0 || root.underlay ? Theme.danger : Theme.card;
 
     Text {
-        x: parent.width - root.reveal;
-        width: root.reveal;
+        x: parent.width - self.width;
+        width: 220px;
         text: "Löschen";
         font-size: 40px;
         color: Theme.text;
@@ -133,7 +123,6 @@ component Row inherits Rectangle {
         width: parent.width;
         border-radius: 28px;
         background: root.highlighted ? Theme.surface : Theme.card;
-        animate x { duration: root.animate-offset && root.animated ? 180ms : 0ms; easing: ease-out; }
         // Lights up at once, fades out.
         animate background { duration: root.animated && !root.highlighted ? 120ms : 0ms; }
 
@@ -221,43 +210,32 @@ export component AlarmListPage inherits Rectangle {
         clip: true;
 
         property <length> pitch: AlarmListLayout.pitch;
-        property <length> reveal: AlarmListLayout.reveal;
         // A tap this close to a row's right edge toggles its switch.
         property <length> switch-area: 220px;
         property <Gesture> gesture;
         // The row under the finger, -1 for none.
         property <int> touched: -1;
-        // The row drawn as active (lit up, open or animating back), -1 for
-        // none. Set only when there is something to show: changes to the
+        // The row drawn as active (lit up, or its highlight fading), -1
+        // for none. Set only when there is something to show: changes to the
         // hidden row then repaint nothing.
         property <int> active: -1;
         // The finger has rested on the row for `hold-timer` (40 ms): only
         // then it lights up, so a touch that turns into a scroll or swipe
-        // right away changes nothing on the page. Not on the switch (or the
-        // delete button of an open row): a toggle does not light the row up.
+        // right away changes nothing on the page. Not on the switch: a
+        // toggle does not light the row up.
         property <bool> held;
-        // The active row is still animating (closing, highlight fading)
-        // after the finger left; it is drawn until then. Drawing it on top
+        // The active row's highlight is still fading after the finger left; it is drawn until then. Drawing it on top
         // of its row for longer would blend the rounded corners twice.
         property <bool> settling;
         // The held row shows its highlight.
         property <bool> pressing: ta.pressed && self.touched == self.active
             && self.gesture == Gesture.undecided && self.held;
 
-        // The layer shows the rows plain while it moves them: an open row
-        // closes (it would jump when the page takes over again); at the end
-        // of a swipe the layer sets `open-row` again if the row stays open.
+        // The layer shows the rows itself while it moves them.
         property <bool> layer-active: AlarmList.layer-active;
         changed layer-active => {
             if (self.layer-active) {
-                AlarmList.open-row = -1;
                 self.active = -1;
-            }
-        }
-        property <int> open-row: AlarmList.open-row;
-        changed open-row => {
-            if (self.open-row >= 0) {
-                self.active = self.open-row;
             }
         }
 
@@ -271,46 +249,29 @@ export component AlarmListPage inherits Rectangle {
         }
         // No feedback left to show: the active row goes away.
         function release-active() {
-            if (!view.pressing && AlarmList.open-row != view.active) {
+            if (!view.pressing) {
                 view.active = -1;
             }
         }
-        // Keep the active row drawn while it animates back (closing, the
-        // highlight fading).
+        // Keep the active row drawn while its highlight fades.
         function settle() {
             view.settling = true;
             settle-timer.running = true;
             settle-timer.restart();
-        }
-        // Deletes row `i`. The active row is hidden first: the next alarm
-        // moves into its place and must not slide back from the open
-        // offset.
-        function delete(i: int) {
-            AlarmList.open-row = -1;
-            view.active = -1;
-            AlarmList.delete(AlarmList.rows[i].id);
         }
 
         for alarm[i] in AlarmList.rows: Row {
             y: i * view.pitch - AlarmList.scroll;
             width: parent.width;
             alarm: alarm;
-            reveal: view.reveal;
         }
 
         Row {
             visible: view.active >= 0 && view.active < AlarmList.rows.length && !AlarmList.layer-active
-                && (view.pressing || AlarmList.open-row == view.active || view.settling);
+                && (view.pressing || view.settling);
             y: view.active * view.pitch - AlarmList.scroll;
             width: parent.width;
             alarm: AlarmList.rows[view.active];
-            reveal: view.reveal;
-            // Open only for a real row: with none (-1 == -1) the hidden row
-            // sat at the open offset and slid in at the first press.
-            dx: view.active >= 0 && view.active == AlarmList.open-row ? -view.reveal : 0;
-            // Only closing slides (a tap on an open row); a row the layer
-            // left open is shown where it stopped.
-            animate-offset: view.settling;
             highlighted: view.pressing;
             switch-animated: false;
         }
@@ -323,26 +284,15 @@ export component AlarmListPage inherits Rectangle {
                     hold-timer.running = true;
                     hold-timer.restart();
                     view.touched = view.row-at(self.mouse-y);
-                    if (AlarmList.open-row >= 0 && view.touched != AlarmList.open-row) {
-                        // A touch elsewhere only closes the open row.
-                        AlarmList.open-row = -1;
-                        view.gesture = Gesture.ignore;
-                        view.settle();
-                    }
                 } else if (e.kind == PointerEventKind.up) {
                     let i = view.touched;
-                    let toggles = view.gesture == Gesture.undecided && i >= 0 && AlarmList.open-row != i
+                    let toggles = view.gesture == Gesture.undecided && i >= 0
                         && self.mouse-x > self.width - view.switch-area;
-                    // Feedback was shown, or an open row closes: animate it.
-                    // Not after a toggle: the switch slides in the row below.
-                    let animates = !toggles && (view.pressing || (i >= 0 && i == AlarmList.open-row));
+                    // Feedback was shown: let it fade. Not after a toggle:
+                    // the switch slides in the row below.
+                    let animates = !toggles && view.pressing;
                     if (view.gesture == Gesture.undecided && i >= 0) {
-                        if (AlarmList.open-row == i) {
-                            AlarmList.open-row = -1;
-                            if (self.mouse-x > self.width - view.reveal) {
-                                view.delete(i);
-                            }
-                        } else if (toggles) {
+                        if (toggles) {
                             AlarmList.toggle(AlarmList.rows[i].id, !AlarmList.rows[i].enabled);
                         } else {
                             AlarmList.open(AlarmList.rows[i].id);
@@ -392,9 +342,9 @@ export component AlarmListPage inherits Rectangle {
             }
         }
 
-        // Longer than the row's animations (180 ms offset, 120 ms highlight).
+        // Longer than the highlight's fade (120 ms).
         settle-timer := Timer {
-            interval: 200ms;
+            interval: 150ms;
             running: false;
             triggered => {
                 self.running = false;
@@ -414,10 +364,9 @@ export component AlarmListPage inherits Rectangle {
 export component ListRowPage inherits Rectangle {
     in property <AlarmRow> alarm;
     // For the pictures of a swipe (`Row`): content offset, highlight, and
-    // `underlay`: the row on the delete button's red, which on the page
-    // shows around the content's right corners once it is swiped (here
-    // those corners coincide with the row's own, so a square of red goes
-    // behind).
+    // `underlay`: the row on the delete button's red, which shows around
+    // the content's right corners once it is swiped (here those corners
+    // coincide with the row's own, so a square of red goes behind).
     in property <length> dx;
     in property <bool> highlighted;
     in property <bool> underlay;
@@ -436,7 +385,6 @@ export component ListRowPage inherits Rectangle {
         y: 0;
         width: parent.width;
         alarm: root.alarm;
-        reveal: AlarmListLayout.reveal;
         dx: root.dx;
         highlighted: root.highlighted;
         underlay: root.underlay;

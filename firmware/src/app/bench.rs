@@ -2,7 +2,7 @@
 //! `ui-bench`). Ten seconds after boot it opens the alarm list from the
 //! clock page, holds a row (the first press must repaint only that row,
 //! twice: no slide), flings the list, stops a fling with a tap (must not
-//! open the alarm), flings back, presses, swipes and closes a row,
+//! open the alarm), flings back, presses, swipes a row (it springs back),
 //! toggles a switch twice (saved; the state ends as it began), turns the
 //! minute wheel of an alarm (clicks) and goes back, with the per-frame trace (`ui::trace`) on. The gestures go through
 //! the touch queue like real ones. Each step is logged as `bench: <step>`;
@@ -87,11 +87,9 @@ pub async fn run() {
     send(Phase::Move, (FIRST_ROW.0, FIRST_ROW.1 + 30.0)).await;
     Timer::after_millis(100).await;
     send(Phase::Up, (FIRST_ROW.0, FIRST_ROW.1 + 30.0)).await;
+    // Short of the delete threshold: springs back.
     step("swipe row", 1500).await;
     drag(FIRST_ROW, (-300.0, 0.0), 20).await;
-    // A touch elsewhere closes the open row.
-    step("close row", 1500).await;
-    tap(LOWER_LIST).await;
     step("toggle switch", 1500).await;
     tap(FIRST_SWITCH).await;
     step("toggle back", 1500).await;
