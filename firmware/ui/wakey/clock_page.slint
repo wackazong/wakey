@@ -24,10 +24,14 @@ export global Clock {
     // built-in one), no network (Wi-Fi failed or not set up).
     in property <bool> no-speaker;
     in property <bool> no-network;
-    // The sky, top to bottom.
-    in property <color> sky-top: #04060e;
-    in property <color> sky-middle: #080c1a;
-    in property <color> sky-bottom: #0d1426;
+    // The sky at 0, 25, 50, 75 and 100 % of the height.
+    in property <color> sky-top: #0b0520;
+    in property <color> sky-upper: #10072c;
+    in property <color> sky-middle: #1a0b40;
+    in property <color> sky-lower: #2a1260;
+    in property <color> sky-bottom: #45208e;
+    // The horizon is too light for white text: the bottom line is dark.
+    in property <bool> bottom-light;
     // Alarm: 0 idle, 1 ringing, 2 snoozed; snoozes still allowed.
     in property <int> alarm-phase: 0;
     in property <int> snoozes-left: 0;
@@ -44,7 +48,7 @@ export component ClockPage inherits Rectangle {
     width: 1280px;
     height: 720px;
 
-    background: @linear-gradient(180deg, Clock.sky-top 0%, Clock.sky-middle 55%, Clock.sky-bottom 100%);
+    background: @linear-gradient(180deg, Clock.sky-top 0%, Clock.sky-upper 25%, Clock.sky-middle 50%, Clock.sky-lower 75%, Clock.sky-bottom 100%);
 
     property <bool> ringing: Clock.alarm-phase == 1;
     property <color> digits: root.ringing ? Theme.accent : Theme.text;
@@ -117,7 +121,11 @@ export component ClockPage inherits Rectangle {
 
     // Bottom middle: the next alarm. Touching it opens the alarm list (the
     // slide starts at once).
-    property <color> alarm-color: Clock.alarm-phase == 0 ? root.soft : Theme.accent;
+    // Bottom line: white on a dark horizon, dark on a light one.
+    property <color> alarm-color: Clock.bottom-light
+        ? (Clock.alarm-phase == 0 ? Theme.background.with-alpha(0.72) : Theme.accent-dark)
+        : (Clock.alarm-phase == 0 ? root.soft : Theme.accent);
+    property <color> symbol-color: Clock.bottom-light ? Theme.accent-dark : Theme.accent;
     HorizontalLayout {
         x: 0;
         y: parent.height - 104px;
@@ -170,7 +178,7 @@ export component ClockPage inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 40px;
                 height: 40px;
-                color: Theme.accent;
+                color: root.symbol-color;
             }
         }
         if Clock.no-network: Rectangle {
@@ -180,7 +188,7 @@ export component ClockPage inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 40px;
                 height: 40px;
-                color: Theme.accent;
+                color: root.symbol-color;
             }
         }
     }

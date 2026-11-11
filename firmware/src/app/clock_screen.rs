@@ -120,16 +120,28 @@ fn sky_demo(window: &AppWindow) -> Timer {
 fn set_sky(window: &AppWindow, unix: i64) -> f32 {
     let screen = window.global::<Clock>();
     let elevation = sky::sun_elevation(unix, sky::LATITUDE, sky::LONGITUDE);
-    let [top, middle, bottom] =
-        sky::gradient(elevation).map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
-    if screen.get_sky_top() != top {
-        screen.set_sky_top(top);
+    let rising = sky::sun_rising(unix, sky::LATITUDE, sky::LONGITUDE);
+    let gradient = sky::gradient(elevation, rising);
+    let [top, upper, middle, lower, bottom] =
+        gradient.map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
+    // Each stop only when it changed (a change repaints the screen).
+    macro_rules! set_changed {
+        ($($get:ident, $set:ident = $v:expr;)*) => {$(
+            if screen.$get() != $v {
+                screen.$set($v);
+            }
+        )*};
     }
-    if screen.get_sky_middle() != middle {
-        screen.set_sky_middle(middle);
+    set_changed! {
+        get_sky_top, set_sky_top = top;
+        get_sky_upper, set_sky_upper = upper;
+        get_sky_middle, set_sky_middle = middle;
+        get_sky_lower, set_sky_lower = lower;
+        get_sky_bottom, set_sky_bottom = bottom;
     }
-    if screen.get_sky_bottom() != bottom {
-        screen.set_sky_bottom(bottom);
+    let light = sky::bottom_is_light(&gradient);
+    if screen.get_bottom_light() != light {
+        screen.set_bottom_light(light);
     }
     elevation
 }

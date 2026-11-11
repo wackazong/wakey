@@ -1,9 +1,12 @@
 //! The clock face's sky: a vertical gradient that follows the sun through
 //! the day. [`sun_elevation`] gives the sun's height above the horizon for
-//! a time and place; [`gradient`] turns that height into three colours
-//! (top, middle, bottom of the screen): deep blue at night, indigo and
-//! violet in twilight, warm light low down around sunrise and sunset, blue
-//! by day.
+//! a time and place; [`gradient`] turns that height into five colours (top
+//! to bottom of the screen, evenly spaced): purple at night, indigo and
+//! violet in twilight, a glowing orange horizon around sunrise and sunset,
+//! saturated blue by day. Mornings and evenings differ a little
+//! ([`sun_rising`]). The colours follow the user's reference pictures
+//! (macOS "Solar Gradients", sampled at five heights per sun position),
+//! with the night moved towards purple.
 
 /// Zurich, the place the clock's time zone belongs to (degrees, east and
 /// north positive).
@@ -14,8 +17,8 @@ pub const LONGITUDE: f32 = 8.54;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
-/// Top, middle and bottom colour of the sky.
-pub type Gradient = [Rgb; 3];
+/// The sky's colours at 0, 25, 50, 75 and 100 % of the screen's height.
+pub type Gradient = [Rgb; 5];
 
 /// The sun's elevation in degrees (negative: below the horizon) at Unix
 /// time `unix` seen from `lat`/`lon`, accurate to a fraction of a degree
@@ -56,70 +59,114 @@ pub fn sun_elevation(unix: i64, lat: f32, lon: f32) -> f32 {
     (90.0 - cos_zenith.clamp(-1.0, 1.0).acos().to_degrees()) as f32
 }
 
-/// Sky colours by sun elevation (degrees), interpolated in between.
-const KEYS: [(f32, Gradient); 11] = [
-    // Night.
-    (-18.0, [Rgb(4, 6, 14), Rgb(8, 12, 26), Rgb(13, 20, 38)]),
-    // Astronomical and nautical twilight: the blue comes back.
-    (-12.0, [Rgb(6, 10, 30), Rgb(14, 22, 50), Rgb(26, 32, 66)]),
-    (-8.0, [Rgb(10, 20, 48), Rgb(28, 34, 80), Rgb(58, 44, 92)]),
-    // Civil twilight: violet, the horizon warms.
-    (-4.0, [Rgb(18, 34, 76), Rgb(56, 56, 112), Rgb(120, 72, 106)]),
+/// True while the sun climbs (morning).
+pub fn sun_rising(unix: i64, lat: f32, lon: f32) -> bool {
+    sun_elevation(unix + 300, lat, lon) > sun_elevation(unix, lat, lon)
+}
+
+const fn hex(c: u32) -> Rgb {
+    Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+}
+
+const fn sky(c: [u32; 5]) -> Gradient {
+    [hex(c[0]), hex(c[1]), hex(c[2]), hex(c[3]), hex(c[4])]
+}
+
+/// Night, below the deepest twilight key: purple.
+const NIGHT: Gradient = sky([0x0b0520, 0x10072c, 0x1a0b40, 0x2a1260, 0x45208e]);
+
+/// Sky colours by sun elevation (degrees) while it rises, interpolated in
+/// between.
+const RISING: [(f32, Gradient); 9] = [
+    (-30.0, NIGHT),
     (
-        -1.0,
-        [Rgb(30, 56, 108), Rgb(104, 88, 138), Rgb(204, 118, 96)],
-    ),
-    // Sunrise, sunset.
-    (
-        2.0,
-        [Rgb(42, 82, 142), Rgb(138, 124, 156), Rgb(232, 158, 104)],
+        -17.0,
+        sky([0x120d34, 0x181240, 0x221a56, 0x36287c, 0x6a58a6]),
     ),
     (
-        6.0,
-        [Rgb(50, 98, 162), Rgb(122, 152, 192), Rgb(226, 186, 148)],
+        -11.0,
+        sky([0x1a1840, 0x221f4e, 0x302a64, 0x4c4088, 0x9a7a8c]),
     ),
-    // Day.
+    (
+        -5.0,
+        sky([0x27263e, 0x2f2e48, 0x403d59, 0x675a6a, 0xc98638]),
+    ),
+    (0.0, sky([0x3e2c2f, 0x4b3435, 0x63423a, 0x9a5d30, 0xfe6b00])),
+    (6.0, sky([0x3a3b66, 0x464672, 0x5e5a82, 0x957e81, 0xfda31e])),
     (
         12.0,
-        [Rgb(50, 108, 176), Rgb(104, 150, 202), Rgb(178, 202, 220)],
+        sky([0x344699, 0x3f52ab, 0x5466c0, 0x858cc9, 0xfcc26d]),
     ),
     (
-        25.0,
-        [Rgb(44, 104, 180), Rgb(88, 144, 204), Rgb(154, 192, 226)],
+        18.0,
+        sky([0x3753c4, 0x405fd5, 0x5373ed, 0x7f9af7, 0xf2d4a8]),
     ),
     (
-        45.0,
-        [Rgb(40, 98, 176), Rgb(78, 134, 200), Rgb(138, 182, 226)],
-    ),
-    (
-        90.0,
-        [Rgb(38, 94, 172), Rgb(74, 128, 196), Rgb(132, 176, 222)],
+        60.0,
+        sky([0x4378fe, 0x467bfe, 0x5081fe, 0x6992fe, 0xbdbbd6]),
     ),
 ];
 
-/// The sky at sun elevation `elevation` (degrees).
-pub fn gradient(elevation: f32) -> Gradient {
-    let (first, last) = (KEYS[0], KEYS[KEYS.len() - 1]);
+/// The same while it sets: redder, more violet.
+const SETTING: [(f32, Gradient); 9] = [
+    (-30.0, NIGHT),
+    (
+        -17.0,
+        sky([0x110f34, 0x171541, 0x201e56, 0x32307c, 0x6660a6]),
+    ),
+    (
+        -11.0,
+        sky([0x1a1a42, 0x211f4e, 0x2e2e64, 0x48428a, 0x957a92]),
+    ),
+    (
+        -5.0,
+        sky([0x262241, 0x2e294e, 0x3f365f, 0x665174, 0xc67a40]),
+    ),
+    (0.0, sky([0x412839, 0x4e2f40, 0x663a45, 0x9a4e38, 0xfd5b00])),
+    (6.0, sky([0x383672, 0x444080, 0x5c5291, 0x947695, 0xfe992c])),
+    (
+        12.0,
+        sky([0x34439f, 0x3e4eb0, 0x5361c6, 0x8486d0, 0xfabc74]),
+    ),
+    (
+        18.0,
+        sky([0x3753c3, 0x405fd5, 0x5373ec, 0x7f9af7, 0xf2d4a8]),
+    ),
+    (
+        60.0,
+        sky([0x4378fe, 0x467bfe, 0x5081fe, 0x6992fe, 0xbdbbd6]),
+    ),
+];
+
+/// The sky at sun elevation `elevation` (degrees), rising or setting.
+pub fn gradient(elevation: f32, rising: bool) -> Gradient {
+    let keys = if rising { &RISING } else { &SETTING };
+    let (first, last) = (keys[0], keys[keys.len() - 1]);
     if elevation <= first.0 {
         return first.1;
     }
     if elevation >= last.0 {
         return last.1;
     }
-    let i = KEYS
+    let i = keys
         .iter()
         .position(|k| k.0 > elevation)
-        .unwrap_or(KEYS.len() - 1);
-    let ((e0, a), (e1, b)) = (KEYS[i - 1], KEYS[i]);
-    let t = (elevation - e0) / (e1 - e0);
-    let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
-    core::array::from_fn(|k| {
-        Rgb(
-            mix(a[k].0, b[k].0),
-            mix(a[k].1, b[k].1),
-            mix(a[k].2, b[k].2),
-        )
-    })
+        .unwrap_or(keys.len() - 1);
+    let ((e0, a), (e1, b)) = (keys[i - 1], keys[i]);
+    mix(a, b, (elevation - e0) / (e1 - e0))
+}
+
+fn mix(a: Gradient, b: Gradient, t: f32) -> Gradient {
+    let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+    core::array::from_fn(|k| Rgb(m(a[k].0, b[k].0), m(a[k].1, b[k].1), m(a[k].2, b[k].2)))
+}
+
+/// True if text near the bottom (85–95 % of the height: the clock's alarm
+/// line) should be dark: the horizon is too light there for white text.
+pub fn bottom_is_light(g: &Gradient) -> bool {
+    // 90 %: 60 % of the way from the 75 % stop to the bottom.
+    let Rgb(r, gr, b) = mix([g[3]; 5], [g[4]; 5], 0.6)[0];
+    0.2126 * f32::from(r) + 0.7152 * f32::from(gr) + 0.0722 * f32::from(b) > 150.0
 }
 
 #[cfg(test)]
@@ -153,16 +200,26 @@ mod tests {
         assert!(at(unix(2026, 6, 21, 23, 25)) < -18.0);
         let sunrise = at(unix(2026, 6, 21, 3, 30));
         assert!(sunrise.abs() < 1.5, "{sunrise}");
+        assert!(sun_rising(unix(2026, 6, 21, 6, 0), LATITUDE, LONGITUDE));
+        assert!(!sun_rising(unix(2026, 6, 21, 17, 0), LATITUDE, LONGITUDE));
     }
 
     #[test]
-    fn gradient_ends_and_middle() {
-        assert_eq!(gradient(-40.0), KEYS[0].1);
-        assert_eq!(gradient(95.0), KEYS[KEYS.len() - 1].1);
-        assert_eq!(gradient(2.0), KEYS[5].1);
+    fn gradient_keys_and_between() {
+        assert_eq!(gradient(-70.0, true), NIGHT);
+        assert_eq!(gradient(80.0, false), SETTING[SETTING.len() - 1].1);
+        assert_eq!(gradient(0.0, true), RISING[4].1);
+        assert_eq!(gradient(0.0, false), SETTING[4].1);
         // Halfway between two keys, each channel halfway.
-        let g = gradient(-10.0);
-        let (a, b) = (KEYS[1].1[0], KEYS[2].1[0]);
-        assert_eq!(g[0].2, ((u16::from(a.2) + u16::from(b.2)) / 2) as u8);
+        let g = gradient(-8.0, true);
+        let (a, b) = (RISING[2].1[4], RISING[3].1[4]);
+        assert_eq!(g[4].0, (u16::from(a.0) + u16::from(b.0)).div_ceil(2) as u8);
+    }
+
+    #[test]
+    fn dark_text_only_on_a_light_horizon() {
+        assert!(!bottom_is_light(&NIGHT));
+        assert!(!bottom_is_light(&gradient(-11.0, false)));
+        assert!(bottom_is_light(&gradient(18.0, true)));
     }
 }
