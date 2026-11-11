@@ -25,7 +25,7 @@ use wakey_core::tone;
 
 const SAMPLE_RATE: u32 = 48_000;
 /// Peak loudness of a single click, 0–1 of full scale.
-const AMPLITUDE: f32 = 0.5;
+const AMPLITUDE: f32 = 0.25;
 /// The amplifier goes off after this long without a click or a wake.
 const AMP_OFF_AFTER: Duration = Duration::from_secs(8);
 /// Time the amplifier gets to start before the first click.
