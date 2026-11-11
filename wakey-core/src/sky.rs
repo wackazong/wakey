@@ -1,12 +1,13 @@
 //! The clock face's sky: a vertical gradient that follows the sun through
 //! the day. [`sun_elevation`] gives the sun's height above the horizon for
 //! a time and place; [`gradient`] turns that height into five colours (top
-//! to bottom of the screen, evenly spaced): purple at night, indigo and
-//! violet in twilight, a glowing orange horizon around sunrise and sunset,
-//! saturated blue by day. Mornings and evenings differ a little
-//! ([`sun_rising`]). The colours follow the user's reference pictures
-//! (macOS "Solar Gradients", sampled at five heights per sun position),
-//! with the night moved towards purple.
+//! to bottom of the screen, evenly spaced): nearly black and purple at
+//! night, plum and magenta in twilight, a glowing orange horizon around
+//! sunrise and sunset, saturated blue by day. Mornings and evenings differ
+//! a little ([`sun_rising`]). The daylight colours follow the user's
+//! reference pictures (macOS "Solar Gradients", sampled at five heights per
+//! sun position); night and twilight are nearly black and plum instead of
+//! their blue.
 
 /// Zurich, the place the clock's time zone belongs to (degrees, east and
 /// north positive).
@@ -72,8 +73,9 @@ const fn sky(c: [u32; 5]) -> Gradient {
     [hex(c[0]), hex(c[1]), hex(c[2]), hex(c[3]), hex(c[4])]
 }
 
-/// Night, below the deepest twilight key: purple.
-const NIGHT: Gradient = sky([0x0b0520, 0x10072c, 0x1a0b40, 0x2a1260, 0x45208e]);
+/// Night, below the deepest twilight key: nearly black, a dark purple
+/// (more red than blue, or the panel shows it as blue) towards the bottom.
+const NIGHT: Gradient = sky([0x030106, 0x07030c, 0x0e0516, 0x1a0a26, 0x2c1038]);
 
 /// Sky colours by sun elevation (degrees) while it rises, interpolated in
 /// between.
@@ -81,15 +83,15 @@ const RISING: [(f32, Gradient); 9] = [
     (-30.0, NIGHT),
     (
         -17.0,
-        sky([0x120d34, 0x181240, 0x221a56, 0x36287c, 0x6a58a6]),
+        sky([0x06030c, 0x0c0616, 0x160a24, 0x281238, 0x461c52]),
     ),
     (
         -11.0,
-        sky([0x1a1840, 0x221f4e, 0x302a64, 0x4c4088, 0x9a7a8c]),
+        sky([0x0e0718, 0x170c26, 0x26133a, 0x421e56, 0x7a3266]),
     ),
     (
         -5.0,
-        sky([0x27263e, 0x2f2e48, 0x403d59, 0x675a6a, 0xc98638]),
+        sky([0x221630, 0x2c1c3c, 0x3e2850, 0x6a3c62, 0xc8703e]),
     ),
     (0.0, sky([0x3e2c2f, 0x4b3435, 0x63423a, 0x9a5d30, 0xfe6b00])),
     (6.0, sky([0x3a3b66, 0x464672, 0x5e5a82, 0x957e81, 0xfda31e])),
@@ -112,15 +114,15 @@ const SETTING: [(f32, Gradient); 9] = [
     (-30.0, NIGHT),
     (
         -17.0,
-        sky([0x110f34, 0x171541, 0x201e56, 0x32307c, 0x6660a6]),
+        sky([0x07030c, 0x0d0616, 0x180a26, 0x2c123a, 0x4c1c50]),
     ),
     (
         -11.0,
-        sky([0x1a1a42, 0x211f4e, 0x2e2e64, 0x48428a, 0x957a92]),
+        sky([0x10071a, 0x1a0c28, 0x2a123a, 0x481c52, 0x84305a]),
     ),
     (
         -5.0,
-        sky([0x262241, 0x2e294e, 0x3f365f, 0x665174, 0xc67a40]),
+        sky([0x261430, 0x301a3c, 0x44244e, 0x72365a, 0xcc6438]),
     ),
     (0.0, sky([0x412839, 0x4e2f40, 0x663a45, 0x9a4e38, 0xfd5b00])),
     (6.0, sky([0x383672, 0x444080, 0x5c5291, 0x947695, 0xfe992c])),
