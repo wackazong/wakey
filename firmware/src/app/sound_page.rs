@@ -3,7 +3,7 @@
 //! preview on the speaker. TIDAL is a placeholder until it is set up.
 
 use super::screens::{AppWindow, SoundPicker, SoundRow};
-use super::{Ctx, PAGE_ALARM, PAGE_SOUND, alarm_page};
+use super::{Ctx, PAGE_ALARM, PAGE_SOUND, alarm_page, show_page};
 use crate::sounds;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::rc::Rc;
@@ -37,7 +37,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     picker.set_fade(fade);
     picker.set_previewing(false);
     fill_rows(window, ctx);
-    window.set_page(PAGE_SOUND);
+    show_page(window, PAGE_SOUND);
 }
 
 fn fill_rows(window: &AppWindow, ctx: &Ctx) {
@@ -80,7 +80,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     picker.on_back(ctx.with(|window, ctx| {
         ctx.alarm.borrow_mut().stop_preview();
         alarm_page::fill(window, ctx);
-        window.set_page(PAGE_ALARM);
+        show_page(window, PAGE_ALARM);
     }));
     picker.on_select_tab(ctx.with_arg(|window, ctx, tab: i32| {
         window.global::<SoundPicker>().set_tab(tab);

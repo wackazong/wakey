@@ -6,7 +6,7 @@
 
 use super::alarm::AlarmClock;
 use super::screens::{AlarmEditor, AppWindow};
-use super::{Ctx, PAGE_ALARM, PAGE_LIST, alarm_list, name_page, sound_page};
+use super::{Ctx, PAGE_ALARM, PAGE_LIST, alarm_list, name_page, show_page, sound_page};
 use crate::{clock, sounds};
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::rc::Rc;
@@ -25,7 +25,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
     editor.set_error("".into());
     *ctx.draft.borrow_mut() = cfg;
     fill(window, ctx);
-    window.set_page(PAGE_ALARM);
+    show_page(window, PAGE_ALARM);
 }
 
 /// Everything derived from the draft: name, sound, volume, "Klingelt in".
@@ -65,14 +65,14 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     }));
     editor.on_edit_name(ctx.with(name_page::open));
     editor.on_open_sound(ctx.with(sound_page::open));
-    editor.on_cancel(ctx.with(|window, _| window.set_page(PAGE_LIST)));
+    editor.on_cancel(ctx.with(|window, _| show_page(window, PAGE_LIST)));
     editor.on_save(ctx.with(|window, ctx| {
         let cfg = ctx.draft.borrow().clone();
         let result = ctx.alarm.borrow_mut().save(cfg);
         match result {
             Ok(()) => {
                 alarm_list::refresh(window, &ctx.alarm.borrow());
-                window.set_page(PAGE_LIST);
+                show_page(window, PAGE_LIST);
             }
             Err(e) => {
                 log::error!("alarm page: saving: {e}");

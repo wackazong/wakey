@@ -30,7 +30,8 @@ enum Gesture {
     undecided,
     // Swiping the touched row sideways.
     swipe,
-    // The touch only closed an open row.
+    // The touch only closed an open row, or dragged a list that fits the
+    // view: nothing happens on release.
     ignore,
 }
 
@@ -370,6 +371,11 @@ export component AlarmListPage inherits Rectangle {
                         && Math.abs(dx) > AlarmListLayout.slop && Math.abs(dx) > Math.abs(dy)) {
                     view.gesture = Gesture.swipe;
                     view.active = view.touched;
+                } else if (view.gesture == Gesture.undecided
+                        && Math.abs(dy) > AlarmListLayout.slop && Math.abs(dy) >= Math.abs(dx)) {
+                    // A vertical drag the layer did not take (the list fits
+                    // the view): neither a scroll nor a tap.
+                    view.gesture = Gesture.ignore;
                 }
                 if (view.gesture == Gesture.swipe) {
                     view.swipe-dx = Math.min(0px, (view.open-row == view.touched ? -view.reveal : 0px) + dx);

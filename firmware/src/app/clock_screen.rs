@@ -6,6 +6,7 @@
 
 use super::alarm::{AlarmClock, View};
 use super::screens::{AppWindow, Clock};
+use super::{PAGE_CLOCK, show_page};
 use crate::audio::uac::UsbAudio;
 use crate::clock;
 use crate::net::{Failure, Status, Wifi};
@@ -99,8 +100,8 @@ fn update(window: &AppWindow, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmCloc
     set_text(screen.get_alarm(), alarm_line(&view, &t), |v| {
         screen.set_alarm(v)
     });
-    if matches!(view, View::Ringing { .. }) && window.get_page() != super::PAGE_CLOCK {
-        window.set_page(super::PAGE_CLOCK);
+    if matches!(view, View::Ringing { .. }) && window.get_page() != PAGE_CLOCK {
+        show_page(window, PAGE_CLOCK);
     }
     let (phase, snoozes_left) = match view {
         View::Idle { .. } => (0, 0),

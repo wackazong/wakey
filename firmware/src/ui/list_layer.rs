@@ -21,7 +21,8 @@
 //! **Touch.** The layer sees every touch event first:
 //! - On the still list, events go to Slint until the finger has moved more
 //!   than [`Layout::slop`]. Mostly vertical: the layer takes the touch
-//!   ([`Route::TakeOver`], Slint gets a cancel) and scrolls with it.
+//!   ([`Route::TakeOver`], Slint gets a cancel) and scrolls with it, unless
+//!   the list fits the view (then nothing scrolls).
 //!   Mostly sideways: the touch stays Slint's (a swipe). This is the same
 //!   rule the page uses to tell swipes from scrolls.
 //! - On the moving list a touch stops it and stays the layer's: lifting
@@ -451,7 +452,11 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
             }
             (Phase::Move, Touch::Pending(x0, y0)) => {
                 let (dx, dy) = ((ev.x - x0).abs(), (ev.y - y0).abs());
-                if dy > self.layout.slop && dy >= dx {
+                if dy > self.layout.slop && dy >= dx && self.content_h() <= self.layout.height {
+                    // Nothing to scroll: the page ignores the drag.
+                    self.touch = Touch::Slint;
+                    Route::Slint
+                } else if dy > self.layout.slop && dy >= dx {
                     self.start_scroll(y, at);
                     self.touch = Touch::Scroll;
                     Route::TakeOver

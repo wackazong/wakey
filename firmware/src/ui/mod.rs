@@ -10,6 +10,7 @@
 //!   extension point.
 //! - [`list_layer`]: a scrolling list composed by DMA (a `FrameHook`).
 //! - [`input`]: touch polling → landscape pointer events.
+//! - [`transition`]: page changes as slides, composed by the 2D-DMA.
 //! - [`stats`]: frame statistics; `trace`: a per-frame log for performance
 //!   work (feature `ui-bench`).
 
@@ -20,6 +21,7 @@ pub mod render_loop;
 pub mod stats;
 #[cfg(feature = "ui-bench")]
 pub mod trace;
+pub mod transition;
 
 use crate::display;
 

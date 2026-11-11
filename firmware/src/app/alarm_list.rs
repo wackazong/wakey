@@ -8,7 +8,7 @@
 
 use super::alarm::AlarmClock;
 use super::screens::{AlarmList, AlarmListLayout, AlarmRow, AppWindow, Clock, Theme};
-use super::{Ctx, PAGE_CLOCK, PAGE_LIST, PAGE_LIST_ROW, alarm_page};
+use super::{Ctx, PAGE_CLOCK, PAGE_LIST, PAGE_LIST_ROW, alarm_page, show_page};
 use crate::ui::list_layer::{Layout, ListLayer, ListSource};
 use crate::ui::platform;
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
@@ -64,9 +64,9 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         .on_open_alarm(ctx.with(|window, ctx| {
             refresh(window, &ctx.alarm.borrow());
             window.global::<AlarmList>().set_scroll(0.0);
-            window.set_page(PAGE_LIST);
+            show_page(window, PAGE_LIST);
         }));
-    list.on_back(ctx.with(|window, _| window.set_page(PAGE_CLOCK)));
+    list.on_back(ctx.with(|window, _| show_page(window, PAGE_CLOCK)));
     list.on_add(ctx.with(|window, ctx| {
         alarm_page::open(window, ctx, AlarmConfig::default());
     }));

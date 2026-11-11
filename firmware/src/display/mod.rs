@@ -372,6 +372,12 @@ impl Display {
         unsafe { core::slice::from_raw_parts_mut(self.fbs[back], PIXELS) }
     }
 
+    /// The buffer on screen (or about to be, after a flip), for DMA reads
+    /// only: the CPU must not write it.
+    pub fn front_buffer(&self) -> *mut u16 {
+        self.fbs[self.front]
+    }
+
     /// Shows the back buffer from the next frame on. `rows` are the panel
     /// rows (native orientation) that changed since this buffer was last
     /// shown; only their cache lines are written back to PSRAM.

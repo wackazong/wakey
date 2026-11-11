@@ -5,8 +5,8 @@
 // │      05   44         │ Name                  Arbeit │
 // │    [ 06 : 45 ]       │ Tage                         │
 // │      07   46         │ (Mo)(Di)(Mi)(Do)(Fr)(Sa)(So) │
-// │                      │ Klang           Morgenlicht › │
-// │ Klingelt in 9 Std.   │ Lautstärke         ▮▮▮ · 10 s › │
+// │                      │ Klang          Morgenlicht   │
+// │ Klingelt in 9 Std.   │              ▮▮▮  < 10 s   › │
 // └───────────────────────────────────────────────────────┘
 
 import { Theme, Button, Chip, Icon, VolumeBars } from "theme.slint";
@@ -100,17 +100,20 @@ export component AlarmPage inherits Rectangle {
         clicked => { AlarmEditor.save(); }
     }
 
-    // Time.
+    // Time: two wheels and the colon, centred in the left column.
+    property <length> time-x: 40px;
+    property <length> time-width: 440px;
+    property <length> wheels-x: self.time-x + (self.time-width - 2 * 150px - 40px) / 2;
     Rectangle {
-        x: 64px;
+        x: root.time-x;
         y: 308px;
-        width: 520px;
+        width: root.time-width;
         height: 88px;
         border-radius: 22px;
         background: Theme.surface;
     }
     Wheel {
-        x: 154px;
+        x: root.wheels-x;
         y: 132px;
         count: 24;
         value <=> AlarmEditor.hour;
@@ -118,7 +121,7 @@ export component AlarmPage inherits Rectangle {
         edited => { AlarmEditor.edited(); }
     }
     Text {
-        x: 304px;
+        x: root.wheels-x + 150px;
         y: 308px;
         width: 40px;
         height: 88px;
@@ -130,7 +133,7 @@ export component AlarmPage inherits Rectangle {
         vertical-alignment: center;
     }
     Wheel {
-        x: 344px;
+        x: root.wheels-x + 190px;
         y: 132px;
         count: 60;
         value <=> AlarmEditor.minute;
@@ -138,9 +141,9 @@ export component AlarmPage inherits Rectangle {
         edited => { AlarmEditor.edited(); }
     }
     Text {
-        x: 64px;
+        x: root.time-x;
         y: 600px;
-        width: 520px;
+        width: root.time-width;
         height: 48px;
         text: AlarmEditor.error != "" ? AlarmEditor.error
             : !AlarmEditor.any-day ? "Mindestens einen Tag wählen"
@@ -151,11 +154,11 @@ export component AlarmPage inherits Rectangle {
         vertical-alignment: center;
     }
 
-    // Settings card.
+    // Settings card: the rest of the width.
     Rectangle {
-        x: 640px;
+        x: root.time-x + root.time-width + 40px;
         y: 132px;
-        width: 616px;
+        width: root.width - self.x - 24px;
         height: 556px;
         border-radius: 28px;
         background: Theme.card;
@@ -184,9 +187,11 @@ export component AlarmPage inherits Rectangle {
             color: Theme.text;
             vertical-alignment: center;
         }
+        // Seven chips across the card, 12 px apart.
         for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
-            x: 24px + i * 82px;
+            x: 24px + i * (self.width + 12px);
             y: 192px;
+            width: (parent.width - 48px - 6 * 12px) / 7;
             text: name;
             on: AlarmEditor.days[i];
             toggled => {
@@ -195,36 +200,50 @@ export component AlarmPage inherits Rectangle {
             }
         }
 
+        // Sound, volume and fade-in: one row, one tap (the sound page
+        // sets all three).
         CardRow {
-            y: 300px;
+            y: 340px;
+            height: 160px;
             label: "Klang";
             clicked => { AlarmEditor.open-sound(); }
             Text {
                 x: 200px;
+                y: 24px;
                 width: parent.width - 200px - 80px;
+                height: 56px;
                 text: AlarmEditor.sound;
                 font-size: 40px;
-                color: Theme.text-dim;
+                color: Theme.text;
+                overflow: elide;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
-        }
-        CardRow {
-            y: 420px;
-            label: "Lautstärke";
-            clicked => { AlarmEditor.open-sound(); }
             HorizontalLayout {
                 x: 200px;
+                y: 88px;
                 width: parent.width - 200px - 80px;
+                height: 48px;
                 alignment: end;
-                spacing: 12px;
+                spacing: 16px;
                 VolumeBars {
                     level: AlarmEditor.volume-bars;
-                    y: (parent.height - self.height) / 2 + 2px;
+                    y: (parent.height - self.height) / 2;
+                }
+                Rectangle { width: 8px; }
+                Rectangle {
+                    width: 36px;
+                    Icon {
+                        kind: 9;
+                        y: (parent.height - self.height) / 2;
+                        width: 36px;
+                        height: 36px;
+                        color: Theme.text-dim;
+                    }
                 }
                 Text {
-                    text: "· " + AlarmEditor.fade;
-                    font-size: 40px;
+                    text: AlarmEditor.fade;
+                    font-size: 30px;
                     color: Theme.text-dim;
                     vertical-alignment: center;
                 }

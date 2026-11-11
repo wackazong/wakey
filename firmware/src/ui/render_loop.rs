@@ -106,6 +106,7 @@ pub async fn run(
     mut hook: Option<&mut dyn FrameHook>,
 ) -> ! {
     let mut stats = FrameStats::new("slint/ppa");
+    let mut transitions = super::transition::Transitions::new();
     // An event that woke the idle loop, handled in the next iteration.
     let mut woken_by: Option<TouchEvent> = None;
     // Slint renders into the two frame buffers in turn and repaints only
@@ -139,6 +140,18 @@ pub async fn run(
         }
         stage(2);
         slint::platform::update_timers_and_animations();
+        // A page change requested during the touch handling above: shown
+        // as a slide, which also renders the new page into both buffers.
+        if let Some(direction) = super::transition::take() {
+            stage(4);
+            transitions.run(direction, &window, &mut display, rot).await;
+            // Slint drew the new page once and believes one buffer holds
+            // it; both do, but its next render repaints that region again
+            // (it assumes the buffers alternate). Do that now, while
+            // nothing moves, not at the first touch.
+            other_buffer_stale = true;
+            continue;
+        }
         let hook_active = hook.as_mut().is_some_and(|h| h.active());
         let catching_up = other_buffer_stale;
         if catching_up {

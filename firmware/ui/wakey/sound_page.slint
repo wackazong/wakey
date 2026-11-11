@@ -83,10 +83,15 @@ export component SoundPage inherits Rectangle {
         clicked => { SoundPicker.back(); }
     }
 
+    // The list takes what the settings card leaves: the card is as wide as
+    // the four fade-in pills (4 × 104 + 3 × 12) plus its margins.
+    property <length> card-width: 4 * 104px + 3 * 12px + 2 * 32px;
+    property <length> list-width: self.width - 40px - 40px - 24px - self.card-width;
+
     Segment {
         x: 40px;
         y: 132px;
-        width: 600px;
+        width: root.list-width;
         items: ["Datei", "TIDAL"];
         selected: SoundPicker.tab;
         chosen(i) => { SoundPicker.select-tab(i); }
@@ -95,7 +100,7 @@ export component SoundPage inherits Rectangle {
     Rectangle {
         x: 40px;
         y: 228px;
-        width: 600px;
+        width: root.list-width;
         height: 460px;
         border-radius: 28px;
         clip: true;
@@ -163,9 +168,9 @@ export component SoundPage inherits Rectangle {
     }
 
     Rectangle {
-        x: 680px;
+        x: root.width - 24px - root.card-width;
         y: 132px;
-        width: 576px;
+        width: root.card-width;
         height: 556px;
         border-radius: 28px;
         background: Theme.card;
@@ -177,17 +182,6 @@ export component SoundPage inherits Rectangle {
             text: "Lautstärke";
             font-size: 40px;
             color: Theme.text;
-            vertical-alignment: center;
-        }
-        Text {
-            x: parent.width - 32px - 200px;
-            y: 24px;
-            width: 200px;
-            height: 48px;
-            text: "\{SoundPicker.volume} %";
-            font-size: 40px;
-            color: Theme.text-dim;
-            horizontal-alignment: right;
             vertical-alignment: center;
         }
         Slider {

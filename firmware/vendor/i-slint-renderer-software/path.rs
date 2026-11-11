@@ -57,6 +57,47 @@ pub fn convert_path_data_to_zeno(
     commands
 }
 
+/// The path's coverage (0–255) over `width × height`, row by row.
+///
+/// wakey patch: shared with the line-by-line renderer, which draws the
+/// mask as an alpha map (see `PrepareScene::process_path_mask` in lib.rs).
+pub fn mask(commands: &[Command], width: usize, height: usize, style: zeno::Style) -> Vec<u8> {
+    let mut mask = vec![0u8; width * height];
+    Mask::new(commands)
+        .size(width as u32, height as u32)
+        .style(style)
+        .render_into(&mut mask, None);
+    mask
+}
+
+/// The style of a fill (non-zero winding).
+pub fn fill_style() -> zeno::Style<'static> {
+    zeno::Style::Fill(Fill::NonZero)
+}
+
+/// The style of a stroke.
+pub fn stroke_style(
+    stroke_width: f32,
+    stroke_line_cap: i_slint_core::items::LineCap,
+    stroke_line_join: i_slint_core::items::LineJoin,
+    stroke_miter_limit: f32,
+) -> zeno::Style<'static> {
+    let mut stroke = Stroke::new(stroke_width);
+    stroke
+        .cap(match stroke_line_cap {
+            i_slint_core::items::LineCap::Round => Cap::Round,
+            i_slint_core::items::LineCap::Square => Cap::Square,
+            i_slint_core::items::LineCap::Butt | _ => Cap::Butt,
+        })
+        .join(match stroke_line_join {
+            i_slint_core::items::LineJoin::Round => Join::Round,
+            i_slint_core::items::LineJoin::Bevel => Join::Bevel,
+            i_slint_core::items::LineJoin::Miter | _ => Join::Miter,
+        })
+        .miter_limit(stroke_miter_limit);
+    Style::Stroke(stroke)
+}
+
 /// Common rendering logic for both filled and stroked paths
 fn render_path_with_style<T: TargetPixel>(
     commands: &[Command],
@@ -74,14 +115,8 @@ fn render_path_with_style<T: TargetPixel>(
         return;
     }
 
-    // Create a buffer for the mask output
-    let mut mask_buffer = vec![0u8; path_width * path_height];
-
     // Render the full path into the mask
-    Mask::new(commands)
-        .size(path_width as u32, path_height as u32)
-        .style(style)
-        .render_into(&mut mask_buffer, None);
+    let mask_buffer = mask(commands, path_width, path_height, style);
 
     // Calculate the intersection region - only apply within clipped area
     // clip_geometry is relative to screen, path_geometry is also relative to screen
@@ -175,19 +210,6 @@ pub fn render_stroked_path<T: TargetPixel>(
     stroke_miter_limit: f32,
     buffer: &mut impl crate::target_pixel_buffer::TargetPixelBuffer<TargetPixel = T>,
 ) {
-    let mut stroke = Stroke::new(stroke_width);
-    stroke
-        .cap(match stroke_line_cap {
-            i_slint_core::items::LineCap::Round => Cap::Round,
-            i_slint_core::items::LineCap::Square => Cap::Square,
-            i_slint_core::items::LineCap::Butt | _ => Cap::Butt,
-        })
-        .join(match stroke_line_join {
-            i_slint_core::items::LineJoin::Round => Join::Round,
-            i_slint_core::items::LineJoin::Bevel => Join::Bevel,
-            i_slint_core::items::LineJoin::Miter | _ => Join::Miter,
-        })
-        .miter_limit(stroke_miter_limit);
-    let style = Style::Stroke(stroke);
+    let style = stroke_style(stroke_width, stroke_line_cap, stroke_line_join, stroke_miter_limit);
     render_path_with_style(commands, path_geometry, clip_geometry, color, style, buffer);
 }

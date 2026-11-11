@@ -24,7 +24,7 @@ use crate::board::Board;
 use crate::board::ioexp::Pin;
 use crate::display::ppa::PpaRotator;
 use crate::sounds::SoundFile;
-use crate::ui::{input, platform, render_loop};
+use crate::ui::{input, platform, render_loop, transition};
 use crate::{clock, config, net, runtime};
 use alarm::AlarmClock;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -47,6 +47,32 @@ const PAGE_SOUND: i32 = 3;
 const PAGE_NAME: i32 = 4;
 /// One alarm list row, for the list layer's offscreen window.
 const PAGE_LIST_ROW: i32 = 5;
+
+/// How deep a page is: going deeper slides the new page in from the
+/// right, going back from the left.
+fn depth(page: i32) -> i32 {
+    match page {
+        PAGE_CLOCK => 0,
+        PAGE_LIST => 1,
+        PAGE_ALARM => 2,
+        _ => 3, // sound, name: below the alarm page
+    }
+}
+
+/// Shows `page`, sliding it in.
+fn show_page(window: &screens::AppWindow, page: i32) {
+    let from = window.get_page();
+    if from == page {
+        return;
+    }
+    let direction = if depth(page) > depth(from) {
+        transition::Direction::Forward
+    } else {
+        transition::Direction::Back
+    };
+    transition::request(direction);
+    window.set_page(page);
+}
 
 /// Settings pages go back to the clock after this long without a touch.
 const IDLE_CLOSE: Duration = Duration::from_secs(60);
@@ -193,7 +219,7 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
                     "ui: back to the clock after {} s without a touch",
                     IDLE_CLOSE.as_secs()
                 );
-                window.set_page(PAGE_CLOCK);
+                show_page(window, PAGE_CLOCK);
             } else if page == PAGE_ALARM {
                 alarm_page::fill(window, ctx);
                 // Keeps the speaker on while the wheels are shown.

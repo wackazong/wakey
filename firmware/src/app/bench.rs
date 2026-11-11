@@ -9,7 +9,9 @@
 //! the frames after it belong to that step.
 //!
 //! The positions follow the layouts in `ui/wakey/clock_page.slint` and
-//! `ui/wakey/alarm_list.slint`; the list needs at least two alarms.
+//! `ui/wakey/alarm_list.slint`. The list needs at least two alarms, and
+//! more than fit the screen (four) for the scroll steps: a list that fits
+//! does not scroll.
 
 use crate::ui::input::{EVENTS, Phase, TouchEvent};
 use crate::ui::trace;

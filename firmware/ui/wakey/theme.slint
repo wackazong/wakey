@@ -28,7 +28,8 @@ export global Theme {
 // Icons, drawn as strokes in a 24×24 box scaled to the element.
 export component Icon inherits Path {
     // 0 back chevron, 1 forward chevron, 2 check, 3 play, 4 stop,
-    // 5 shuffle, 6 backspace, 7 shift, 8 plus.
+    // 5 shuffle, 6 backspace, 7 shift, 8 plus, 9 fade-in (a level rising
+    // from silence, then holding).
     in property <int> kind;
     in property <color> color: Theme.text;
     viewbox-width: 24;
@@ -44,6 +45,7 @@ export component Icon inherits Path {
         : root.kind == 5 ? "M 3 7 L 8 7 C 13 7 11 17 16 17 L 21 17 M 18 14 L 21 17 L 18 20 M 3 17 L 8 17 C 10 17 11 15.5 11.6 14 M 13.5 10 C 14 8.5 15 7 16 7 L 21 7 M 18 4 L 21 7 L 18 10"
         : root.kind == 6 ? "M 9 5 L 21 5 L 21 19 L 9 19 L 2 12 Z M 12 9 L 18 15 M 18 9 L 12 15"
         : root.kind == 7 ? "M 12 3 L 21 12 L 16 12 L 16 20 L 8 20 L 8 12 L 3 12 Z"
+        : root.kind == 9 ? "M 3 19 L 14 6 L 21 6"
         : "M 12 4 L 12 20 M 4 12 L 20 12";
 }
 
@@ -118,15 +120,16 @@ export component BackButton inherits Rectangle {
     }
 }
 
-// A round weekday chip. The owner flips `on` in `toggled`.
+// A round weekday chip (round at any size). The owner flips `on` in
+// `toggled`.
 export component Chip inherits Rectangle {
     in property <string> text;
     in-out property <bool> on;
     callback toggled();
 
     width: 76px;
-    height: 76px;
-    border-radius: 38px;
+    height: self.width;
+    border-radius: self.width / 2;
     background: ta.pressed ? Theme.surface-pressed : root.on ? Theme.accent-dark : Theme.surface;
     animate background { duration: 120ms; }
 

@@ -2033,6 +2033,46 @@ struct PrepareScene {
     scale_factor: ScaleFactor,
 }
 
+impl PrepareScene {
+    /// wakey patch: the path's coverage as an alpha map in `color`, added
+    /// to the scene like a glyph (the commands are already in physical,
+    /// rotated coordinates).
+    #[cfg(feature = "path")]
+    fn process_path_mask(
+        &mut self,
+        path_geometry: PhysicalRect,
+        clip_geometry: PhysicalRect,
+        commands: &[path::Command],
+        color: PremultipliedRgbaColor,
+        style: zeno::Style<'_>,
+    ) {
+        let (width, height) = (path_geometry.width() as usize, path_geometry.height() as usize);
+        if width == 0 || height == 0 || color.alpha == 0 {
+            return;
+        }
+        let mask = path::mask(commands, width, height, style);
+        // Back from premultiplied: the texture is colorized.
+        let unmul = |c: u8| (c as u16 * 255 / color.alpha as u16) as u8;
+        let colorize =
+            Color::from_argb_u8(color.alpha, unmul(color.red), unmul(color.green), unmul(color.blue));
+        let texture = target_pixel_buffer::DrawTextureArgs {
+            data: target_pixel_buffer::TextureDataContainer::Shared {
+                buffer: SharedBufferData::AlphaMap { data: Rc::from(mask), width: width as u16 },
+                source_rect: euclid::rect(0, 0, width as i16, height as i16),
+            },
+            colorize: Some(colorize),
+            alpha: color.alpha,
+            dst_x: path_geometry.origin.x as _,
+            dst_y: path_geometry.origin.y as _,
+            dst_width: width,
+            dst_height: height,
+            rotation: RenderingRotation::NoRotation,
+            tiling: None,
+        };
+        self.process_target_texture(&texture, clip_geometry);
+    }
+}
+
 impl ProcessScene for PrepareScene {
     fn process_scene_texture(&mut self, geometry: PhysicalRect, texture: SceneTexture<'static>) {
         let texture_index = self.vectors.textures.len() as u16;
@@ -2160,32 +2200,35 @@ impl ProcessScene for PrepareScene {
         }
     }
 
+    // wakey patch: paths in line-by-line mode (upstream draws nothing
+    // there): rasterized into an alpha map once per frame and drawn like a
+    // glyph (see `process_path_mask`).
     #[cfg(feature = "path")]
     fn process_filled_path(
         &mut self,
-        _path_geometry: PhysicalRect,
-        _clip_geometry: PhysicalRect,
-        _commands: alloc::vec::Vec<path::Command>,
-        _color: PremultipliedRgbaColor,
+        path_geometry: PhysicalRect,
+        clip_geometry: PhysicalRect,
+        commands: alloc::vec::Vec<path::Command>,
+        color: PremultipliedRgbaColor,
     ) {
-        // Path rendering is not supported in line-by-line mode (PrepareScene/render_by_line)
-        // Only works with buffer-based rendering (RenderToBuffer)
+        self.process_path_mask(path_geometry, clip_geometry, &commands, color, path::fill_style());
     }
 
     #[cfg(feature = "path")]
     fn process_stroked_path(
         &mut self,
-        _path_geometry: PhysicalRect,
-        _clip_geometry: PhysicalRect,
-        _commands: alloc::vec::Vec<path::Command>,
-        _color: PremultipliedRgbaColor,
-        _stroke_width: f32,
-        _stroke_line_cap: i_slint_core::items::LineCap,
-        _stroke_line_join: i_slint_core::items::LineJoin,
-        _stroke_miter_limit: f32,
+        path_geometry: PhysicalRect,
+        clip_geometry: PhysicalRect,
+        commands: alloc::vec::Vec<path::Command>,
+        color: PremultipliedRgbaColor,
+        stroke_width: f32,
+        stroke_line_cap: i_slint_core::items::LineCap,
+        stroke_line_join: i_slint_core::items::LineJoin,
+        stroke_miter_limit: f32,
     ) {
-        // Path rendering is not supported in line-by-line mode (PrepareScene/render_by_line)
-        // Only works with buffer-based rendering (RenderToBuffer)
+        let style =
+            path::stroke_style(stroke_width, stroke_line_cap, stroke_line_join, stroke_miter_limit);
+        self.process_path_mask(path_geometry, clip_geometry, &commands, color, style);
     }
 }
 
