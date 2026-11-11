@@ -58,7 +58,7 @@ export component Wheel inherits Rectangle {
         width: root.width;
         height: root.row-h;
         text: self.n < 10 ? "0\{self.n}" : "\{self.n}";
-        font-size: 80px;
+        font-size: 72px;
         font-weight: 500;
         color: Math.abs(self.d) < 0.5 ? Theme.text
             : Theme.text-dim.with-alpha(Math.max(0, 1 - Math.abs(self.d) * 0.3));
