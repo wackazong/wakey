@@ -37,4 +37,13 @@ impl Backlight {
             .set_duty(max * u32::from(percent.min(100)) / 100)?;
         Ok(())
     }
+
+    /// 0.0 = dark, 1.0 = full brightness, in the PWM's full resolution
+    /// (fine steps at the dark end).
+    pub fn set_level(&mut self, level: f32) -> anyhow::Result<()> {
+        let max = self.channel.get_max_duty();
+        self.channel
+            .set_duty((max as f32 * level.clamp(0.0, 1.0)).round() as u32)?;
+        Ok(())
+    }
 }

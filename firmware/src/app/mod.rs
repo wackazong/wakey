@@ -152,7 +152,7 @@ pub fn main() -> ! {
 async fn app(spawner: embassy_executor::Spawner) {
     let Board {
         display,
-        mut backlight,
+        backlight,
         i2c,
         ioexp,
         rtc,
@@ -176,7 +176,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     // or the built-in one if none is connected, while an alarm rings.
     let player = Player::new();
     let builtin = BuiltinSpeaker::start(codec, i2c.clone(), ioexp.clone(), player.source());
-    spawner.spawn(input::touch_task(i2c, ioexp.clone()).unwrap());
+    spawner.spawn(input::touch_task(i2c.clone(), ioexp.clone()).unwrap());
     let speaker = UsbAudio::start(ioexp.switch(Pin::Usb5vEn), player.source()).expect("USB host");
     let alarm = Rc::new(RefCell::new(AlarmClock::new(
         config.alarms,
@@ -209,7 +209,8 @@ async fn app(spawner: embassy_executor::Spawner) {
     let _idle = close_when_idle(&ctx);
     let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
-    backlight.set_percent(100).expect("backlight");
+    // The light meter owns the backlight: full at first, then the room's.
+    crate::ambient::start(i2c.clone(), backlight);
     watch_render_loop();
     #[cfg(feature = "ui-bench")]
     spawner.spawn(bench::run().unwrap());

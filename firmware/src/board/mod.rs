@@ -7,6 +7,7 @@
 //! exist across Tab5 production runs).
 
 mod backlight;
+pub mod camera;
 pub mod codec;
 pub mod i2c;
 pub mod ioexp;
