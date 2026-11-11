@@ -28,14 +28,13 @@ const PERIOD: Duration = Duration::from_secs(10);
 /// So there are three ranges of room light (average pixel value at the
 /// longest exposure and 1× gain):
 /// - night, below [`LIGHT_NIGHT`]: [`LEVEL_NIGHT`] and every pixel at
-///   [`NIGHT_PIXELS`] ([`crate::ui::dim`]); left only above
+///   `night_pixels` (config `display.night_pixels_percent`,
+///   [`crate::ui::dim`]); left only above
 ///   [`LIGHT_NIGHT_END`];
 /// - a lit room: [`LEVEL_ROOM`];
 /// - from [`LIGHT_ROOM_END`] to [`LIGHT_BRIGHT`]: [`LEVEL_ROOM_TOP`] to
 ///   [`LEVEL_MAX`] on a log scale.
 const LEVEL_NIGHT: f32 = 0.01;
-/// Pixel brightness at night, in 1/256 (35 %).
-const NIGHT_PIXELS: u16 = 90;
 /// A change of brightness takes this long.
 const FADE: Duration = Duration::from_secs(3);
 const LEVEL_ROOM: f32 = 0.13;
@@ -66,7 +65,8 @@ static FRAME_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Starts the light meter; it owns the backlight from now on. Without a
 /// working camera the backlight stays at full brightness (logged).
-pub fn start(bus: SharedI2c, mut backlight: Backlight) {
+pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8) {
+    let night_pixels = (u16::from(night_pixels_percent) * crate::ui::dim::FULL / 100).max(1);
     let run = move || {
         let mut meter = match Meter::new(&bus) {
             Ok(m) => m,
@@ -89,7 +89,7 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight) {
                     };
                     let target = level_for(light, night);
                     let pixels = if night {
-                        NIGHT_PIXELS
+                        night_pixels
                     } else {
                         crate::ui::dim::FULL
                     };

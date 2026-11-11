@@ -231,7 +231,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
     // The light meter owns the backlight: full at first, then the room's.
-    crate::ambient::start(i2c.clone(), backlight);
+    crate::ambient::start(i2c.clone(), backlight, config.display.night_pixels_percent);
     watch_render_loop();
     #[cfg(feature = "ui-bench")]
     spawner.spawn(bench::run().unwrap());

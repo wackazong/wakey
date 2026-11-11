@@ -7,7 +7,9 @@
 //! {
 //!   "wifi": { "ssid": "MeinNetz", "password": "geheim" },
 //!   "alarms": [ { "id": 1, "enabled": true, "hour": 6, "minute": 30, … } ],
-//!   "ringing": { "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10 }
+//!   "ringing": { "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10 },
+//!   "display": { "night_pixels_percent": 35 },
+//!   "power": { "sleep_after_s": 60, "sleep_when": "dark" }
 //! }
 //! ```
 //!
@@ -26,6 +28,72 @@ pub struct Config {
     /// See [`crate::alarm`].
     pub alarms: Vec<AlarmConfig>,
     pub ringing: RingConfig,
+    pub display: DisplayConfig,
+    pub power: PowerConfig,
+}
+
+/// The `display` section.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplayConfig {
+    /// Pixel brightness in a dark room (night mode, with the lowest
+    /// backlight), 10–100 %.
+    pub night_pixels_percent: u8,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            night_pixels_percent: 35,
+        }
+    }
+}
+
+/// The `power` section: when the clock goes to light sleep (display off,
+/// woken by a touch or an alarm).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PowerConfig {
+    /// Without a touch for this long (10–3600 s), and [`Self::sleep_when`].
+    pub sleep_after_s: u16,
+    pub sleep_when: SleepWhen,
+}
+
+impl Default for PowerConfig {
+    fn default() -> Self {
+        Self {
+            sleep_after_s: 60,
+            sleep_when: SleepWhen::Dark,
+        }
+    }
+}
+
+/// When light sleep is allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SleepWhen {
+    /// In a dark room (night mode); on battery always.
+    Dark,
+    Always,
+    Never,
+    /// Anything else in the file: treated as [`SleepWhen::Dark`].
+    #[serde(other)]
+    Unknown,
+}
+
+impl DisplayConfig {
+    fn sanitize(&mut self) {
+        self.night_pixels_percent = self.night_pixels_percent.clamp(10, 100);
+    }
+}
+
+impl PowerConfig {
+    fn sanitize(&mut self) {
+        self.sleep_after_s = self.sleep_after_s.clamp(10, 3600);
+        if self.sleep_when == SleepWhen::Unknown {
+            self.sleep_when = SleepWhen::Dark;
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +120,8 @@ impl Config {
         let mut c: Self = serde_json::from_value(value)?;
         alarm::sanitize_list(&mut c.alarms);
         c.ringing.sanitize();
+        c.display.sanitize();
+        c.power.sanitize();
         Ok(c)
     }
 
@@ -147,6 +217,28 @@ fn migrate(value: &mut Value) -> bool {
 mod tests {
     use super::*;
     use crate::alarm::Sound;
+
+    #[test]
+    fn display_and_power_sections() {
+        // Missing: defaults, written back.
+        let (c, text) = Config::load(r#"{ "alarms": [] }"#).unwrap();
+        assert_eq!(c.display, DisplayConfig::default());
+        assert_eq!(c.power, PowerConfig::default());
+        let text = text.unwrap();
+        assert!(text.contains("\"night_pixels_percent\": 35"), "{text}");
+        assert!(text.contains("\"sleep_when\": \"dark\""), "{text}");
+        // Out of range or unknown: into range.
+        let c = Config::parse(
+            r#"{ "display": { "night_pixels_percent": 0 },
+                 "power": { "sleep_after_s": 1, "sleep_when": "sometimes" } }"#,
+        )
+        .unwrap();
+        assert_eq!(c.display.night_pixels_percent, 10);
+        assert_eq!(c.power.sleep_after_s, 10);
+        assert_eq!(c.power.sleep_when, SleepWhen::Dark);
+        let c = Config::parse(r#"{ "power": { "sleep_when": "never" } }"#).unwrap();
+        assert_eq!(c.power.sleep_when, SleepWhen::Never);
+    }
 
     #[test]
     fn wifi() {
