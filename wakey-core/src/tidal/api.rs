@@ -16,6 +16,26 @@ fn authed(url: String, session: &TidalSession) -> Request {
     Request::get(url).header("Authorization", format!("Bearer {}", session.access_token))
 }
 
+/// The API session for the token. Called first: without it TIDAL refuses
+/// user calls with this client's tokens ("Invalid access token without
+/// sessionId", HTTP 401, subStatus 6004).
+pub fn sessions(session: &TidalSession) -> Request {
+    authed(format!("{API}/sessions"), session)
+}
+
+/// Checks the answer to [`sessions`]: the user and country it reports.
+pub fn parse_sessions(status: u16, body: &[u8]) -> Result<(u64, String)> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Answer {
+        user_id: u64,
+        country_code: String,
+    }
+    ensure!(status == 200, "{}", status_error("session", status));
+    let a: Answer = json("session", body)?;
+    Ok((a.user_id, a.country_code))
+}
+
 /// One page of the user's own playlists.
 pub fn playlists(session: &TidalSession, offset: u32) -> Request {
     authed(
@@ -303,6 +323,14 @@ mod tests {
                 .url
                 .contains("limit=100&offset=100")
         );
+    }
+
+    #[test]
+    fn session_check() {
+        assert_eq!(sessions(&session()).url, "https://api.tidal.com/v1/sessions");
+        let body = br#"{"sessionId":"s","userId":42,"countryCode":"CH","channelId":1}"#;
+        assert_eq!(parse_sessions(200, body).unwrap(), (42, "CH".into()));
+        assert!(parse_sessions(401, b"{}").is_err());
     }
 
     #[test]

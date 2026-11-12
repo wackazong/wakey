@@ -43,6 +43,8 @@ export global SoundPicker {
     callback volume-changed(int);
     callback fade-changed(int);
     callback preview();
+    // The TIDAL state changed: fill the tab again.
+    callback refresh();
 }
 
 component Segment inherits Rectangle {

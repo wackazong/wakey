@@ -7,7 +7,7 @@ use super::screens::{AppWindow, SoundPicker, SoundRow};
 use super::{Ctx, PAGE_ALARM, PAGE_SOUND, alarm_page, show_page};
 use crate::sounds;
 use crate::tidal::State;
-use slint::{ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use std::rc::Rc;
 use std::time::Duration;
 use wakey_core::alarm::Sound;
@@ -56,15 +56,17 @@ fn tidal_tab(window: &AppWindow, ctx: &Ctx, open: bool) {
     show_tidal(window, ctx);
     let weak = window.as_weak();
     let tidal = ctx.tidal.clone();
+    let mut seen = tidal.state();
     ctx.tidal_timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(500),
         move || {
             let Some(window) = weak.upgrade() else { return };
             let picker = window.global::<SoundPicker>();
-            if picker.get_tab() == TAB_TIDAL {
-                let state = tidal.state();
-                show_state(&window, &state);
+            let state = tidal.state();
+            if picker.get_tab() == TAB_TIDAL && state != seen {
+                seen = state;
+                picker.invoke_refresh();
             }
         },
     );
@@ -72,16 +74,15 @@ fn tidal_tab(window: &AppWindow, ctx: &Ctx, open: bool) {
 
 fn show_tidal(window: &AppWindow, ctx: &Ctx) {
     let state = ctx.tidal.state();
-    if ctx.tidal_shown.borrow().as_ref() != Some(&state) {
-        show_state(window, &state);
-        *ctx.tidal_shown.borrow_mut() = Some(state);
-    }
+    show_state(window, &state);
+    *ctx.tidal_shown.borrow_mut() = Some(state);
 }
 
 /// Shows a TIDAL state on the tab (the QR code made anew only when the
 /// link changes).
 fn show_state(window: &AppWindow, state: &State) {
     let picker = window.global::<SoundPicker>();
+    let has_rows = picker.get_rows().row_count() > 0;
     let note = match state {
         State::NoCredentials => {
             "TIDAL ist nicht eingerichtet: die Zugangsdaten fehlen in config.json."
@@ -98,7 +99,10 @@ fn show_state(window: &AppWindow, state: &State) {
             picker.set_empty("".into());
             return;
         }
-        State::LoggedIn => "Bei TIDAL angemeldet. Die Lieder der Playlist folgen bald.",
+        State::Syncing if has_rows => "",
+        State::Syncing => "Lade die Playlist …",
+        State::LoggedIn if has_rows => "",
+        State::LoggedIn => "Die Playlist ist leer.",
         State::Failed(e) => {
             picker.set_tidal_view(0);
             picker.set_empty(format!("{e} Zum Wiederholen den Tab erneut öffnen.").into());
@@ -162,8 +166,20 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         }));
         choices
     } else {
-        // The login or the state, shown by `show_state`.
-        Vec::new()
+        // The playlist; the login or the state shown by `show_state`.
+        let tracks = ctx.tidal.playlist();
+        let mut choices = Vec::new();
+        if !tracks.is_empty() {
+            choices.push((
+                row("Zufällig", "wechselt jeden Tag", &Sound::TidalRandom, 1),
+                Sound::TidalRandom,
+            ));
+        }
+        choices.extend(tracks.iter().map(|t| {
+            let sound = Sound::TidalTrack(t.id.to_string());
+            (row(&t.title, &t.artist, &sound, 2), sound)
+        }));
+        choices
     };
     let (rows, sounds): (Vec<SoundRow>, Vec<Sound>) = choices.into_iter().unzip();
     *ctx.sound_choices.borrow_mut() = sounds;
@@ -186,9 +202,6 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         tidal_tab(window, ctx, tab == TAB_TIDAL);
     }));
     picker.on_select(ctx.with_arg(|window, ctx, i: i32| {
-        if window.global::<SoundPicker>().get_tab() != TAB_FILES {
-            return;
-        }
         let Some(sound) = ctx.sound_choices.borrow().get(i as usize).cloned() else {
             return;
         };
@@ -199,6 +212,12 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         if previewing {
             let cfg = ctx.draft.borrow().clone();
             ctx.alarm.borrow_mut().preview(&cfg);
+        }
+    }));
+    picker.on_refresh(ctx.with(|window, ctx| {
+        if window.global::<SoundPicker>().get_tab() == TAB_TIDAL {
+            fill_rows(window, ctx);
+            show_tidal(window, ctx);
         }
     }));
     picker.on_volume_changed(ctx.with_arg(|_, ctx, v: i32| {

@@ -5193,6 +5193,8 @@ dependencies = [
  "i-slint-renderer-software",
  "log",
  "qrcodegen",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "static_cell",
