@@ -37,7 +37,9 @@ fn main() {
                 sys::heap_caps_get_free_size(sys::MALLOC_CAP_INTERNAL),
             )
         };
-        log::info!("probe: rebuild {i}: {r:?}; PSRAM free {free}, largest {largest}; internal free {internal}");
+        log::info!(
+            "probe: rebuild {i}: {r:?}; PSRAM free {free}, largest {largest}; internal free {internal}"
+        );
         std::thread::sleep(Duration::from_millis(500));
     }
     log::info!("probe: done");

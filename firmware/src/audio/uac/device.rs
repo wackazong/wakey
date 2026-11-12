@@ -383,6 +383,7 @@ impl Client {
         if let Some((_, max)) = self.device.as_ref().and_then(|d| d.volume_range_db) {
             self.set_volume_db(max - DEFAULT_VOLUME_BELOW_MAX_DB);
         }
+        self.log_controls();
         log::info!(
             "uac: ready: {SAMPLE_RATE} Hz stereo, endpoint {:#04x} (interface {} alt {})",
             alt.endpoint,
@@ -442,6 +443,25 @@ impl Client {
         log::info!("uac: volume {:.1} dB", f32::from(v) / 256.0);
     }
 
+    /// Logs what the device reports for mute and volume (master and both
+    /// channels), to check that our settings took.
+    fn log_controls(&mut self) {
+        const GET_CUR: u8 = 0x81;
+        let Some(index) = self.feature_index() else {
+            return;
+        };
+        let mut m = [0u8; 1];
+        let mute = self.control(0xA1, GET_CUR, 0x0100, index, &mut m).ok().map(|()| m[0]);
+        let mut vol = [None; 3];
+        for (ch, v) in vol.iter_mut().enumerate() {
+            let mut b = [0u8; 2];
+            if self.control(0xA1, GET_CUR, 0x0200 | ch as u16, index, &mut b).is_ok() {
+                *v = Some(f32::from(i16::from_le_bytes(b)) / 256.0);
+            }
+        }
+        log::info!("uac: device reports mute {mute:?}, volume master/L/R {vol:?} dB");
+    }
+
     fn set_mute(&mut self, mute: bool) {
         let Some(index) = self.feature_index() else {
             return;
@@ -461,7 +481,11 @@ impl Client {
             self.device.as_mut().unwrap().stream_on = false;
             self.wait_in_flight();
             let _ = self.set_interface(0);
-            log::info!("uac: stream off");
+            log::info!(
+                "uac: stream off ({} packets sent, {} failed so far)",
+                PACKETS_OK.load(Ordering::Relaxed),
+                PACKETS_ERR.load(Ordering::Relaxed)
+            );
             return;
         }
         let alt = d.alt.alt;

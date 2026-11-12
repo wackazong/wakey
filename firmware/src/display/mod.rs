@@ -187,7 +187,6 @@ impl Display {
             ldo_cfg.chan_id = 3;
             ldo_cfg.voltage_mv = 2500;
             esp!(sys::esp_ldo_acquire_channel(&ldo_cfg, &mut this.phy_ldo))?;
-
         }
 
         this.open_link()?;
@@ -530,7 +529,6 @@ impl Display {
         self.rx(0x0A, &mut v)?;
         Ok(v[0])
     }
-
 
     /// Frames the panel has scanned out since boot (wrapping counter).
     pub fn frames_scanned() -> u32 {

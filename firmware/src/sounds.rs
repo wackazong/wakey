@@ -1,4 +1,4 @@
-//! The sound files on the SD card: `sounds/*.wav|aif|aiff`, for the sound
+//! The sound files on the SD card: `sounds/*.wav|aif|aiff|flac`, for the sound
 //! page and for "Zufällig" ([`wakey_core::alarm::Sound::RandomFile`]).
 
 use crate::board::sd;
@@ -29,7 +29,8 @@ pub fn list() -> Vec<SoundFile> {
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
             let (stem, ext) = name.rsplit_once('.')?;
-            let playable = ["wav", "aif", "aiff"].contains(&ext.to_ascii_lowercase().as_str());
+            let playable =
+                ["wav", "aif", "aiff", "flac"].contains(&ext.to_ascii_lowercase().as_str());
             (playable && !stem.starts_with('.')).then(|| SoundFile {
                 path: format!("{DIR}/{name}"),
                 title: stem.replace('_', " "),

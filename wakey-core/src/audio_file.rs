@@ -1,4 +1,5 @@
-//! PCM audio files: WAV (RIFF/WAVE) and AIFF/AIFC, uncompressed.
+//! Audio files: WAV (RIFF/WAVE) and AIFF/AIFC, uncompressed, and FLAC
+//! (decoded with `claxon`; TIDAL's lossless format).
 //!
 //! [`AudioFile::open`] reads the header; [`AudioFile::read`] returns
 //! interleaved **stereo i16** frames at the file's own sample rate: mono is
@@ -13,6 +14,7 @@ use std::path::Path;
 pub enum Container {
     Wav,
     Aiff,
+    Flac,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,12 +45,34 @@ impl Format {
 }
 
 /// An open audio file, positioned at the next frame to read.
-pub struct AudioFile<R = BufReader<File>> {
+pub struct AudioFile<R: Read = BufReader<File>> {
     pub format: Format,
-    reader: R,
-    /// Frames not read yet.
-    remaining: u64,
-    raw: Vec<u8>,
+    body: Body<R>,
+}
+
+enum Body<R: Read> {
+    Pcm {
+        reader: R,
+        /// Frames not read yet.
+        remaining: u64,
+        raw: Vec<u8>,
+    },
+    Flac {
+        /// `None` only while rewinding.
+        reader: Option<claxon::FlacReader<R>>,
+        /// The last decoded block, channel after channel (`len` samples
+        /// each), and the next frame in it.
+        block: Vec<i32>,
+        len: usize,
+        pos: usize,
+    },
+}
+
+fn flac_error(e: claxon::Error) -> io::Error {
+    match e {
+        claxon::Error::IoError(e) => e,
+        e => io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
+    }
 }
 
 fn bad(msg: &str) -> io::Error {
@@ -88,11 +112,15 @@ impl<R: Read + Seek> AudioFile<R> {
     pub fn from_reader(mut reader: R) -> io::Result<Self> {
         let mut head = [0u8; 12];
         reader.read_exact(&mut head)?;
+        if &head[0..4] == b"fLaC" {
+            reader.seek(SeekFrom::Start(0))?;
+            return Self::open_flac(reader);
+        }
         let format = match (&head[0..4], &head[8..12]) {
             (b"RIFF", b"WAVE") => Self::parse_wav(&mut reader)?,
             (b"FORM", b"AIFF") => Self::parse_aiff(&mut reader, false)?,
             (b"FORM", b"AIFC") => Self::parse_aiff(&mut reader, true)?,
-            _ => return Err(bad("not a WAV or AIFF file")),
+            _ => return Err(bad("not a WAV, AIFF or FLAC file")),
         };
         if format.channels == 0 || format.channels > 2 || !(8..=32).contains(&format.bits) {
             return Err(bad("unsupported channels or bit depth"));
@@ -100,9 +128,37 @@ impl<R: Read + Seek> AudioFile<R> {
         let remaining = format.frames;
         Ok(Self {
             format,
-            reader,
-            remaining,
-            raw: Vec::new(),
+            body: Body::Pcm {
+                reader,
+                remaining,
+                raw: Vec::new(),
+            },
+        })
+    }
+
+    fn open_flac(reader: R) -> io::Result<Self> {
+        let flac = claxon::FlacReader::new(reader).map_err(flac_error)?;
+        let info = flac.streaminfo();
+        let format = Format {
+            container: Container::Flac,
+            sample_rate: info.sample_rate,
+            channels: info.channels as u16,
+            bits: info.bits_per_sample as u16,
+            frames: info.samples.unwrap_or(0),
+            big_endian: false,
+            unsigned8: false,
+        };
+        if format.channels == 0 || format.channels > 2 || !(8..=32).contains(&format.bits) {
+            return Err(bad("unsupported channels or bit depth"));
+        }
+        Ok(Self {
+            format,
+            body: Body::Flac {
+                reader: Some(flac),
+                block: Vec::new(),
+                len: 0,
+                pos: 0,
+            },
         })
     }
 
@@ -206,48 +262,113 @@ impl<R: Read + Seek> AudioFile<R> {
     /// number of frames read (0 at the end).
     pub fn read(&mut self, out: &mut [i16]) -> io::Result<usize> {
         let f = &self.format;
-        let want = ((out.len() / 2) as u64).min(self.remaining) as usize;
-        if want == 0 {
-            return Ok(0);
-        }
-        let bps = f.bytes_per_sample();
-        let bpf = f.bytes_per_frame();
-        self.raw.resize(want * bpf, 0);
-        self.reader.read_exact(&mut self.raw)?;
-        // The most significant 16 bits of one sample.
-        let sample = |b: &[u8]| -> i16 {
-            if bps == 1 {
-                let v = if f.unsigned8 {
-                    i16::from(b[0]) - 128
-                } else {
-                    i16::from(b[0] as i8)
+        match &mut self.body {
+            Body::Pcm {
+                reader,
+                remaining,
+                raw,
+            } => {
+                let want = ((out.len() / 2) as u64).min(*remaining) as usize;
+                if want == 0 {
+                    return Ok(0);
+                }
+                let bps = f.bytes_per_sample();
+                let bpf = f.bytes_per_frame();
+                raw.resize(want * bpf, 0);
+                reader.read_exact(raw)?;
+                // The most significant 16 bits of one sample.
+                let sample = |b: &[u8]| -> i16 {
+                    if bps == 1 {
+                        let v = if f.unsigned8 {
+                            i16::from(b[0]) - 128
+                        } else {
+                            i16::from(b[0] as i8)
+                        };
+                        return v << 8;
+                    }
+                    if f.big_endian {
+                        i16::from_be_bytes([b[0], b[1]])
+                    } else {
+                        i16::from_le_bytes([b[bps - 2], b[bps - 1]])
+                    }
                 };
-                return v << 8;
+                for (frame, dst) in raw.chunks_exact(bpf).zip(out.as_chunks_mut::<2>().0) {
+                    let l = sample(&frame[..bps]);
+                    let r = if f.channels == 2 {
+                        sample(&frame[bps..2 * bps])
+                    } else {
+                        l
+                    };
+                    *dst = [l, r];
+                }
+                *remaining -= want as u64;
+                Ok(want)
             }
-            if f.big_endian {
-                i16::from_be_bytes([b[0], b[1]])
-            } else {
-                i16::from_le_bytes([b[bps - 2], b[bps - 1]])
+            Body::Flac {
+                reader,
+                block,
+                len,
+                pos,
+            } => {
+                let bits = u32::from(f.bits);
+                let to16 = |v: i32| -> i16 {
+                    if bits >= 16 {
+                        (v >> (bits - 16)) as i16
+                    } else {
+                        (v << (16 - bits)) as i16
+                    }
+                };
+                let stereo = f.channels == 2;
+                let mut done = 0;
+                for dst in out.as_chunks_mut::<2>().0 {
+                    if *pos == *len {
+                        let Some(r) = reader.as_mut() else { break };
+                        match r.blocks().read_next_or_eof(core::mem::take(block)) {
+                            Ok(Some(b)) => {
+                                *len = b.duration() as usize;
+                                *pos = 0;
+                                *block = b.into_buffer();
+                                if *len == 0 {
+                                    continue;
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => return Err(flac_error(e)),
+                        }
+                    }
+                    let l = to16(block[*pos]);
+                    let r = if stereo { to16(block[*len + *pos]) } else { l };
+                    *dst = [l, r];
+                    *pos += 1;
+                    done += 1;
+                }
+                Ok(done)
             }
-        };
-        for (frame, dst) in self.raw.chunks_exact(bpf).zip(out.as_chunks_mut::<2>().0) {
-            let l = sample(&frame[..bps]);
-            let r = if f.channels == 2 {
-                sample(&frame[bps..2 * bps])
-            } else {
-                l
-            };
-            *dst = [l, r];
         }
-        self.remaining -= want as u64;
-        Ok(want)
     }
 
     /// Back to the first frame.
     pub fn rewind(&mut self) -> io::Result<()> {
-        let read = (self.format.frames - self.remaining) * self.format.bytes_per_frame() as u64;
-        self.reader.seek(SeekFrom::Current(-(read as i64)))?;
-        self.remaining = self.format.frames;
+        match &mut self.body {
+            Body::Pcm {
+                reader, remaining, ..
+            } => {
+                let read = (self.format.frames - *remaining) * self.format.bytes_per_frame() as u64;
+                reader.seek(SeekFrom::Current(-(read as i64)))?;
+                *remaining = self.format.frames;
+            }
+            Body::Flac {
+                reader, len, pos, ..
+            } => {
+                let mut inner = reader
+                    .take()
+                    .ok_or_else(|| bad("FLAC reader lost"))?
+                    .into_inner();
+                inner.seek(SeekFrom::Start(0))?;
+                *reader = Some(claxon::FlacReader::new(inner).map_err(flac_error)?);
+                (*len, *pos) = (0, 0);
+            }
+        }
         Ok(())
     }
 }
@@ -362,6 +483,50 @@ mod tests {
         let mut out = [0i16; 2];
         assert_eq!(f.read(&mut out).unwrap(), 1);
         assert_eq!(out, [1000, -1000]);
+    }
+
+    /// Decodes all of a file (read in odd-sized pieces), and once more
+    /// after a rewind.
+    fn decode_all(bytes: &'static [u8]) -> (Format, Vec<i16>) {
+        let mut f = AudioFile::from_reader(Cursor::new(bytes)).unwrap();
+        let mut all = Vec::new();
+        let mut buf = [0i16; 2 * 333];
+        loop {
+            let n = f.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            all.extend_from_slice(&buf[..2 * n]);
+        }
+        f.rewind().unwrap();
+        let n = f.read(&mut buf).unwrap();
+        assert_eq!(&buf[..2 * n], &all[..2 * n], "same after rewind");
+        (f.format.clone(), all)
+    }
+
+    #[test]
+    fn flac_decodes_like_its_wav() {
+        // Pairs made with ffmpeg (sine) and the reference `flac` encoder.
+        for (flac, wav) in [
+            (
+                include_bytes!("../testdata/stereo16.flac").as_slice(),
+                include_bytes!("../testdata/stereo16.wav").as_slice(),
+            ),
+            (
+                include_bytes!("../testdata/mono24.flac").as_slice(),
+                include_bytes!("../testdata/mono24.wav").as_slice(),
+            ),
+        ] {
+            let (ff, fs) = decode_all(flac);
+            let (wf, ws) = decode_all(wav);
+            assert_eq!(ff.container, Container::Flac);
+            assert_eq!(
+                (ff.sample_rate, ff.channels, ff.bits, ff.frames),
+                (wf.sample_rate, wf.channels, wf.bits, wf.frames)
+            );
+            assert_eq!(fs.len() as u64, 2 * ff.frames);
+            assert_eq!(fs, ws);
+        }
     }
 
     #[test]

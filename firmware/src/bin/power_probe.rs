@@ -129,7 +129,6 @@ fn screen(display: &mut Display, bg: u16, lines: &[&str]) {
     display.present(0..HEIGHT).expect("present");
 }
 
-
 fn countdown(display: &mut Display, bg: u16, head: &[&str], secs: u32, what: &str) {
     for left in (1..=secs).rev() {
         let count = format!("{what} IN {left} SECONDS");
@@ -140,9 +139,12 @@ fn countdown(display: &mut Display, bg: u16, head: &[&str], secs: u32, what: &st
     }
 }
 
-
 /// Round 2: USB-A 5 V with the Pebble switched on, in display sleep.
-const METER_STEPS: [&str; 3] = ["SLEEP, USB-A ON", "SLEEP, USB-A OFF", "SLEEP, USB-A ON AGAIN"];
+const METER_STEPS: [&str; 3] = [
+    "SLEEP, USB-A ON",
+    "SLEEP, USB-A OFF",
+    "SLEEP, USB-A ON AGAIN",
+];
 
 fn main() {
     sys::link_patches();
@@ -161,11 +163,30 @@ fn main() {
 
     // As in the app: built-in speaker path and USB audio running.
     let player = wakey::audio::player::Player::new();
-    let _speaker = wakey::audio::builtin::BuiltinSpeaker::start(codec, bus.clone(), ioexp.clone(), player.source());
+    let _speaker = wakey::audio::builtin::BuiltinSpeaker::start(
+        codec,
+        bus.clone(),
+        ioexp.clone(),
+        player.source(),
+    );
     let _usb = wakey::audio::uac::UsbAudio::start(ioexp.switch(Pin::Usb5vEn), player.source()).ok();
 
-    screen(&mut display, GREEN, &["POWER TEST", "", "3 STEPS. NOTE THE", "METER IN EACH.", "", "TAP TO START."]);
-    while !matches!(wakey::board::touch::read_point(&mut i2c::lock(&bus)), Ok(Some(_))) {
+    screen(
+        &mut display,
+        GREEN,
+        &[
+            "POWER TEST",
+            "",
+            "3 STEPS. NOTE THE",
+            "METER IN EACH.",
+            "",
+            "TAP TO START.",
+        ],
+    );
+    while !matches!(
+        wakey::board::touch::read_point(&mut i2c::lock(&bus)),
+        Ok(Some(_))
+    ) {
         std::thread::sleep(Duration::from_millis(20));
     }
 
@@ -175,7 +196,16 @@ fn main() {
         countdown(
             &mut display,
             BLUE,
-            &[&t, "", step, "", "THE SCREEN GOES", "DARK. WAIT 5 S,", "THEN NOTE THE", "METER."],
+            &[
+                &t,
+                "",
+                step,
+                "",
+                "THE SCREEN GOES",
+                "DARK. WAIT 5 S,",
+                "THEN NOTE THE",
+                "METER.",
+            ],
             6,
             "DARK",
         );
@@ -190,7 +220,11 @@ fn main() {
     backlight.set_level(0.3).unwrap();
     loop {
         log::info!("probe: done");
-        screen(&mut display, GREEN, &["DONE.", "", "NOTE THE", "3 READINGS."]);
+        screen(
+            &mut display,
+            GREEN,
+            &["DONE.", "", "NOTE THE", "3 READINGS."],
+        );
         std::thread::sleep(Duration::from_secs(10));
     }
 }

@@ -14,7 +14,9 @@ use crate::display::Display;
 use crate::display::ppa::{PpaRotator, Target};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RenderingRotation, RepaintBufferType};
+use slint::platform::software_renderer::{
+    MinimalSoftwareWindow, RenderingRotation, RepaintBufferType,
+};
 use std::rc::Rc;
 
 /// Where a touch event goes.
@@ -162,13 +164,19 @@ pub async fn run(
                 if let Err(e) = display.set_pixel_clock(Some(SLEEP_PIXEL_CLOCK_MHZ)) {
                     log::warn!("display: sleep refresh not set: {e}");
                 }
-                log::info!("display: asleep, link rebuilt in {} ms", t.elapsed().as_millis());
+                log::info!(
+                    "display: asleep, link rebuilt in {} ms",
+                    t.elapsed().as_millis()
+                );
             } else {
                 let t = Instant::now();
                 if let Err(e) = display.set_pixel_clock(None) {
                     log::warn!("display: refresh not restored: {e}");
                 }
-                log::info!("display: waking, link rebuilt in {} ms", t.elapsed().as_millis());
+                log::info!(
+                    "display: waking, link rebuilt in {} ms",
+                    t.elapsed().as_millis()
+                );
                 waking = true;
                 full_repaints = 2;
                 window.request_redraw();

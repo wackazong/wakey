@@ -177,7 +177,9 @@ fn edges_stop() -> (u32, u32, u32) {
 // ── Touch controller registers ──────────────────────────────────────────────
 
 fn rd(bus: &SharedI2c, reg: u16, buf: &mut [u8]) -> bool {
-    i2c::lock(bus).write_read(TOUCH, &reg.to_be_bytes(), buf).is_ok()
+    i2c::lock(bus)
+        .write_read(TOUCH, &reg.to_be_bytes(), buf)
+        .is_ok()
 }
 
 fn rd8(bus: &SharedI2c, reg: u16) -> Option<u8> {
@@ -370,7 +372,6 @@ fn screen(display: &mut Display, bg: u16, lines: &[&str]) {
     display.present(0..HEIGHT).expect("present");
 }
 
-
 fn countdown(display: &mut Display, bg: u16, head: &[&str], secs: u32, what: &str) {
     for left in (1..=secs).rev() {
         let count = format!("{what} IN {left} SECONDS");
@@ -395,7 +396,10 @@ fn enter_swk(display: &Display, bus: &SharedI2c, misc: Option<u8>) {
     ORIG_F1.store(orig.into(), Ordering::Relaxed);
     let value = misc.unwrap_or(orig | 0x80);
     let a = wr8(bus, 0x00F1, value);
-    log::info!("spike: 0x00F1 was 0x{orig:02x}, wrote 0x{value:02x}, reads 0x{:02x}", rd8(bus, 0x00F1).unwrap_or(0));
+    log::info!(
+        "spike: 0x00F1 was 0x{orig:02x}, wrote 0x{value:02x}, reads 0x{:02x}",
+        rd8(bus, 0x00F1).unwrap_or(0)
+    );
     display.set_panel_sleep(true).unwrap();
     let b = wr8(bus, 0x0002, 0x02);
     std::thread::sleep(Duration::from_millis(300));
@@ -467,7 +471,10 @@ fn tap_variant(display: &mut Display, bus: &SharedI2c, misc: u8) -> (u32, u32, V
             let any = buf[4..4 + 7 * max].chunks(7).any(|r| r[0] & 0x80 != 0);
             if any && !finger {
                 touches += 1;
-                log::info!("spike: 0x{misc:02x}: touch point, report {:02x?}", &buf[..11]);
+                log::info!(
+                    "spike: 0x{misc:02x}: touch point, report {:02x?}",
+                    &buf[..11]
+                );
             }
             finger = any;
             if buf[2] != 0 {
@@ -571,7 +578,9 @@ fn sleep_round(display: &mut Display, bus: &SharedI2c, nvs: &EspNvs<NvsDefault>,
     // Not read: a DCS read (bus turnaround) during video mode may be what
     // left the panel black after waking (it reported 0x9c = on).
     let mode = 0u32;
-    log::info!("spike: sleep {round}: after wake {frames} frames in 200 ms, power mode 0x{mode:02x}");
+    log::info!(
+        "spike: sleep {round}: after wake {frames} frames in 200 ms, power mode 0x{mode:02x}"
+    );
     let _ = nvs.set_u32(&format!("f{n}"), frames);
     let _ = nvs.set_u32(&format!("w{n}"), mode);
     let by = match code {
@@ -581,7 +590,13 @@ fn sleep_round(display: &mut Display, bus: &SharedI2c, nvs: &EspNvs<NvsDefault>,
     };
     let slept = format!("SLEPT {} SECONDS.", ms / 1000);
     let g = format!("GESTURE: {}", gesture_name(gesture));
-    countdown(display, ORANGE, &[&title, "", "AWAKE AGAIN,", by, &slept, &g], 6, "NEXT");
+    countdown(
+        display,
+        ORANGE,
+        &[&title, "", "AWAKE AGAIN,", by, &slept, &g],
+        6,
+        "NEXT",
+    );
 }
 
 /// Logs the stored sleeps; returns one short line per sleep for the screen.
@@ -608,7 +623,11 @@ fn report(nvs: &EspNvs<NvsDefault>) -> Vec<String> {
             9 => "NEVER WOKE",
             _ => "OTHER",
         };
-        let pic = if get(&format!("w{i}")) & 0x04 != 0 { "ON" } else { "OFF" };
+        let pic = if get(&format!("w{i}")) & 0x04 != 0 {
+            "ON"
+        } else {
+            "OFF"
+        };
         lines.push(format!("{i}: {by}, PANEL {pic}"));
     }
     lines
@@ -633,9 +652,27 @@ struct Variant {
 /// of 0x00F1, which let one of five single taps through as a double tap
 /// (0x87), and once before as 0xC5: how many of 10 taps get through?
 const VARIANTS: [Variant; 3] = [
-    Variant { name: "SWK 0x86", swk: Some(0x86), panel_sleep: true, link_down: true, diff: false },
-    Variant { name: "SWK 0x87", swk: Some(0x87), panel_sleep: true, link_down: true, diff: false },
-    Variant { name: "SWK 0x82", swk: Some(0x82), panel_sleep: true, link_down: true, diff: false },
+    Variant {
+        name: "SWK 0x86",
+        swk: Some(0x86),
+        panel_sleep: true,
+        link_down: true,
+        diff: false,
+    },
+    Variant {
+        name: "SWK 0x87",
+        swk: Some(0x87),
+        panel_sleep: true,
+        link_down: true,
+        diff: false,
+    },
+    Variant {
+        name: "SWK 0x82",
+        swk: Some(0x82),
+        panel_sleep: true,
+        link_down: true,
+        diff: false,
+    },
 ];
 const TAP_SECS: u64 = 20;
 
@@ -688,13 +725,20 @@ fn run_variant(display: &mut Display, bus: &SharedI2c, v: &Variant) -> Seen {
     }
     if v.diff {
         let ok = wr8(bus, 0x0130, 0x01);
-        log::info!("spike: differ data on written {ok}, 0x0130 reads {:?}", rd8(bus, 0x0130));
+        log::info!(
+            "spike: differ data on written {ok}, 0x0130 reads {:?}",
+            rd8(bus, 0x0130)
+        );
     }
     if v.link_down {
         display.link_down().unwrap();
     }
     std::thread::sleep(Duration::from_millis(300));
-    log::info!("spike: variant {}: status {}", v.name, status_name(rd8(bus, 0x0001)));
+    log::info!(
+        "spike: variant {}: status {}",
+        v.name,
+        status_name(rd8(bus, 0x0001))
+    );
 
     let mut seen = Seen::default();
     let scans0 = scans(bus);
@@ -721,7 +765,11 @@ fn run_variant(display: &mut Display, bus: &SharedI2c, v: &Variant) -> Seen {
         let st = rd8(bus, 0x0001);
         if st != status {
             seen.states += 1;
-            log::info!("spike: status {} -> {}", status_name(status), status_name(st));
+            log::info!(
+                "spike: status {} -> {}",
+                status_name(status),
+                status_name(st)
+            );
             status = st;
         }
         if v.diff {
@@ -744,7 +792,15 @@ fn run_variant(display: &mut Display, bus: &SharedI2c, v: &Variant) -> Seen {
     };
     log::info!(
         "spike: variant {}: {} signals ({min_us}..{max_us} us), {} touches, {} gestures, {} state changes, differ max {} (first {}), {} peaks, {} scans",
-        v.name, seen.signals, seen.touches, seen.gestures, seen.states, seen.diff_max, seen.diff_first, seen.diff_peaks, seen.scans
+        v.name,
+        seen.signals,
+        seen.touches,
+        seen.gestures,
+        seen.states,
+        seen.diff_max,
+        seen.diff_first,
+        seen.diff_peaks,
+        seen.scans
     );
 
     // Back to normal.
@@ -780,15 +836,33 @@ fn main() {
         sys::gpio_set_pull_mode(TP_INT, sys::gpio_pull_mode_t_GPIO_PULLUP_ONLY);
     }
     // Waits for the tester.
-    screen(&mut display, GREEN, &["SINGLE TAP TEST", "", "TAP THE SCREEN", "TO START."]);
+    screen(
+        &mut display,
+        GREEN,
+        &["SINGLE TAP TEST", "", "TAP THE SCREEN", "TO START."],
+    );
     log::info!("spike: waiting for a tap to start");
-    while !matches!(wakey::board::touch::read_point(&mut i2c::lock(&bus)), Ok(Some(_))) {
+    while !matches!(
+        wakey::board::touch::read_point(&mut i2c::lock(&bus)),
+        Ok(Some(_))
+    ) {
         std::thread::sleep(Duration::from_millis(20));
     }
     countdown(
         &mut display,
         GREEN,
-        &["SINGLE TAP TEST", "", "3 ROUNDS. IN EACH:", "TAP ONCE EVERY", "2 SECONDS FOR", "20 SECONDS.", "", "THE SCREEN MAY", "GO BLACK. KEEP", "TAPPING ANYWAY."],
+        &[
+            "SINGLE TAP TEST",
+            "",
+            "3 ROUNDS. IN EACH:",
+            "TAP ONCE EVERY",
+            "2 SECONDS FOR",
+            "20 SECONDS.",
+            "",
+            "THE SCREEN MAY",
+            "GO BLACK. KEEP",
+            "TAPPING ANYWAY.",
+        ],
         10,
         "START",
     );
@@ -797,21 +871,41 @@ fn main() {
     let mut results = Vec::new();
     for (i, v) in VARIANTS.iter().enumerate() {
         let t = format!("ROUND {} OF {}", i + 1, VARIANTS.len());
-        countdown(&mut display, BLUE, &[&t, "", "GET READY TO TAP", "ONCE EVERY 2 S."], 3, "TAP");
+        countdown(
+            &mut display,
+            BLUE,
+            &[&t, "", "GET READY TO TAP", "ONCE EVERY 2 S."],
+            3,
+            "TAP",
+        );
         // The screen tells the tester to tap; it may go black right after.
-        screen(&mut display, BLUE, &[&t, "", "TAP NOW,", "ONCE EVERY 2 S,", "FOR 20 SECONDS."]);
+        screen(
+            &mut display,
+            BLUE,
+            &[&t, "", "TAP NOW,", "ONCE EVERY 2 S,", "FOR 20 SECONDS."],
+        );
         let seen = run_variant(&mut display, &bus, v);
         let a = format!("SIGNALS: {}", seen.signals);
         let b = format!("TOUCHES: {}", seen.touches);
         let c = format!("GESTURES: {}", seen.gestures);
         let d = format!("STATE CHANGES: {}", seen.states);
-        countdown(&mut display, ORANGE, &[&t, "", "STOP TAPPING.", "", &a, &b, &c, &d], 4, "NEXT");
+        countdown(
+            &mut display,
+            ORANGE,
+            &[&t, "", "STOP TAPPING.", "", &a, &b, &c, &d],
+            4,
+            "NEXT",
+        );
         results.push(format!(
             "variant {} ({}): {} signals, {} touches, {} gestures, {} state changes, differ max {} (first {}), {} peaks, {} scans",
             i + 1, v.name, seen.signals, seen.touches, seen.gestures, seen.states, seen.diff_max, seen.diff_first, seen.diff_peaks, seen.scans
         ));
     }
-    screen(&mut display, GREEN, &["DONE.", "", "THANK YOU!", "", "NOTE THEM."]);
+    screen(
+        &mut display,
+        GREEN,
+        &["DONE.", "", "THANK YOU!", "", "NOTE THEM."],
+    );
     loop {
         log::info!("spike: done");
         for r in &results {

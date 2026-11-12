@@ -13,8 +13,8 @@
 use super::alarm::{AlarmClock, View};
 use super::screens::AppWindow;
 use super::{PAGE_CLOCK, show_page};
-use crate::board::i2c::SharedI2c;
 use crate::audio::uac::UsbAudio;
+use crate::board::i2c::SharedI2c;
 use crate::board::ina226;
 use crate::ui::{input, power};
 use slint::{ComponentHandle, Timer, TimerMode};
@@ -68,7 +68,10 @@ pub fn start(
         }
         #[cfg(feature = "debug-overlay")]
         window.set_debug_text(debug_text(&cfg, allowed, ringing, window.get_page()).into());
-        let soon = alarm.borrow().secs_to_ring().is_some_and(|s| s <= USB_LEAD_S);
+        let soon = alarm
+            .borrow()
+            .secs_to_ring()
+            .is_some_and(|s| s <= USB_LEAD_S);
         let usb_wanted = soon || window.get_page() != PAGE_CLOCK;
         if usb_wanted != usb_on {
             usb.set_power(usb_wanted);
@@ -103,7 +106,11 @@ fn debug_text(cfg: &PowerConfig, allowed: bool, ringing: bool, page: i32) -> Str
     let dim = u32::from(crate::ui::dim::factor()) * 100 / u32::from(crate::ui::dim::FULL);
     let backlight = crate::ambient::backlight_level() * 100.0;
     let light = crate::ambient::last_light();
-    let night = if crate::ambient::night() { "night" } else { "day" };
+    let night = if crate::ambient::night() {
+        "night"
+    } else {
+        "day"
+    };
     let sleep = if power::asleep() {
         "asleep".to_string()
     } else if !allowed {

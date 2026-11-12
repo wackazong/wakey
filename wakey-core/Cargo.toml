@@ -11,6 +11,7 @@ description = "Hardware-independent logic of the Tab5 alarm clock, tested on the
 [workspace]
 
 [dependencies]
+claxon = "0.4"
 # Sample-rate conversion (FFT based, exact for fixed ratios like 44.1 → 48 kHz).
 rubato = "0.16"
 serde = { version = "1", features = ["derive"] }
