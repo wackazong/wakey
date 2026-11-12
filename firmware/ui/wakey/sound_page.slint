@@ -32,6 +32,10 @@ export global SoundPicker {
     // Index into 0, 10, 30, 60 s.
     in-out property <int> fade;
     in property <bool> previewing;
+    // TIDAL tab: 0 the rows (or `empty`), 1 a login code to confirm.
+    in property <int> tidal-view;
+    in property <image> tidal-qr;
+    in property <string> tidal-code;
 
     callback back();
     callback select-tab(int);
@@ -118,6 +122,39 @@ export component SoundPage inherits Rectangle {
             wrap: word-wrap;
             horizontal-alignment: center;
             vertical-alignment: center;
+        }
+        // The login: QR code of the link, and the code.
+        if SoundPicker.tab == 1 && SoundPicker.tidal-view == 1: Rectangle {
+            Rectangle {
+                x: 32px;
+                y: (parent.height - self.height) / 2;
+                width: 320px;
+                height: 320px;
+                border-radius: 16px;
+                background: white;
+                Image {
+                    source: SoundPicker.tidal-qr;
+                    width: 300px;
+                    height: 300px;
+                }
+            }
+            Text {
+                x: 384px;
+                y: 64px;
+                width: parent.width - self.x - 32px;
+                text: "Mit dem Handy scannen und bei TIDAL bestätigen.";
+                font-size: 30px;
+                color: Theme.text;
+                wrap: word-wrap;
+            }
+            Text {
+                x: 384px;
+                y: 260px;
+                width: parent.width - self.x - 32px;
+                text: "Code: " + SoundPicker.tidal-code;
+                font-size: 40px;
+                color: Theme.text-dim;
+            }
         }
         Flickable {
             content-height: SoundPicker.rows.length * 112px;

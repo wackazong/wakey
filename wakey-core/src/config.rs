@@ -226,6 +226,31 @@ impl Config {
     }
 }
 
+impl Config {
+    /// `json` with the TIDAL session replaced (`None`: logged out), the
+    /// rest of the file kept.
+    pub fn with_tidal_session(json: Option<&str>, session: Option<&TidalSession>) -> String {
+        let mut value = json
+            .and_then(|t| serde_json::from_str::<Value>(t).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| serde_json::to_value(Self::default()).expect("config JSON"));
+        migrate(&mut value);
+        if !value["tidal"].is_object() {
+            value["tidal"] = serde_json::to_value(TidalConfig::default()).expect("tidal JSON");
+        }
+        let tidal = value["tidal"].as_object_mut().expect("tidal object");
+        match session {
+            Some(s) => {
+                tidal.insert("session".into(), serde_json::to_value(s).expect("session JSON"));
+            }
+            None => {
+                tidal.remove("session");
+            }
+        }
+        pretty(&value)
+    }
+}
+
 fn pretty(value: &Value) -> String {
     let mut text = serde_json::to_string_pretty(value).expect("JSON value");
     text.push('\n');
@@ -414,6 +439,20 @@ mod tests {
             ..AlarmConfig::default()
         }];
         let text = r#"{ "wifi": { "ssid": "Netz" }, "alarm": { "snooze_min": 4 }, "x": [1] }"#;
+        let session = TidalSession {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: 5,
+            user_id: 7,
+            country_code: "CH".into(),
+        };
+        let with = Config::with_tidal_session(Some(text), Some(&session));
+        let c = Config::parse(&with).unwrap();
+        assert_eq!(c.tidal.session.as_ref(), Some(&session));
+        assert_eq!(c.tidal.playlist, "Wecker");
+        assert_eq!(c.wifi.as_ref().unwrap().ssid, "Netz");
+        let without = Config::with_tidal_session(Some(&with), None);
+        assert_eq!(Config::parse(&without).unwrap().tidal.session, None);
         let out = Config::with_alarms(Some(text), &alarms);
         let c = Config::parse(&out).unwrap();
         assert_eq!(c.alarms, alarms);

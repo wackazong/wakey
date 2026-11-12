@@ -48,6 +48,8 @@ const PAGE_SOUND: i32 = 3;
 const PAGE_NAME: i32 = 4;
 /// One alarm list row, for the list layer's offscreen window.
 const PAGE_LIST_ROW: i32 = 5;
+/// `config.json` cannot be read: the clock stops there.
+const PAGE_CONFIG_ERROR: i32 = 6;
 
 /// How deep a page is: going deeper slides the new page in from the
 /// right, going back from the left.
@@ -126,6 +128,12 @@ pub struct Ctx {
     name: RefCell<String>,
     /// The built-in speaker, for the wheel click.
     click: BuiltinSpeaker,
+    /// TIDAL login and state (sound page's TIDAL tab).
+    tidal: crate::tidal::Tidal,
+    /// While the TIDAL tab is open: follows its state.
+    tidal_timer: slint::Timer,
+    /// The TIDAL state last shown.
+    tidal_shown: RefCell<Option<crate::tidal::State>>,
 }
 
 impl Ctx {
@@ -184,13 +192,16 @@ async fn app(spawner: embassy_executor::Spawner) {
     } = Board::init().expect("board init");
 
     clock::init(&rtc);
-    let config = config::load();
+    let config = match config::load() {
+        Ok(c) => c,
+        Err(e) => config_error(display, backlight, e).await,
+    };
     let nvs = EspDefaultNvsPartition::take().expect("NVS");
     let wifi = net::start(
         modem,
         ioexp.switch(Pin::WlanPwrEn),
         nvs.clone(),
-        config.wifi,
+        config.wifi.clone(),
         Duration::from_secs(u64::from(config.sync_interval_h) * 3600),
         move || clock::store_system_time(&rtc),
     );
@@ -220,6 +231,9 @@ async fn app(spawner: embassy_executor::Spawner) {
         sound_choices: RefCell::new(Vec::new()),
         name: RefCell::new(String::new()),
         click: builtin,
+        tidal: crate::tidal::Tidal::new(config.tidal.clone(), wifi.clone()),
+        tidal_timer: slint::Timer::default(),
+        tidal_shown: RefCell::new(None),
     });
     alarm_list::start(&ui, &ctx);
     // Rows ready before the list is first opened (rendered in idle time).
@@ -247,6 +261,19 @@ async fn app(spawner: embassy_executor::Spawner) {
     render_loop::run(window, display, &mut rot, Some(&mut list)).await
 }
 
+/// `config.json` is broken: says so on screen and goes no further (no
+/// alarms, no Wi-Fi, nothing written).
+async fn config_error(display: crate::display::Display, mut backlight: crate::board::Backlight, error: String) -> ! {
+    let mut rot = PpaRotator::new().expect("PPA");
+    let window = platform::init();
+    let ui = screens::AppWindow::new().expect("UI");
+    ui.set_error_text(error.into());
+    ui.set_page(PAGE_CONFIG_ERROR);
+    ui.show().expect("show");
+    let _ = backlight.set_level(0.6);
+    render_loop::run(window, display, &mut rot, None).await
+}
+
 /// Every few seconds: back to the clock after a minute without a touch
 /// (not while a preview plays); the alarm page's "Klingelt in" kept
 /// current.
@@ -260,9 +287,13 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
             if page == PAGE_CLOCK {
                 return;
             }
+            // Not while a preview plays, nor while a TIDAL login waits for
+            // the user (the QR code on the sound page).
             if input::idle().as_millis() >= IDLE_CLOSE.as_millis() as u64
                 && !ctx.alarm.borrow().is_previewing()
+                && !ctx.tidal.logging_in()
             {
+                ctx.tidal.close();
                 log::info!(
                     "ui: back to the clock after {} s without a touch",
                     IDLE_CLOSE.as_secs()

@@ -77,3 +77,8 @@ CONFIG_ESP_HOSTED_SDIO_RX_DOUBLE_BUFFERING=n
 CONFIG_ESP_HOSTED_CLI_ENABLED=n
 CONFIG_ESP_HOSTED_MEM_MONITOR=n
 CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
+
+# HTTPS (TIDAL): mbedTLS's buffers (a 16 KiB record buffer and more per
+# connection) in PSRAM; internal RAM is short (~100 KiB free in a Wi-Fi
+# session). The certificate bundle (default: full) verifies the servers.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

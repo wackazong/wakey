@@ -7,14 +7,20 @@
 
 use crate::board::sd;
 use wakey_core::alarm::{self, AlarmConfig};
-pub use wakey_core::config::{Config, WifiConfig};
+pub use wakey_core::config::{Config, TidalConfig, TidalSession, WifiConfig};
+
+/// One writer at a time: alarms from the UI thread, the TIDAL session from
+/// the `wifi` thread.
+static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub const FILE: &str = "config.json";
 
-/// Reads the configuration; a missing or broken file gives the defaults.
-/// An old `alarm` section is migrated and settings missing from the file
-/// are added to it.
-pub fn load() -> Config {
+/// Reads the configuration; a missing file gives the defaults (first
+/// setup). A file that cannot be read is an error (in words, for the
+/// screen): the clock must not run on defaults and overwrite it later. An
+/// old `alarm` section is migrated and settings missing from the file are
+/// added to it.
+pub fn load() -> Result<Config, String> {
     let path = format!("{}/{FILE}", sd::MOUNT_POINT);
     let mut cfg = match std::fs::read_to_string(&path) {
         Ok(text) => match Config::load(&text) {
@@ -29,12 +35,16 @@ pub fn load() -> Config {
             }
             Err(e) => {
                 log::error!("config: {path}: {e}");
-                Config::default()
+                return Err(e.to_string());
             }
         },
-        Err(e) => {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::info!("config: no {path} ({e})");
             Config::default()
+        }
+        Err(e) => {
+            log::error!("config: {path}: {e}");
+            return Err(e.to_string());
         }
     };
     if cfg.wifi.is_none()
@@ -60,15 +70,27 @@ pub fn load() -> Config {
         }];
         alarm::sanitize_list(&mut cfg.alarms);
     }
-    cfg
+    Ok(cfg)
 }
 
 /// Writes `alarms` into `config.json`, keeping the rest of the file.
 pub fn save_alarms(alarms: &[AlarmConfig]) -> std::io::Result<()> {
+    let _w = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let path = format!("{}/{FILE}", sd::MOUNT_POINT);
     let old = std::fs::read_to_string(&path).ok();
     replace(&Config::with_alarms(old.as_deref(), alarms))?;
     log::info!("config: alarms saved to {path}");
+    Ok(())
+}
+
+/// Writes the TIDAL session into `config.json` (`None`: removes it),
+/// keeping the rest of the file.
+pub fn save_tidal_session(session: Option<&TidalSession>) -> std::io::Result<()> {
+    let _w = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let path = format!("{}/{FILE}", sd::MOUNT_POINT);
+    let old = std::fs::read_to_string(&path).ok();
+    replace(&Config::with_tidal_session(old.as_deref(), session))?;
+    log::info!("config: TIDAL session {}", if session.is_some() { "saved" } else { "removed" });
     Ok(())
 }
 

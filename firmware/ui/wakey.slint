@@ -34,6 +34,8 @@ export component AppWindow inherits Window {
     in property <length> list-row-dx;
     in property <bool> list-row-highlighted;
     in property <bool> list-row-underlay;
+    // Page 6: `config.json` cannot be read (the parser's message).
+    in property <string> error-text;
     // Debug overlay (cargo feature `debug-overlay`): shown when not empty.
     in property <string> debug-text;
 
@@ -70,6 +72,35 @@ export component AppWindow inherits Window {
         }
     }
     // At the window's origin (an element without x/y is centred).
+    if root.page == 6: Rectangle {
+        background: Theme.background;
+        Text {
+            x: 80px;
+            y: 120px;
+            width: parent.width - 160px;
+            text: "config.json ist fehlerhaft";
+            font-size: 40px;
+            color: Theme.text;
+        }
+        Text {
+            x: 80px;
+            y: 220px;
+            width: parent.width - 160px;
+            text: root.error-text;
+            font-size: 30px;
+            color: Theme.text-dim;
+            wrap: word-wrap;
+        }
+        Text {
+            x: 80px;
+            y: 520px;
+            width: parent.width - 160px;
+            text: "Die Datei auf der Speicherkarte korrigieren und den Wecker neu starten. Bis dahin läuft er nicht, auch kein Alarm.";
+            font-size: 30px;
+            color: Theme.text;
+            wrap: word-wrap;
+        }
+    }
     if root.page == 5: ListRowPage {
         x: 0;
         y: 0;

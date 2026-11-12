@@ -13,6 +13,10 @@
 //! scan, so the UI can show that networks are in range. Between sessions
 //! nothing of Wi-Fi runs, which light sleep needs. [`Wifi::status`] is the
 //! latest state, for display.
+//!
+//! [`Wifi::run`] asks for a session now, for a job that needs the network
+//! (TIDAL): it runs on the `wifi` thread once connected, before the clock
+//! sync, and learns why if no connection came about.
 
 use crate::board::ioexp::Switch;
 use crate::config::WifiConfig;
@@ -23,7 +27,7 @@ use esp_idf_svc::sntp::{EspSntp, SyncStatus};
 use esp_idf_svc::sys::{ESP_ERR_TIMEOUT, EspError};
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// Connection attempts per session, and the pause between them.
@@ -82,11 +86,35 @@ impl From<&EspError> for Failure {
     }
 }
 
+/// Work for a session: called on the `wifi` thread with `Ok` while
+/// connected, or with the reason there is no connection.
+pub type Job = Box<dyn FnOnce(Result<(), String>) + Send>;
+
+/// Makes sure a job hears back: dropped unrun, it gets an error.
+struct JobGuard(Option<Job>);
+
+impl JobGuard {
+    fn run(mut self, result: Result<(), String>) {
+        if let Some(job) = self.0.take() {
+            job(result);
+        }
+    }
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        if let Some(job) = self.0.take() {
+            job(Err("WLAN-Fehler".into()));
+        }
+    }
+}
+
 /// Handle on the `wifi` thread. Cheap to clone.
 #[derive(Clone)]
 pub struct Wifi {
     status: Arc<Mutex<Status>>,
     active: Arc<AtomicBool>,
+    jobs: mpsc::Sender<Job>,
 }
 
 impl Wifi {
@@ -100,6 +128,14 @@ impl Wifi {
     /// True during a session (the C6 powered, the driver up).
     pub fn active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
+    }
+
+    /// Runs `job` in a session as soon as the thread is free (now, unless
+    /// a session is under way).
+    pub fn run(&self, job: Job) {
+        if let Err(mpsc::SendError(job)) = self.jobs.send(job) {
+            job(Err("WLAN nicht verfügbar".into()));
+        }
     }
 }
 
@@ -117,9 +153,11 @@ pub fn start(
 ) -> Wifi {
     let status = Arc::new(Mutex::new(Status::Starting));
     let active = Arc::new(AtomicBool::new(false));
+    let (jobs, job_rx) = mpsc::channel::<Job>();
     let wifi = Wifi {
         status: status.clone(),
         active: active.clone(),
+        jobs,
     };
     std::thread::Builder::new()
         .name("wifi".into())
@@ -135,6 +173,7 @@ pub fn start(
             };
             let ssid = cfg.as_ref().map_or("WLAN".into(), |c| c.ssid.clone());
             let mut retry = RETRY_FIRST;
+            let mut job: Option<Job> = None;
             loop {
                 set(Status::Starting);
                 active.store(true, Ordering::Relaxed);
@@ -146,6 +185,7 @@ pub fn start(
                     nvs.clone(),
                     cfg.as_ref(),
                     &set,
+                    JobGuard(job.take()),
                 );
                 end_session(&power);
                 active.store(false, Ordering::Relaxed);
@@ -182,10 +222,11 @@ pub fn start(
                     free(esp_idf_svc::sys::MALLOC_CAP_INTERNAL),
                     free(esp_idf_svc::sys::MALLOC_CAP_SPIRAM)
                 );
-                std::thread::sleep(wait);
+                // The next scheduled session, or a job sooner.
+                job = job_rx.recv_timeout(wait).ok();
                 // Not while the display sleeps: the next session waits for it.
-                while crate::ui::power::asleep() {
-                    std::thread::sleep(Duration::from_secs(10));
+                while job.is_none() && crate::ui::power::asleep() {
+                    job = job_rx.recv_timeout(Duration::from_secs(10)).ok();
                 }
             }
         })
@@ -214,6 +255,7 @@ fn session(
     nvs: EspDefaultNvsPartition,
     cfg: Option<&WifiConfig>,
     set: &dyn Fn(Status),
+    job: JobGuard,
 ) -> anyhow::Result<bool> {
     power(true)?;
     std::thread::sleep(Duration::from_millis(500));
@@ -233,8 +275,11 @@ fn session(
     log::info!("wifi: driver up after {} ms", t.elapsed().as_millis());
     // The driver goes down when `wifi` is dropped (`esp_wifi_deinit`).
     match cfg {
-        Some(cfg) => sync_clock(wifi, cfg, set),
-        None => scan_once(wifi, set).map(|()| false),
+        Some(cfg) => sync_clock(wifi, cfg, set, job),
+        None => {
+            job.run(Err("Kein WLAN eingerichtet (config.json)".into()));
+            scan_once(wifi, set).map(|()| false)
+        }
     }
 }
 
@@ -268,12 +313,13 @@ fn scan_once(mut wifi: BlockingWifi<EspWifi<'_>>, set: &dyn Fn(Status)) -> anyho
     Ok(())
 }
 
-/// Connects (up to [`ATTEMPTS`] tries) and waits for SNTP. True if the
-/// clock was synced.
+/// Connects (up to [`ATTEMPTS`] tries), runs `job` and waits for SNTP. True
+/// if the clock was synced.
 fn sync_clock(
     mut wifi: BlockingWifi<EspWifi<'_>>,
     cfg: &WifiConfig,
     set: &dyn Fn(Status),
+    job: JobGuard,
 ) -> anyhow::Result<bool> {
     let too_long = |what| anyhow::anyhow!("Wi-Fi {what} too long");
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
@@ -308,6 +354,7 @@ fn sync_clock(
                 let _ = wifi.disconnect();
                 if attempt >= ATTEMPTS {
                     let _ = wifi.stop();
+                    job.run(Err(format!("Keine Verbindung zu „{ssid}“")));
                     anyhow::bail!("no connection to \"{ssid}\"");
                 }
                 std::thread::sleep(ATTEMPT_PAUSE);
@@ -326,6 +373,8 @@ fn sync_clock(
         ip,
         rssi: wifi.wifi().driver().get_rssi().ok(),
     });
+    // The job first: the clock (from the RTC) is good enough for TLS.
+    job.run(Ok(()));
     let sntp = EspSntp::new_default()?;
     let t = Instant::now();
     let synced = loop {

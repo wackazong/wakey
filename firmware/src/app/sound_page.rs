@@ -1,12 +1,15 @@
 //! The sound page's view model (`SoundPage` in `ui/wakey/sound_page.slint`):
 //! sound, volume and fade-in of the alarm being edited (the draft), and a
-//! preview on the speaker. TIDAL is a placeholder until it is set up.
+//! preview on the speaker. The TIDAL tab logs in (QR code of the device
+//! code link, [`crate::tidal`]); its songs follow.
 
 use super::screens::{AppWindow, SoundPicker, SoundRow};
 use super::{Ctx, PAGE_ALARM, PAGE_SOUND, alarm_page, show_page};
 use crate::sounds;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use crate::tidal::State;
+use slint::{ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use std::rc::Rc;
+use std::time::Duration;
 use wakey_core::alarm::Sound;
 
 /// Fade-in choices (the pills), seconds.
@@ -37,7 +40,94 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     picker.set_fade(fade);
     picker.set_previewing(false);
     fill_rows(window, ctx);
+    tidal_tab(window, ctx, tab == TAB_TIDAL);
     show_page(window, PAGE_SOUND);
+}
+
+/// The TIDAL tab opened (log in if needed, follow the state) or closed.
+fn tidal_tab(window: &AppWindow, ctx: &Ctx, open: bool) {
+    if !open {
+        ctx.tidal.close();
+        ctx.tidal_timer.stop();
+        return;
+    }
+    ctx.tidal.open();
+    *ctx.tidal_shown.borrow_mut() = None;
+    show_tidal(window, ctx);
+    let weak = window.as_weak();
+    let tidal = ctx.tidal.clone();
+    ctx.tidal_timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(500),
+        move || {
+            let Some(window) = weak.upgrade() else { return };
+            let picker = window.global::<SoundPicker>();
+            if picker.get_tab() == TAB_TIDAL {
+                let state = tidal.state();
+                show_state(&window, &state);
+            }
+        },
+    );
+}
+
+fn show_tidal(window: &AppWindow, ctx: &Ctx) {
+    let state = ctx.tidal.state();
+    if ctx.tidal_shown.borrow().as_ref() != Some(&state) {
+        show_state(window, &state);
+        *ctx.tidal_shown.borrow_mut() = Some(state);
+    }
+}
+
+/// Shows a TIDAL state on the tab (the QR code made anew only when the
+/// link changes).
+fn show_state(window: &AppWindow, state: &State) {
+    let picker = window.global::<SoundPicker>();
+    let note = match state {
+        State::NoCredentials => {
+            "TIDAL ist nicht eingerichtet: die Zugangsdaten fehlen in config.json."
+        }
+        State::LoggedOut | State::Connecting => "Verbinde mit TIDAL …",
+        State::Code { url, code } => {
+            if picker.get_tidal_code().as_str() != code {
+                if let Some(qr) = qr_image(url) {
+                    picker.set_tidal_qr(qr);
+                }
+                picker.set_tidal_code(code.as_str().into());
+            }
+            picker.set_tidal_view(1);
+            picker.set_empty("".into());
+            return;
+        }
+        State::LoggedIn => "Bei TIDAL angemeldet. Die Lieder der Playlist folgen bald.",
+        State::Failed(e) => {
+            picker.set_tidal_view(0);
+            picker.set_empty(format!("{e} Zum Wiederholen den Tab erneut öffnen.").into());
+            return;
+        }
+    };
+    picker.set_tidal_view(0);
+    picker.set_tidal_code("".into());
+    picker.set_empty(note.into());
+}
+
+/// A QR code of `text`, black on white with a quiet zone, about 300 px.
+fn qr_image(text: &str) -> Option<Image> {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let qr = QrCode::encode_text(text, QrCodeEcc::Medium).ok()?;
+    const BORDER: i32 = 3;
+    let modules = qr.size() + 2 * BORDER;
+    let scale = (300 / modules).max(1);
+    let px = (modules * scale) as u32;
+    let mut buf = SharedPixelBuffer::<Rgb8Pixel>::new(px, px);
+    let data = buf.make_mut_slice();
+    for y in 0..px as i32 {
+        for x in 0..px as i32 {
+            let dark = qr.get_module(x / scale - BORDER, y / scale - BORDER);
+            let v = if dark { 0 } else { 255 };
+            data[(y * px as i32 + x) as usize] = Rgb8Pixel { r: v, g: v, b: v };
+        }
+    }
+    Some(Image::from_rgb8(buf))
 }
 
 fn fill_rows(window: &AppWindow, ctx: &Ctx) {
@@ -72,7 +162,7 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         }));
         choices
     } else {
-        picker.set_empty("TIDAL ist noch nicht eingerichtet.".into());
+        // The login or the state, shown by `show_state`.
         Vec::new()
     };
     let (rows, sounds): (Vec<SoundRow>, Vec<Sound>) = choices.into_iter().unzip();
@@ -85,6 +175,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     let picker = window.global::<SoundPicker>();
 
     picker.on_back(ctx.with(|window, ctx| {
+        tidal_tab(window, ctx, false);
         ctx.alarm.borrow_mut().stop_preview();
         alarm_page::fill(window, ctx);
         show_page(window, PAGE_ALARM);
@@ -92,6 +183,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     picker.on_select_tab(ctx.with_arg(|window, ctx, tab: i32| {
         window.global::<SoundPicker>().set_tab(tab);
         fill_rows(window, ctx);
+        tidal_tab(window, ctx, tab == TAB_TIDAL);
     }));
     picker.on_select(ctx.with_arg(|window, ctx, i: i32| {
         if window.global::<SoundPicker>().get_tab() != TAB_FILES {
