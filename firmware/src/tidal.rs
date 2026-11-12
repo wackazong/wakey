@@ -6,11 +6,13 @@
 //! the phone; the clock polls until then, then writes the session into
 //! `config.json`. Leaving the tab stops the polling.
 //!
-//! Sync: when the tab opens with a session (once per boot), a session job
-//! refreshes the token if it is about to expire (saved), finds the
-//! playlist (`playlist` in `config.json`, "Wecker") among the user's own
-//! and reads its tracks into `tidal/playlist.json` on the card, which
-//! [`Tidal::playlist`] serves (offline too).
+//! Sync: whenever the tab opens with a session, a session job refreshes
+//! the token if it is about to expire (saved), finds the playlist
+//! (`playlist` in `config.json`, "Wecker") among the user's own and reads
+//! its tracks into `tidal/playlist.json` on the card, which
+//! [`Tidal::playlist`] serves (offline too). While the tab stays open the
+//! job reads the tracks again every [`WATCH`] (edits in the TIDAL app show
+//! up); Wi-Fi stays on until the tab closes.
 //!
 //! The state is shared with the UI thread ([`Tidal::state`]); the work runs
 //! on the `wifi` thread.
@@ -25,6 +27,9 @@ use std::path::PathBuf;
 use wakey_core::tidal::api::{self, Track};
 use wakey_core::tidal::auth::{self, Poll};
 use wakey_core::tidal::sync;
+
+/// While the tab is open: the playlist read again this often.
+const WATCH: Duration = Duration::from_secs(5);
 
 /// Longest a login code is polled for (TIDAL's are valid for ~5 min).
 const LOGIN_MAX: Duration = Duration::from_secs(600);
@@ -57,8 +62,10 @@ struct Inner {
     wanted: bool,
     /// The playlist's tracks, in order (from the card, then synced).
     playlist: Vec<Track>,
-    /// Synced since boot.
-    synced: bool,
+    /// Counts changes of `playlist` (the tab is filled again).
+    version: u32,
+    /// The playlist's id, once found in this Wi-Fi session.
+    uuid: Option<String>,
 }
 
 /// Sends `req`; on an error status logs TIDAL's reason (only `status`,
@@ -138,7 +145,8 @@ impl Tidal {
                 busy: false,
                 wanted: false,
                 playlist: load_playlist(),
-                synced: false,
+                version: 0,
+                uuid: None,
             })),
             wifi,
         }
@@ -157,27 +165,32 @@ impl Tidal {
         self.lock().playlist.clone()
     }
 
+    /// Changes when [`Self::playlist`] does.
+    pub fn version(&self) -> u32 {
+        self.lock().version
+    }
+
     /// A login is under way (code shown or coming).
     pub fn logging_in(&self) -> bool {
         matches!(self.lock().state, State::Connecting | State::Code { .. })
     }
 
     /// The TIDAL tab opened: logs in if there is no session, else syncs the
-    /// playlist (once per boot, or after a failure).
+    /// playlist, and keeps it fresh while the tab is open.
     pub fn open(&self) {
         let mut inner = self.lock();
         inner.wanted = true;
         if inner.busy || !inner.cfg.has_credentials() {
             return;
         }
-        let sync = inner.cfg.session.is_some()
-            && (!inner.synced || matches!(inner.state, State::Failed(_)));
+        let sync = inner.cfg.session.is_some();
         let login = inner.cfg.session.is_none()
             && matches!(inner.state, State::LoggedOut | State::Failed(_));
         if !sync && !login {
             return;
         }
         inner.busy = true;
+        inner.uuid = None;
         inner.state = if sync { State::Syncing } else { State::Connecting };
         drop(inner);
         let this = self.clone();
@@ -187,6 +200,7 @@ impl Tidal {
                 Ok(()) => this.login_and_sync(),
                 Err(e) => this.lock().state = State::Failed(e),
             }
+            this.watch();
             this.lock().busy = false;
         }));
     }
@@ -230,13 +244,35 @@ impl Tidal {
         }
     }
 
+    /// While the tab is open and the playlist synced: reads it again every
+    /// [`WATCH`] (the state stays; errors are logged and end the watch).
+    fn watch(&self) {
+        loop {
+            {
+                let inner = self.lock();
+                if !inner.wanted || inner.state != State::LoggedIn {
+                    return;
+                }
+            }
+            std::thread::sleep(WATCH);
+            if !self.lock().wanted {
+                return;
+            }
+            if let Err(e) = self.sync() {
+                log::warn!("tidal: watch: {e}");
+                self.lock().state = State::Failed(e);
+                return;
+            }
+        }
+    }
+
     fn drop_session(&self) {
         if let Err(e) = config::save_tidal_session(None) {
             log::error!("tidal: removing the session: {e}");
         }
         let mut inner = self.lock();
         inner.cfg.session = None;
-        inner.synced = false;
+        inner.uuid = None;
     }
 
     /// After a sync: the state.
@@ -244,9 +280,7 @@ impl Tidal {
         match result {
             Ok(n) => {
                 log::info!("tidal: playlist synced, {n} tracks");
-                let mut inner = self.lock();
-                inner.synced = true;
-                inner.state = State::LoggedIn;
+                self.lock().state = State::LoggedIn;
             }
             Err(e) => {
                 log::warn!("tidal: sync: {e}");
@@ -268,11 +302,6 @@ impl Tidal {
             (inner.cfg.clone(), s)
         };
         let now = crate::clock::moment().unix;
-        log::info!(
-            "tidal: token {} chars, valid {} s more",
-            session.access_token.len(),
-            session.expires_at - now
-        );
         if !auth::needs_refresh(&session, now) {
             return Ok(session);
         }
@@ -284,38 +313,54 @@ impl Tidal {
         Ok(fresh)
     }
 
-    /// Reads the playlist's tracks into `tidal/playlist.json`, on the `wifi`
-    /// thread. The number of tracks.
+    /// Reads the playlist's tracks, on the `wifi` thread; a change goes to
+    /// `tidal/playlist.json`. The number of tracks. The first sync in a
+    /// Wi-Fi session also binds the API session and finds the playlist.
     fn sync(&self) -> Result<usize, String> {
         let s = self.session()?;
-        // Binds an API session to the token; user calls fail without it.
-        let (status, body) = send(&api::sessions(&s), "session")?;
-        let (user, country) = api::parse_sessions(status, &body).map_err(|e| e.to_string())?;
-        log::info!("tidal: session for user {user}, {country}");
-        let name = self.lock().cfg.playlist.clone();
-        let mut lists = Vec::new();
-        let mut offset = Some(0);
-        while let Some(o) = offset {
-            let (status, body) = send(&api::playlists(&s, o), "playlists")?;
-            let (page, next) = api::parse_playlists(status, &body, o).map_err(|e| e.to_string())?;
-            lists.extend(page);
-            offset = next;
-        }
-        let list = api::find_playlist(&lists, &name)
-            .ok_or_else(|| format!("Keine Playlist „{name}“ bei TIDAL."))?
-            .clone();
+        let known = self.lock().uuid.clone();
+        let uuid = match known {
+            Some(u) => u,
+            None => {
+                // Binds an API session to the token; user calls fail
+                // without it.
+                let (status, body) = send(&api::sessions(&s), "session")?;
+                api::parse_sessions(status, &body).map_err(|e| e.to_string())?;
+                let name = self.lock().cfg.playlist.clone();
+                let mut lists = Vec::new();
+                let mut offset = Some(0);
+                while let Some(o) = offset {
+                    let (status, body) = send(&api::playlists(&s, o), "playlists")?;
+                    let (page, next) =
+                        api::parse_playlists(status, &body, o).map_err(|e| e.to_string())?;
+                    lists.extend(page);
+                    offset = next;
+                }
+                let uuid = api::find_playlist(&lists, &name)
+                    .ok_or_else(|| format!("Keine Playlist „{name}“ bei TIDAL."))?
+                    .uuid
+                    .clone();
+                self.lock().uuid = Some(uuid.clone());
+                uuid
+            }
+        };
         let mut tracks = Vec::new();
         let mut offset = Some(0);
         while let Some(o) = offset {
-            let (status, body) = send(&api::playlist_items(&s, &list.uuid, o), "playlist")?;
+            let (status, body) = send(&api::playlist_items(&s, &uuid, o), "playlist")?;
             let (page, next) =
                 api::parse_playlist_items(status, &body, o).map_err(|e| e.to_string())?;
             tracks.extend(page);
             offset = next;
         }
-        save_playlist(&tracks).map_err(|e| format!("Speichern: {e}"))?;
         let n = tracks.len();
-        self.lock().playlist = tracks;
+        if self.lock().playlist != tracks {
+            save_playlist(&tracks).map_err(|e| format!("Speichern: {e}"))?;
+            log::info!("tidal: playlist changed, {n} tracks");
+            let mut inner = self.lock();
+            inner.playlist = tracks;
+            inner.version = inner.version.wrapping_add(1);
+        }
         Ok(n)
     }
 
@@ -349,13 +394,7 @@ impl Tidal {
                 Poll::Done(session) => {
                     config::save_tidal_session(Some(&session))
                         .map_err(|e| format!("Speichern: {e}"))?;
-                    log::info!(
-                        "tidal: logged in (user {}, {}; token {} chars, valid {} s)",
-                        session.user_id,
-                        session.country_code,
-                        session.access_token.len(),
-                        session.expires_at - crate::clock::moment().unix
-                    );
+                    log::info!("tidal: logged in");
                     let mut inner = self.lock();
                     inner.cfg.session = Some(session);
                     inner.state = State::LoggedIn;

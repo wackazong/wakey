@@ -42,8 +42,10 @@ export component AppWindow inherits Window {
     // Never shown: makes the compiler embed glyphs that only appear in
     // strings set from Rust (dates, Wi-Fi errors, alarm names, file
     // names).
-    Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“"; font-size: 30px; }
-    Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“"; font-size: 40px; }
+    // Also typographic quotes and accented letters: titles from TIDAL
+    // ("Can’t") showed a blob for the right single quotation mark.
+    Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 30px; }
+    Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 40px; }
 
     if root.page == 0: ClockPage { }
     if root.page == 1: AlarmListPage { }

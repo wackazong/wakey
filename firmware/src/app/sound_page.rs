@@ -56,16 +56,16 @@ fn tidal_tab(window: &AppWindow, ctx: &Ctx, open: bool) {
     show_tidal(window, ctx);
     let weak = window.as_weak();
     let tidal = ctx.tidal.clone();
-    let mut seen = tidal.state();
+    let mut seen = (tidal.state(), tidal.version());
     ctx.tidal_timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(500),
         move || {
             let Some(window) = weak.upgrade() else { return };
             let picker = window.global::<SoundPicker>();
-            let state = tidal.state();
-            if picker.get_tab() == TAB_TIDAL && state != seen {
-                seen = state;
+            let now = (tidal.state(), tidal.version());
+            if picker.get_tab() == TAB_TIDAL && now != seen {
+                seen = now;
                 picker.invoke_refresh();
             }
         },

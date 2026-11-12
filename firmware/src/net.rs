@@ -186,6 +186,7 @@ pub fn start(
                     cfg.as_ref(),
                     &set,
                     JobGuard(job.take()),
+                    &job_rx,
                 );
                 end_session(&power);
                 active.store(false, Ordering::Relaxed);
@@ -256,6 +257,7 @@ fn session(
     cfg: Option<&WifiConfig>,
     set: &dyn Fn(Status),
     job: JobGuard,
+    more: &mpsc::Receiver<Job>,
 ) -> anyhow::Result<bool> {
     power(true)?;
     std::thread::sleep(Duration::from_millis(500));
@@ -275,7 +277,7 @@ fn session(
     log::info!("wifi: driver up after {} ms", t.elapsed().as_millis());
     // The driver goes down when `wifi` is dropped (`esp_wifi_deinit`).
     match cfg {
-        Some(cfg) => sync_clock(wifi, cfg, set, job),
+        Some(cfg) => sync_clock(wifi, cfg, set, job, more),
         None => {
             job.run(Err("Kein WLAN eingerichtet (config.json)".into()));
             scan_once(wifi, set).map(|()| false)
@@ -313,13 +315,16 @@ fn scan_once(mut wifi: BlockingWifi<EspWifi<'_>>, set: &dyn Fn(Status)) -> anyho
     Ok(())
 }
 
-/// Connects (up to [`ATTEMPTS`] tries), runs `job` and waits for SNTP. True
-/// if the clock was synced.
+/// Connects (up to [`ATTEMPTS`] tries), runs `job` and waits for SNTP. Jobs
+/// that come in (`more`) while connected run in this session too: a TIDAL
+/// tab opened during a slow NTP sync does not wait for the next session.
+/// True if the clock was synced.
 fn sync_clock(
     mut wifi: BlockingWifi<EspWifi<'_>>,
     cfg: &WifiConfig,
     set: &dyn Fn(Status),
     job: JobGuard,
+    more: &mpsc::Receiver<Job>,
 ) -> anyhow::Result<bool> {
     let too_long = |what| anyhow::anyhow!("Wi-Fi {what} too long");
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
@@ -375,9 +380,16 @@ fn sync_clock(
     });
     // The job first: the clock (from the RTC) is good enough for TLS.
     job.run(Ok(()));
+    let run_more = || {
+        while let Ok(job) = more.try_recv() {
+            job(Ok(()));
+        }
+    };
+    run_more();
     let sntp = EspSntp::new_default()?;
     let t = Instant::now();
     let synced = loop {
+        run_more();
         if sntp.get_sync_status() == SyncStatus::Completed {
             log::info!("wifi: NTP sync done after {} ms", t.elapsed().as_millis());
             break true;
@@ -389,6 +401,7 @@ fn sync_clock(
         std::thread::sleep(Duration::from_millis(250));
     };
     drop(sntp);
+    run_more();
     let _ = wifi.disconnect();
     let _ = wifi.stop();
     if !synced {
