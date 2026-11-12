@@ -11,8 +11,9 @@
 //!
 //! The amplifier is on while streaming, from a [`BuiltinSpeaker::wake`]
 //! (the alarm page: its wheels click) or a click, until [`AMP_OFF_AFTER`]
-//! without either; off, the thread sleeps and the stream plays silence by
-//! itself (`auto_clear`), so the speaker does not hiss or draw current.
+//! without either. With it the codec and the I2S clocks go off (~9 mA at
+//! 5 V), and the thread sleeps; before the next sound the I2S starts, the
+//! codec is set up again (~3 ms) and the amplifier comes on.
 
 use super::uac::Source;
 use crate::board::codec::{self, CodecPins};
@@ -94,13 +95,17 @@ impl BuiltinSpeaker {
             Some(pins.mclk),
             pins.ws,
         )?;
+        // Set up once (it answers), then off until the first sound.
         i2s.tx_enable()?;
         codec::init(&bus)?;
+        codec::power_down(&bus)?;
+        i2s.tx_disable()?;
         log::info!("speaker: built-in speaker ready");
 
         let (tx, rx) = mpsc::sync_channel::<Msg>(8);
         let mut mixer = Mixer {
             i2s,
+            bus,
             ioexp,
             source,
             click: tone::click(SAMPLE_RATE, CLICK_AMPLITUDE),
@@ -151,6 +156,7 @@ impl BuiltinSpeaker {
 
 struct Mixer {
     i2s: I2sDriver<'static, I2sTx>,
+    bus: SharedI2c,
     ioexp: IoExpanders,
     source: Source,
     /// The click at full gain, mono.
@@ -227,14 +233,36 @@ impl Mixer {
         }
     }
 
-    /// Switches the amplifier; on: lets it start up with the keep-alive
-    /// running, so the first sound is whole.
+    /// Switches the amplifier, and with it the codec and the I2S clocks
+    /// (the amplifier off first, so the codec's power-down is not heard);
+    /// on: lets it start up with the keep-alive running, so the first sound
+    /// is whole.
     fn amp(&mut self, on: bool) {
-        if on == self.amp_on || self.ioexp.set(Pin::SpkEn, on).is_err() {
+        if on == self.amp_on {
+            return;
+        }
+        if on {
+            // MCLK first: the codec's setup needs it.
+            if let Err(e) = self.i2s.tx_enable() {
+                log::warn!("speaker: I2S start: {e}");
+            }
+            if let Err(e) = codec::init(&self.bus) {
+                log::warn!("speaker: codec setup: {e}");
+            }
+        }
+        if self.ioexp.set(Pin::SpkEn, on).is_err() {
             return;
         }
         self.amp_on = on;
         log::info!("speaker: amplifier {}", if on { "on" } else { "off" });
+        if !on {
+            if let Err(e) = codec::power_down(&self.bus) {
+                log::warn!("speaker: codec power-down: {e}");
+            }
+            if let Err(e) = self.i2s.tx_disable() {
+                log::warn!("speaker: I2S stop: {e}");
+            }
+        }
         if on {
             let started = Instant::now();
             self.block.copy_from_slice(&self.keepalive);

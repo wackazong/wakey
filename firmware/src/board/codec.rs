@@ -63,6 +63,14 @@ const INIT: [(u8, u8); 31] = [
     (2, 0x0A),
 ];
 
+/// Powers the codec down (DAC, then the chip): ~9 mA less at 5 V. [`init`]
+/// powers it up again (MCLK running first).
+pub fn power_down(bus: &SharedI2c) -> Result<(), EspError> {
+    let mut b = i2c::lock(bus);
+    b.write(ADDR, &[4, 0xC0])?;
+    b.write(ADDR, &[2, 0xFF])
+}
+
 /// Powers the DAC path up. MCLK must be running.
 pub fn init(bus: &SharedI2c) -> Result<(), EspError> {
     let mut b = i2c::lock(bus);

@@ -208,6 +208,11 @@ pub(super) fn client_thread(
                             client.shared.connected.store(false, Ordering::Release);
                         }
                         let _ = set_port_power(false);
+                        // The 5 V off: the Pebble clicks (its amplifier
+                        // losing power; muting or ramping the volume first
+                        // did not help), but with only the root port off it
+                        // still drew ~80 mA. ESP-IDF 5.5.5 has no USB
+                        // suspend.
                         if let Err(e) = vbus(false) {
                             log::error!("uac: switching USB-A 5 V off failed: {e}");
                         }

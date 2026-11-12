@@ -73,6 +73,8 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 
 ## USB audio
 
+- **The Pebble clicks when USB-A 5 V goes off or on** (its amplifier losing or getting power). Lowering the volume in steps and muting it first did not help. Switching only the root port off (5 V on) avoids the click, but the Pebble then still draws ~80 mA; ESP-IDF 5.5.5's USB host has no suspend. Kept: 5 V off, with the click.
+
 - **"Root port reset failed" forever:** the HS controller must be full/low-speed only (`HCFG.FSLSSupp`, register 0x400 bit 2) after `usb_host_install` and before powering the port. espressif/usb's `fsls_only` needs a newer ESP-IDF HAL than 5.5.5.
 - **Order:** host installed with the root port unpowered, `USB5V_EN` on, 1 s for the speaker to boot, then port power. The first two resets still fail ("Root port reset failed" in the log is normal); the host stack recovers by itself, and the firmware power-cycles the port if nothing enumerates within 3 s.
 - **Packets acknowledged, no sound:** ESP-IDF's interface claim does not send `SET_INTERFACE`; send it explicitly.
