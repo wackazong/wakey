@@ -178,6 +178,28 @@ impl Display {
             ldo_cfg.voltage_mv = 2500;
             esp!(sys::esp_ldo_acquire_channel(&ldo_cfg, &mut this.phy_ldo))?;
 
+        }
+
+        this.open_link()?;
+        this.init_panel()?;
+
+        this.start_stream()?;
+
+        log::info!(
+            "display: {:?} {}x{} RGB565, {:.1} Hz, frame buffers {:?}",
+            variant,
+            WIDTH,
+            HEIGHT,
+            timing.refresh_hz(),
+            this.fbs
+        );
+        Ok(this)
+    }
+
+    /// Creates the DSI bus (PHY) and the command interface (DBI).
+    fn open_link(&mut self) -> Result<(), EspError> {
+        let timing = self.variant.timing();
+        unsafe {
             let mut bus_cfg: sys::esp_lcd_dsi_bus_config_t = core::mem::zeroed();
             bus_cfg.bus_id = 0;
             bus_cfg.num_data_lanes = 2;
@@ -186,7 +208,7 @@ impl Display {
             // choice and aborts in the HAL on rev 1.x.
             bus_cfg.phy_clk_src = 0;
             bus_cfg.lane_bit_rate_mbps = timing.lane_bit_rate_mbps;
-            esp!(sys::esp_lcd_new_dsi_bus(&bus_cfg, &mut this.bus))?;
+            esp!(sys::esp_lcd_new_dsi_bus(&bus_cfg, &mut self.bus))?;
 
             // Command mode (DBI) for the vendor init sequence.
             let dbi_cfg = sys::esp_lcd_dbi_io_config_t {
@@ -195,14 +217,17 @@ impl Display {
                 lcd_param_bits: 8,
             };
             esp!(sys::esp_lcd_new_panel_io_dbi(
-                this.bus,
+                self.bus,
                 &dbi_cfg,
-                &mut this.io
+                &mut self.io
             ))?;
         }
+        Ok(())
+    }
 
-        this.init_panel()?;
-
+    /// Creates the DPI panel and starts streaming fb0 (video mode).
+    fn start_stream(&mut self) -> Result<(), EspError> {
+        let timing = self.variant.timing();
         unsafe {
             // Video mode (DPI): two frame buffers in PSRAM, allocated by the driver.
             let mut dpi_cfg: sys::esp_lcd_dpi_panel_config_t = core::mem::zeroed();
@@ -225,42 +250,35 @@ impl Display {
             };
             // No DMA2D: we render straight into the frame buffers.
             esp!(sys::esp_lcd_new_panel_dpi(
-                this.bus,
+                self.bus,
                 &dpi_cfg,
-                &mut this.panel
+                &mut self.panel
             ))?;
 
             let mut cbs: sys::esp_lcd_dpi_panel_event_callbacks_t = core::mem::zeroed();
             cbs.__bindgen_anon_1.on_frame_buf_complete = Some(on_frame_buf_complete);
             esp!(sys::esp_lcd_dpi_panel_register_event_callbacks(
-                this.panel,
+                self.panel,
                 &cbs,
                 ptr::null_mut()
             ))?;
 
             // Starts the DMA: from here on fb0 is streamed continuously.
-            esp!(sys::esp_lcd_panel_init(this.panel))?;
+            esp!(sys::esp_lcd_panel_init(self.panel))?;
 
             let mut fb0: *mut c_void = ptr::null_mut();
             let mut fb1: *mut c_void = ptr::null_mut();
             esp!(sys::esp_lcd_dpi_panel_get_frame_buffer(
-                this.panel,
+                self.panel,
                 2,
                 &mut fb0 as *mut *mut c_void,
                 &mut fb1 as *mut *mut c_void,
             ))?;
-            this.fbs = [fb0.cast(), fb1.cast()];
+            self.fbs = [fb0.cast(), fb1.cast()];
         }
-
-        log::info!(
-            "display: {:?} {}x{} RGB565, {:.1} Hz, frame buffers {:?}",
-            variant,
-            WIDTH,
-            HEIGHT,
-            timing.refresh_hz(),
-            this.fbs
-        );
-        Ok(this)
+        self.front = 0;
+        self.pending_flip = None;
+        Ok(())
     }
 
     fn tx(&self, cmd: u8, params: &[u8]) -> Result<(), EspError> {
@@ -346,6 +364,98 @@ impl Display {
     pub fn variant(&self) -> PanelVariant {
         self.variant
     }
+
+    /// Spike support (`bin/chip_sleep`): streams the DSI host's own colour
+    /// bars instead of the frame buffer (`true`; no PSRAM reads), or the
+    /// frame buffer again (`false`).
+    pub fn set_test_pattern(&mut self, on: bool) -> Result<(), EspError> {
+        let pattern = if on {
+            sys::mipi_dsi_pattern_type_t_MIPI_DSI_PATTERN_BAR_HORIZONTAL
+        } else {
+            sys::mipi_dsi_pattern_type_t_MIPI_DSI_PATTERN_NONE
+        };
+        esp!(unsafe { sys::esp_lcd_dpi_panel_set_pattern(self.panel, pattern) })
+    }
+
+    /// Spike support (`bin/chip_sleep`): panel display off and sleep in
+    /// (`true`), or sleep out and display on (`false`). The video stream
+    /// keeps running.
+    pub fn set_panel_sleep(&self, sleep: bool) -> Result<(), EspError> {
+        if sleep {
+            self.tx(0x28, &[])?;
+            FreeRtos::delay_ms(20);
+            self.tx(0x10, &[])?;
+        } else {
+            self.tx(0x11, &[])?;
+            FreeRtos::delay_ms(120);
+            self.tx(0x29, &[])?;
+        }
+        FreeRtos::delay_ms(120);
+        Ok(())
+    }
+
+    /// Spike support (`bin/chip_sleep`): the panel's software reset and
+    /// vendor init again (ends with sleep out and display on), with the
+    /// video stream running.
+    pub fn reinit_panel(&self) -> Result<(), EspError> {
+        self.init_panel()
+    }
+
+    /// Spike support (`bin/chip_sleep`): takes the whole display link down
+    /// (stream, command interface, DSI bus and PHY; the PHY's LDO stays
+    /// on). Light sleep stops the PHY's clock: after it, commands stay in
+    /// the DSI command FIFO forever. [`link_up`] rebuilds it as at boot.
+    ///
+    /// [`link_up`]: Self::link_up
+    pub fn link_down(&mut self) -> Result<(), EspError> {
+        if !self.panel.is_null() {
+            self.suspend_stream()?;
+        }
+        unsafe {
+            esp!(sys::esp_lcd_panel_io_del(self.io))?;
+            esp!(sys::esp_lcd_del_dsi_bus(self.bus))?;
+        }
+        self.io = ptr::null_mut();
+        self.bus = ptr::null_mut();
+        Ok(())
+    }
+
+    /// Spike support: DSI bus, panel init (software reset, vendor init,
+    /// sleep out, display on) and a new stream, as at boot.
+    pub fn link_up(&mut self) -> Result<(), EspError> {
+        self.open_link()?;
+        self.init_panel()?;
+        self.start_stream()
+    }
+
+    /// Spike support (`bin/chip_sleep`): stops the video stream (deletes
+    /// the DPI panel and its frame buffers); [`resume_stream`] starts a new
+    /// one. The DSI link and the panel stay powered.
+    ///
+    /// [`resume_stream`]: Self::resume_stream
+    pub fn suspend_stream(&mut self) -> Result<(), EspError> {
+        esp!(unsafe { sys::esp_lcd_panel_del(self.panel) })?;
+        self.panel = ptr::null_mut();
+        self.fbs = [ptr::null_mut(); 2];
+        Ok(())
+    }
+
+    /// Spike support: a new video stream after [`suspend_stream`] (new frame
+    /// buffers, contents undefined).
+    ///
+    /// [`suspend_stream`]: Self::suspend_stream
+    pub fn resume_stream(&mut self) -> Result<(), EspError> {
+        self.start_stream()
+    }
+
+    /// Spike support (`bin/chip_sleep`): DCS "get power mode" (0x0A):
+    /// bit 4 sleep out, bit 2 display on.
+    pub fn power_mode(&self) -> Result<u8, EspError> {
+        let mut v = [0u8];
+        self.rx(0x0A, &mut v)?;
+        Ok(v[0])
+    }
+
 
     /// Frames the panel has scanned out since boot (wrapping counter).
     pub fn frames_scanned() -> u32 {
