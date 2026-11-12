@@ -41,6 +41,21 @@ pub fn changed_since(seen: &mut u32) -> bool {
     core::mem::replace(seen, now) != now
 }
 
+/// One colour scaled by the factor, rounded to the nearest level (for
+/// areas filled without Slint, e.g. the list layer's background).
+pub fn scale(px: u16) -> u16 {
+    let f = u32::from(FACTOR.load(Ordering::Relaxed));
+    if f >= u32::from(FULL) {
+        return px;
+    }
+    let f32_ = (f + 4) >> 3;
+    const MASK: u32 = 0x07e0_f81f;
+    const HALF: u32 = 16 | (16 << 11) | (16 << 21);
+    let x = (u32::from(px) | (u32::from(px) << 16)) & MASK;
+    let x = ((x * f32_ + HALF) >> 5) & MASK;
+    (x | (x >> 16)) as u16
+}
+
 /// Scales a freshly drawn line (RGB565) by the factor, to 1/32: the
 /// channels are spread over a 32-bit word with gaps (green in the upper
 /// half), so one multiply scales all three (~20 ms less per full screen

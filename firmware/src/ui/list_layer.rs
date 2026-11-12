@@ -190,6 +190,10 @@ pub struct ListLayer<S: ListSource> {
     ahead: usize,
     layer: Picture,
     blank: Picture,
+    /// The page background (undimmed), and the [`crate::ui::dim::epoch`]
+    /// `blank` was filled in: it is refilled, dimmed, when that changes.
+    background: u16,
+    blank_epoch: u32,
     /// Row and stamp held by each slot.
     slot_row: Vec<Option<(usize, u64)>>,
     row_window: Rc<MinimalSoftwareWindow>,
@@ -277,6 +281,9 @@ impl<S: ListSource> ListLayer<S> {
             ahead: slots - visible - behind,
             layer,
             blank,
+            background,
+            // Not filled dimmed yet: the first frame refills it.
+            blank_epoch: crate::ui::dim::epoch().wrapping_sub(1),
             slot_row: vec![None; slots],
             row_window,
             source,
@@ -408,6 +415,17 @@ impl<S: ListSource> ListLayer<S> {
         }
     }
 
+    /// Refills the blank picture with the background as currently dimmed
+    /// (the pixel dimming never touches it: it is not drawn by Slint).
+    fn refresh_blank(&mut self) {
+        if crate::ui::dim::changed_since(&mut self.blank_epoch) {
+            let colour = crate::ui::dim::scale(self.background);
+            let n = self.blank.w * self.blank.h;
+            unsafe { core::slice::from_raw_parts_mut(self.blank.buf, n) }.fill(colour);
+            cache::writeback(self.blank.buf, n);
+        }
+    }
+
     /// The copies that show content y `scroll..scroll+height` in the frame
     /// buffer: a blank gap above the first row (scroll < 0), content from
     /// the ring (wrapping at most once), a blank gap below the last row.
@@ -485,6 +503,7 @@ impl<S: ListSource> ListLayer<S> {
             w: WIDTH,
             h: HEIGHT,
         };
+        self.refresh_blank();
         let mut copies = self.copies(scroll).into_iter();
         if let Some((src, from, to, size)) = copies.next() {
             self.dma.start(src, from, fbp, to, size);
