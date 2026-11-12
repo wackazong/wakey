@@ -6,13 +6,13 @@ What the clock is meant to become, and the decisions already taken for the parts
 
 A bedside alarm clock: large clock face, several alarms that play a sound file from the microSD card on the Creative Pebble V3 (one USB cable for power and audio, gain switch "L"), dims and sleeps at night, wakes instantly on touch.
 
-**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout); several alarms with their own sound, volume and fade-in; settings pages in the design agreed on 2026-11-10 (alarm list with swipe-to-delete, alarm page with time wheels that click on the built-in speaker, sound page with "Zufällig", name keyboard); the built-in speaker (ES8388) for the wheel click and as the alarm speaker when no USB speaker is connected; the clock face's sky that follows the sun; brightness from the room's light with the camera as light meter (night mode with darkened pixels); `config.json` `display` and `power` sections; the display asleep (backlight off) in the dark after a minute without a touch, woken by a touch, an alarm or daylight.
+**Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout); several alarms with their own sound, volume and fade-in; settings pages in the design agreed on 2026-11-10 (alarm list with swipe-to-delete, alarm page with time wheels that click on the built-in speaker, sound page with "Zufällig", name keyboard); the built-in speaker (ES8388) for the wheel click and as the alarm speaker when no USB speaker is connected; the clock face's sky that follows the sun; brightness from the room's light with the camera as light meter (night mode with darkened pixels); `config.json` `display` and `power` sections; the display asleep (backlight off) in the dark after a minute without a touch, woken by a touch, an alarm or daylight, with the panel at 33 Hz and USB-A off (see the power concept).
 
 **V1 (next):**
 
 1. **Built-in speaker volume:** the alarm's volume curve is the Pebble's; check by ear how loud 60 % is on the built-in speaker (preview without the Pebble) and calibrate it separately if needed.
 2. **Screens:** the sound list on the list layer (as the alarm list) once it can be long (TIDAL); check page switches while audio plays (~130 ms during a preview, measured before the internal RAM fix).
-3. **Light sleep** (below): the chip asleep while the display is, measured step by step.
+3. **Power, the rest** (below): the built-in speaker's codec and I2S off while silent (−9 mA measured); fewer wake-ups (touch by `TP_INT` instead of 10 ms polls, the USB client's 10 ms pump); the periodic ~20–35 mA dip seen with the meter.
 4. **Wi-Fi only when needed:** done (sessions every `sync_interval_h`, C6 off in between); open: each session leaks ~2.3 KiB internal RAM (`docs/pitfalls.md`).
 5. FLAC playback (`claxon`; `sounds/` is scanned for WAV/AIFF today).
 
@@ -22,18 +22,18 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 
 ## Power concept
 
-Two states, decided 2026-11-11:
+Two states, decided 2026-11-11; the second is a display sleep, not chip light sleep (decided 2026-11-12, see below):
 
 | State | Display | Wi-Fi | USB-A 5 V | Wakes on |
 | --- | --- | --- | --- | --- |
-| On | on, brightness from the room's light | on | on (speaker ready) | – |
-| Light sleep | backlight off | off | off | touch, timer (alarm, light check) |
+| On | on, brightness from the room's light | only for a sync session | only on the alarm pages and from 60 s before something rings | – |
+| Display sleep | backlight off, panel at 33 Hz | as above | as above | any touch, alarm, daylight |
 
-Light sleep starts after `power.sleep_after_s` (60 s) without a touch on the clock page, when `power.sleep_when` allows it: `"dark"` (default) in a dark room (the light meter's night mode) or on battery; `"always"`; `"never"`. It ends on a touch (which only wakes), when an alarm rings, and when the condition ends (daylight on USB power).
+Display sleep starts after `power.sleep_after_s` (60 s) without a touch on the clock page, when `power.sleep_when` allows it: `"dark"` (default) in a dark room (the light meter's night mode) or on battery; `"always"`; `"never"`. It ends on a touch (which only wakes), when an alarm rings, and when the condition ends (daylight on USB power).
 
-**Done:** the display part: backlight off, nothing drawn, light meter running ([`app/power.rs`](../firmware/src/app/power.rs), `ui::power`). The panel is not put into sleep mode: the ST7123's touch stops scanning then.
+**Done:** backlight off, nothing drawn, light meter running ([`app/power.rs`](../firmware/src/app/power.rs), `ui::power`); the panel streams at 33 Hz instead of 66 Hz (the display link is rebuilt for it, 0.45 s each way); USB-A is off except on the alarm pages and from 60 s before something rings. The panel is not put into sleep mode: the ST7123's touch stops scanning then. Measured at the USB-C input (5 V, Pebble switched on): screen on 237–242 mA, display sleep before these changes 237 mA, USB-A off −80 mA, 33 Hz −21 mA; now ~138 mA asleep with the codec still on.
 
-**Next:** the chip itself in light sleep while the display sleeps (estimate 3–5 mA, touch wake 0.1–0.3 s): stop audio, uninstall USB host, `USB5V_EN` off → stop Wi-Fi, `WLAN_PWR_EN` off → `SPK_EN` off → light sleep, woken by `TP_INT` (GPIO23, if the touch controller signals it while polled rarely), by a timer before the next alarm (USB speaker enumeration needs a lead, to measure) and every minute for the light meter. Deep sleep (reboot on wake, `TP_INT` wired to GPIO1) is the fallback if light sleep with USB host, DSI and PSRAM proves unreliable.
+**Not chip light sleep:** a single tap must wake the clock, and in light sleep it cannot (spike `chip_sleep`, 2026-11-12): the ST7123 senses touches only while the P4 streams video, which light sleep stops; in its "Smart Wake Up" mode it keeps sensing but reports only gestures (double tap, long press), never a single tap. A double-tap wake from light sleep works (with `gpio_sleep_sel_dis(23)` and the whole display link rebuilt after waking) and would save roughly another 0.1–0.2 W (estimated).
 
 ## `config.json`
 
@@ -62,5 +62,5 @@ A `devtools` feature for a coding agent on the Mac over the USB-C cable: screens
 ## Open measurements
 
 - Pebble current at gain "L" and the planned volume cap (target ≤ 0.5 A); `SYS_USB5V` under load (≥ 4.75 V, no reset).
-- Light sleep current after each step of the sleep sequence; 100 wake cycles with USB host and DSI working afterwards.
+- Display sleep current with the codec off; the periodic ~20–35 mA dip.
 - Time from waking to the USB speaker being ready again (the lead before an alarm).

@@ -45,16 +45,34 @@ pub fn changed_since(seen: &mut u32) -> bool {
 /// channels are spread over a 32-bit word with gaps (green in the upper
 /// half), so one multiply scales all three (~20 ms less per full screen
 /// than three).
-pub fn apply(px: &mut [u16]) {
+///
+/// The scaled channels have 5 bits of fraction. Cut off, a dimmed
+/// gradient showed stripes (at 35 % a channel has ~11 levels left, and
+/// the renderer's dithering shrinks below one level); instead an ordered
+/// (4×4 Bayer) threshold per pixel decides between the two neighbouring
+/// levels, so the average stays right. `x0`, `y`: the line's first pixel
+/// on screen (the pattern is offset from the renderer's, which uses the
+/// same matrix).
+pub fn apply(px: &mut [u16], x0: usize, y: usize) {
     let f = u32::from(FACTOR.load(Ordering::Relaxed));
     if f >= u32::from(FULL) {
         return;
     }
     let f32_ = (f + 4) >> 3;
     const MASK: u32 = 0x07e0_f81f;
-    for p in px {
-        let x = (u32::from(*p) | (u32::from(*p) << 16)) & MASK;
-        let x = ((x * f32_) >> 5) & MASK;
-        *p = (x | (x >> 16)) as u16;
+    const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    // The threshold (0..31) at each channel's lowest bit: blue 0, red 11,
+    // green 21. Fits: 31 × 32 + 31 < 2^10, 63 × 32 + 31 < 2^11.
+    let row = &BAYER[(y + 2) & 3];
+    let pattern: [u32; 4] = core::array::from_fn(|i| {
+        let t = row[(x0 + i + 1) & 3] * 2 + 1;
+        t | (t << 11) | (t << 21)
+    });
+    for chunk in px.chunks_mut(4) {
+        for (p, d) in chunk.iter_mut().zip(pattern) {
+            let x = (u32::from(*p) | (u32::from(*p) << 16)) & MASK;
+            let x = ((x * f32_ + d) >> 5) & MASK;
+            *p = (x | (x >> 16)) as u16;
+        }
     }
 }

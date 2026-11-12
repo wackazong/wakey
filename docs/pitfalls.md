@@ -17,7 +17,10 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 ## Display
 
 - **DSI PHY clock:** `phy_clk_src` must be 0 (driver default) on rev < v3; the `…_DEFAULT` constant is the rev ≥ v3 choice and aborts in the HAL.
-- **Flicker in dark areas** (≈ 3 Hz, stronger when bright) with Espressif's BSP timings (70 MHz, 57.8 Hz). Fixed with M5GFX's: 80 MHz pixel clock, 66.1 Hz, 1040 Mbps lanes, backlight PWM 44.1 kHz. esp-bsp's ST7123 table also declares `0xA3`/`0xE8` one byte too long (39 and 14 parameters are right).
+- **Flicker in dark areas** (≈ 3 Hz, stronger when bright) with Espressif's BSP timings (70 MHz, 57.8 Hz). Fixed with M5GFX's: 80 MHz pixel clock, 66.1 Hz, 1040 Mbps lanes, backlight PWM 44.1 kHz (now 4 kHz for 14 bits of duty; no flicker either). esp-bsp's ST7123 table also declares `0xA3`/`0xE8` one byte too long (39 and 14 parameters are right).
+- **A new video stream alone leaves the panel black** (frames run, DCS power mode 0x9c = on): after deleting and recreating the DPI panel, or changing its pixel clock, the whole link must be rebuilt as at boot: DSI bus, panel init (software reset, vendor table), then the stream (`Display::link_down`/`link_up`, ~0.45 s). Below 66 Hz (33 and 22 Hz tried) the panel shows nothing, but the ST7123's touch still scans.
+- **`esp_lcd_panel_del` does not stop the DPI's DW-GDMA channel** (ESP-IDF 5.5.5): it keeps reading the freed frame buffers. Alone on the DW-GDMA nobody notices (the controller is switched off and reset with its last channel); with the camera's CSI receiver on it, the next stream got the still running channel and `dpi_panel_init` died with a store access fault (`dw_gdma_ll_channel_set_link_list_master_port`, MTVAL 0x50081128). `Display::stop_stream_dma` disables the channel (found by its source address) first.
+- **Frame buffers do not fit again after a rebuild:** in the app only ~6.5 MB of PSRAM are free and the largest block is often just short of one frame buffer; a rebuild succeeds only if nothing takes a piece of the freed buffers in between (ESP_ERR_NO_MEM on the fourth display sleep). `Display::suspend_stream` holds the memory with the driver's own allocation until the new stream allocates.
 - **Upside down:** landscape `(x, y)` → panel column `y`, row `1279 − x`; touch is rotated 180° against display memory (`ui/input.rs`).
 - **PPA stalls for good** (no completion, no error) under DSI load when: a rotated block is narrower than 8 output pixels (strips < 8 lines are padded), a block is wider than 640 px (split), or several transactions are queued (one in flight). The PPA moves only ~20 Mpx/s; bulk copies go through the 2D-DMA (64 Mpx/s).
 - **CPU writes into a PPA target are lost:** the driver invalidates the output rows before each transaction. The CPU never writes the frame buffer while the PPA is used.
@@ -55,6 +58,9 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 
 ## Touch and I2C
 
+- **Touch wake from chip light sleep:** the ST7123 senses touches only while it receives the video stream (with the panel asleep or the link down: 0 scans), and light sleep stops the stream. Its Smart Wake Up mode (0x00F1 bit 7, panel display off and sleep in, then 0x0002 power down) keeps scanning and pulses `TP_INT` (0.3–6 ms) on a gesture: double tap (the firmware's 0x00F1 = 0x84), long press (bit 0); no gesture bit and no report shows a single tap. The pulse only wakes the chip with `gpio_sleep_sel_dis(23)` (the pin's sleep configuration switches its input off). After light sleep the DSI PHY's clock is gone: DCS commands stay in the command FIFO for good until the link is rebuilt. Spike `chip_sleep`.
+- **`TP_INT` stays low until the report is read** (0x0010 up to the last coordinate): a level wake or sleep is refused while it is.
+
 - **SDA held low after a reset** (a slave mid-byte): `SysI2c::new` clocks the bus free on every boot.
 - **Touch lagged, then stopped, while touched quickly:** reads of the ST7123 timed out (`ESP_ERR_TIMEOUT`, then NACKs) and the app looked hung. The legacy I2C driver sets the hardware's clock-stretch timeout to 2^10 clock cycles (~26 µs); the touch controller stretches SCL longer while it processes a touch. `SysI2c::new` sets ~13 ms. As a safety net, the touch task releases a held press when reads fail and pulses `TP_RST` after 5 failed reads within a second.
 - **Drags broke off** because the touch controller skips readings or times out mid-drag: a release needs 3 empty polls.
@@ -86,6 +92,10 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 ## RTC
 
 - A fresh RX8130 can hold **non-BCD junk with the power-loss flag clear**. `get_time` validates BCD and date ranges; `clock::init` also rejects times before the firmware build.
+
+## Tools
+
+- **`espflash monitor` puts the chip into download mode** when it connects (default `--before`: DTR/RTS); `--no-reset` only skips the reset afterwards. Listening without touching the chip: `espflash monitor -c esp32p4 --non-interactive --no-reset --before no-reset-no-sync`. After such passive sessions flashing sometimes failed with "Timeout while running ReadReg" until the board was reset; `espflash flash --monitor` in one connection was reliable.
 
 ## Removed experiments
 

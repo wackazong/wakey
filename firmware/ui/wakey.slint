@@ -34,6 +34,8 @@ export component AppWindow inherits Window {
     in property <length> list-row-dx;
     in property <bool> list-row-highlighted;
     in property <bool> list-row-underlay;
+    // Debug overlay (cargo feature `debug-overlay`): shown when not empty.
+    in property <string> debug-text;
 
     // Never shown: makes the compiler embed glyphs that only appear in
     // strings set from Rust (dates, Wi-Fi errors, alarm names, file
@@ -51,6 +53,21 @@ export component AppWindow inherits Window {
         width: 100%;
         height: 100%;
         background: root.repaint-all ? #00000000 : #01010100;
+    }
+    if root.debug-text != "" && root.page != 5: Rectangle {
+        x: 8px;
+        y: 8px;
+        width: debug.preferred-width + 16px;
+        height: debug.preferred-height + 8px;
+        background: #000000b0;
+        border-radius: 6px;
+        debug := Text {
+            x: 8px;
+            y: 4px;
+            text: root.debug-text;
+            color: white;
+            font-size: 20px;
+        }
     }
     // At the window's origin (an element without x/y is centred).
     if root.page == 5: ListRowPage {

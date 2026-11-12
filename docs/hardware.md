@@ -20,7 +20,7 @@ Three panel variants exist across production runs; the firmware detects them fro
 | --- | --- | --- |
 | System I2C SDA / SCL | 31 / 32 | 400 kHz; expanders, RTC, INA226, touch, codec, IMU |
 | Touch interrupt `TP_INT` | 23 | active low, 5.1 kΩ pull-up (R92); not an LP-GPIO (no deep-sleep wake). Not used yet (touch is polled) |
-| Backlight `LCD_BL` | 22 | enable of the ME2212 boost; LEDC PWM 44.1 kHz |
+| Backlight `LCD_BL` | 22 | enable of the ME2212 boost; LEDC PWM 4 kHz, 14 bit (finer steps at the dark end) |
 | MIPI-DSI | dedicated | 2 lanes; PHY supply `VDD_MIPI_DPHY` = on-chip LDO 3 at 2.5 V |
 | microSD (SDMMC slot 0) CLK / CMD / D0–D3 | 43 / 44 / 39–42 | IO_MUX pins, 4 bit; pin supply = on-chip LDO 4 at 3.3 V |
 | ESP32-C6 (SDMMC slot 1) CLK / CMD / D0–D3 | 12 / 13 / 11, 10, 9, 8 | GPIO matrix, 4 bit, 40 MHz |

@@ -186,6 +186,20 @@ impl AlarmClock {
             .map(|(id, _)| id)
     }
 
+    /// Seconds until something rings: the next alarm, or a snoozed one
+    /// again (0 while ringing).
+    pub fn secs_to_ring(&self) -> Option<i64> {
+        let m = clock::moment();
+        match self.machine.state().phase {
+            Phase::Ringing { .. } => Some(0),
+            Phase::Snoozed { until, .. } => Some(until - m.unix),
+            Phase::Idle => self
+                .machine
+                .next(&self.alarms, m.local)
+                .map(|(_, t)| t.to_unix() - m.local.to_unix()),
+        }
+    }
+
     pub fn view(&self) -> View {
         let snoozes_left = self.machine.snoozes_left(&self.ring).unwrap_or(0);
         match self.machine.state().phase {

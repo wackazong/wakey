@@ -8,6 +8,9 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5. Des
 | --- | --- |
 | `wakey` | The alarm clock: clock page (RTC time, Europe/Zurich, date, next alarm, symbols for a missing speaker or network), alarm list, alarm, sound and name pages (tap the alarm line), the alarms ringing on the USB speaker (snooze, stop), wheel clicks on the built-in speaker, Wi-Fi + NTP, touch |
 | `ui_bench` | Slint and list-layer bench: clock digits, an animation and a 300-row list to drag and fling; frame statistics on screen and in the log (target 66 fps) |
+| `chip_sleep` | Spike: touch wake from chip light sleep (Smart Wake Up, gesture bits, display link rebuild); results in its module docs |
+| `power_probe` | Spike: power per component in display sleep, read off a USB meter (steps announced on screen) |
+| `link_probe` | Spike: rebuilds the display link 30 times with the camera running; logs PSRAM |
 | `audio_test` | USB speaker test: plays every WAV/AIFF in the SD card root and `sounds/` in a loop (writes a 44.1 kHz test tone first), or a 440 Hz sine without a card; logs packets and underruns; survives re-plugging |
 
 ## Build and flash
@@ -94,6 +97,8 @@ sdkconfig.defaults     ESP-IDF configuration (commented)
 **Add a page.** A component in `ui/wakey/` with a global for its data and callbacks, using the controls in `theme.slint`; a `page` value and an `if` in `ui/wakey.slint` (export the global there); a view model in `app/` that fills the global and handles its callbacks (`Ctx::with` for callbacks that need the window and the shared state), set up in `app/mod.rs`. Add a scene to `tools/ui-preview` and look at the PNG before flashing. Set only properties that changed, use fixed-width `Text` items for values that change on their own, and keep an edit's repaint small (see the dirty-rectangle entry in `docs/pitfalls.md`). Reuse the font sizes in use; characters that only come from Rust strings need a literal in a `.slint` file. Check the image size: `cargo run` prints `App/part. size`.
 
 **Look at the pages without the device.** `cd tools/ui-preview && cargo run --release -- [--by-line] [dir] [name filter]` renders every scene (sample data, some with simulated drags) to `dir` (default `target/ui-preview`) as PNGs and prints the render time per scene. Same `.slint` files, same Slint and renderer; `--by-line` renders line by line as the firmware does. It also checks that the alarm list's rows look exactly like the list layer's rendering of them (panics otherwise). Timing on the device is a different matter (~50 times slower, see below).
+
+**Debug overlay.** `--features debug-overlay`: a box at the top left of every page with the pixel dimming, the backlight level, the light reading (day/night), and when the display sleeps or why not. `--features sleep-cycle-test` makes the display sleep and wake every 8 s regardless of the conditions and logs the PSRAM at each link rebuild.
 
 **Watch the sky through a day.** `cargo run --release --bin wakey --features sky-demo`: the clock's sky (`wakey_core::sky`) runs through today in one minute, over and over, stepping every 200 ms; the bottom line shows that time of day and the sun's elevation instead of the next alarm. Flash a build without the feature afterwards.
 

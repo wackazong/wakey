@@ -230,7 +230,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     name_page::start(&ui, &ctx);
     let _idle = close_when_idle(&ctx);
     let _dim = repaint_when_dimmed(&ui);
-    let _power = power::start(&ui, config.power.clone(), alarm.clone(), i2c.clone());
+    let _power = power::start(&ui, config.power.clone(), alarm.clone(), i2c.clone(), speaker.clone());
     let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
     // The light meter owns the backlight: full at first, then the room's.

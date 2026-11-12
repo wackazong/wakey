@@ -220,7 +220,7 @@ fn update(window: &AppWindow, face: &Face, speaker: &UsbAudio, wifi: &Wifi, alar
         screen.set_snoozes_left(snoozes_left.into());
     }
 
-    let no_speaker = !speaker.connected();
+    let no_speaker = speaker.missing();
     if screen.get_no_speaker() != no_speaker {
         screen.set_no_speaker(no_speaker);
     }

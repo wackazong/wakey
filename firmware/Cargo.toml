@@ -60,6 +60,12 @@ ui-bench = []
 # The clock's sky runs through today in one minute, over and over; the
 # bottom line shows that time and the sun's elevation (`app::clock_screen`).
 sky-demo = []
+# A debug overlay at the top left of every page: pixel dimming,
+# backlight, light reading, and when the display sleeps (or why not).
+debug-overlay = []
+# The display sleeps and wakes every 8 s by itself (ignores the sleep
+# conditions); the render loop logs the PSRAM around each link rebuild.
+sleep-cycle-test = []
 
 [profile.release]
 opt-level = 3

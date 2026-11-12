@@ -46,12 +46,24 @@ enum Cmd {
     /// Volume in dB (0 = device maximum), clamped to the device range.
     Volume(f32),
     Mute(bool),
+    /// USB-A 5 V and the root port on or off (off: the device goes away).
+    Power(bool),
 }
 
 struct Shared {
     connected: AtomicBool,
     streaming: AtomicBool,
+    /// Milliseconds since boot when the port was last powered on, 0 while
+    /// it is off.
+    powered_at_ms: AtomicU32,
 }
+
+fn now_ms() -> u32 {
+    (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000) as u32
+}
+
+/// Grace after power on before a missing device counts as missing.
+const ENUMERATE_GRACE_MS: u32 = 10_000;
 
 /// The USB speaker. Cheap to clone.
 #[derive(Clone)]
@@ -68,6 +80,7 @@ impl UsbAudio {
         let shared = Arc::new(Shared {
             connected: AtomicBool::new(false),
             streaming: AtomicBool::new(false),
+            powered_at_ms: AtomicU32::new(now_ms().max(1)),
         });
         let (tx, rx) = mpsc::channel();
         let thread_shared = shared.clone();
@@ -98,5 +111,21 @@ impl UsbAudio {
 
     pub fn set_mute(&self, mute: bool) {
         let _ = self.cmds.send(Cmd::Mute(mute));
+    }
+
+    /// Powers the USB-A port (5 V and root port) on or off. The switched-on
+    /// Pebble draws ~80 mA at 5 V even when silent. After power on, the
+    /// device needs a few seconds to boot and enumerate.
+    pub fn set_power(&self, on: bool) {
+        let at = if on { now_ms().max(1) } else { 0 };
+        self.shared.powered_at_ms.store(at, Ordering::Release);
+        let _ = self.cmds.send(Cmd::Power(on));
+    }
+
+    /// True if the port has been on for a while and still no speaker is
+    /// set up (the clock face shows "no speaker"). False while it is off.
+    pub fn missing(&self) -> bool {
+        let at = self.shared.powered_at_ms.load(Ordering::Acquire);
+        at != 0 && now_ms().wrapping_sub(at) > ENUMERATE_GRACE_MS && !self.connected()
     }
 }

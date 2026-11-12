@@ -14,7 +14,7 @@ use crate::display::Display;
 use crate::display::ppa::{PpaRotator, Target};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RenderingRotation};
+use slint::platform::software_renderer::{MinimalSoftwareWindow, RenderingRotation, RepaintBufferType};
 use std::rc::Rc;
 
 /// Where a touch event goes.
@@ -98,6 +98,21 @@ pub const STAGES: [&str; 7] = [
     "sleep",
 ];
 
+/// Free PSRAM and its largest block (the frame buffers need 2 × 1.8 MB).
+fn log_psram(when: &str) {
+    use esp_idf_svc::sys;
+    let (free, largest) = unsafe {
+        (
+            sys::heap_caps_get_free_size(sys::MALLOC_CAP_SPIRAM),
+            sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_SPIRAM),
+        )
+    };
+    log::info!("display: PSRAM {when}: free {free}, largest block {largest}");
+}
+
+/// Pixel clock while the display sleeps: 33 Hz instead of 66 Hz.
+const SLEEP_PIXEL_CLOCK_MHZ: f32 = 40.0;
+
 /// Renders the main window, plus `hook`, forever.
 pub async fn run(
     window: Rc<MinimalSoftwareWindow>,
@@ -122,6 +137,8 @@ pub async fn run(
     // Woken: the next frame presented ends the sleep (the backlight comes
     // on only then, over a fresh picture).
     let mut waking = false;
+    // Full repaints still due (new frame buffers after waking).
+    let mut full_repaints = 0u8;
     loop {
         ITERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         if let Some(sleep) = super::power::take_request()
@@ -130,10 +147,30 @@ pub async fn run(
             // The panel itself stays on: its touch half (the same chip)
             // stops scanning in sleep mode, and nothing could wake it. The
             // backlight off is dark enough.
+            //
+            // Asleep, the panel refreshes at half rate (33 Hz): half the
+            // PSRAM reads, and its touch still scans. It shows nothing at
+            // that rate, which does not matter with the backlight off. A
+            // rate change rebuilds the whole display link (a new stream
+            // alone leaves the panel black) with new, empty frame buffers.
+            log_psram("before rebuild");
             if sleep {
                 super::power::set_asleep(true);
+                // The light meter thread turns the backlight off first.
+                Timer::after(Duration::from_millis(150)).await;
+                let t = Instant::now();
+                if let Err(e) = display.set_pixel_clock(Some(SLEEP_PIXEL_CLOCK_MHZ)) {
+                    log::warn!("display: sleep refresh not set: {e}");
+                }
+                log::info!("display: asleep, link rebuilt in {} ms", t.elapsed().as_millis());
             } else {
+                let t = Instant::now();
+                if let Err(e) = display.set_pixel_clock(None) {
+                    log::warn!("display: refresh not restored: {e}");
+                }
+                log::info!("display: waking, link rebuilt in {} ms", t.elapsed().as_millis());
                 waking = true;
+                full_repaints = 2;
                 window.request_redraw();
                 other_buffer_stale = true;
             }
@@ -145,6 +182,7 @@ pub async fn run(
             let ev = woken_by.take().or_else(|| input::EVENTS.try_receive().ok());
             if let Some(ev) = ev {
                 if ev.phase == Phase::Down {
+                    log::info!("power: woken by a touch at ({:.0}, {:.0})", ev.x, ev.y);
                     super::power::wake();
                     drop_touch = true;
                 }
@@ -237,8 +275,18 @@ pub async fn run(
         let mut slint_box: Option<(i32, i32, u32, u32)> = None;
         // Slint rendered, if only an empty region: the buffers must flip.
         let mut slint_rendered = false;
+        if full_repaints > 0 {
+            window.request_redraw();
+        }
         window.draw_if_needed(|renderer| {
             slint_rendered = true;
+            // Both buffers are new after waking: repaint all of each once.
+            renderer.set_repaint_buffer_type(if full_repaints > 0 {
+                RepaintBufferType::NewBuffer
+            } else {
+                RepaintBufferType::SwappedBuffers
+            });
+            full_repaints = full_repaints.saturating_sub(1);
             renderer.set_rendering_rotation(RenderingRotation::NoRotation);
             rot.begin(target);
             let region = renderer.render_by_line(PpaLines { rot: &mut *rot });

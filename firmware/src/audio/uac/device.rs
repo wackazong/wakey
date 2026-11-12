@@ -141,12 +141,14 @@ pub(super) fn client_thread(
     client.pump_for(Duration::from_secs(1));
     let mut attempt = 0;
     let mut port_on_at: Option<Instant> = None;
+    // Off (`Cmd::Power(false)`): no port power attempts.
+    let mut powered = true;
 
     log::info!("uac: waiting for a USB audio device");
     loop {
         client.pump(10);
 
-        if client.device.is_none() && client.new_device.is_none() {
+        if powered && client.device.is_none() && client.new_device.is_none() {
             match port_on_at {
                 None if attempt < PORT_ATTEMPTS => {
                     attempt += 1;
@@ -188,6 +190,34 @@ pub(super) fn client_thread(
                 Cmd::Stream(on) => client.stream(on),
                 Cmd::Volume(db) => client.set_volume_db(db),
                 Cmd::Mute(m) => client.set_mute(m),
+                Cmd::Power(on) if on != powered => {
+                    powered = on;
+                    if on {
+                        log::info!("uac: USB-A on");
+                        if let Err(e) = vbus(true) {
+                            log::error!("uac: switching USB-A 5 V on failed: {e}");
+                        }
+                        // Let the device boot; the loop then powers the port.
+                        client.pump_for(Duration::from_secs(1));
+                        attempt = 0;
+                        port_on_at = None;
+                    } else {
+                        log::info!("uac: USB-A off");
+                        if client.device.is_some() {
+                            client.teardown();
+                            client.shared.connected.store(false, Ordering::Release);
+                        }
+                        let _ = set_port_power(false);
+                        if let Err(e) = vbus(false) {
+                            log::error!("uac: switching USB-A 5 V off failed: {e}");
+                        }
+                        client.pump_for(Duration::from_millis(200));
+                        // Events of the vanished device.
+                        client.new_device = None;
+                        client.device_gone = false;
+                    }
+                }
+                Cmd::Power(_) => {}
             }
         }
     }

@@ -123,6 +123,9 @@ impl PanelVariant {
 
 // ── Frame-complete ISR → async ──────────────────────────────────────────────
 
+/// The DPI driver's allocation of a frame buffer (`esp_lcd_panel_dpi.c`).
+const FB_CAPS: u32 = sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT | sys::MALLOC_CAP_DMA;
+
 /// Frames fully scanned out since boot (wraps).
 static FRAMES_DONE: AtomicU32 = AtomicU32::new(0);
 /// Wakes the task waiting in [`Display::back_buffer`].
@@ -155,6 +158,11 @@ pub struct Display {
     /// `FRAMES_DONE` value when the last flip was requested; the old front
     /// buffer is free once the counter has moved past it.
     pending_flip: Option<u32>,
+    /// Pixel clock override, else the panel's own.
+    pixel_clock_mhz: Option<f32>,
+    /// While the stream is suspended: the freed frame buffers' memory, held
+    /// for the next stream (see [`Display::suspend_stream`]).
+    held: [*mut c_void; 2],
 }
 
 impl Display {
@@ -169,6 +177,8 @@ impl Display {
             fbs: [ptr::null_mut(); 2],
             front: 0,
             pending_flip: None,
+            pixel_clock_mhz: None,
+            held: [ptr::null_mut(); 2],
         };
 
         unsafe {
@@ -228,13 +238,18 @@ impl Display {
     /// Creates the DPI panel and starts streaming fb0 (video mode).
     fn start_stream(&mut self) -> Result<(), EspError> {
         let timing = self.variant.timing();
+        // The held memory goes to the new frame buffers.
+        for h in &mut self.held {
+            unsafe { sys::heap_caps_free(*h) };
+            *h = ptr::null_mut();
+        }
         unsafe {
             // Video mode (DPI): two frame buffers in PSRAM, allocated by the driver.
             let mut dpi_cfg: sys::esp_lcd_dpi_panel_config_t = core::mem::zeroed();
             dpi_cfg.virtual_channel = 0;
             dpi_cfg.dpi_clk_src =
                 sys::soc_periph_mipi_dsi_dpi_clk_src_t_MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-            dpi_cfg.dpi_clock_freq_mhz = timing.pixel_clock_mhz;
+            dpi_cfg.dpi_clock_freq_mhz = self.pixel_clock_mhz.unwrap_or(timing.pixel_clock_mhz);
             dpi_cfg.pixel_format = sys::lcd_color_rgb_pixel_format_t_LCD_COLOR_PIXEL_FORMAT_RGB565;
             dpi_cfg.in_color_format = sys::lcd_color_format_t_LCD_COLOR_FMT_RGB565;
             dpi_cfg.num_fbs = 2;
@@ -434,10 +449,58 @@ impl Display {
     ///
     /// [`resume_stream`]: Self::resume_stream
     pub fn suspend_stream(&mut self) -> Result<(), EspError> {
+        self.stop_stream_dma();
         esp!(unsafe { sys::esp_lcd_panel_del(self.panel) })?;
         self.panel = ptr::null_mut();
         self.fbs = [ptr::null_mut(); 2];
+        // PSRAM is tight in the app (~6.5 MB free, the largest block often
+        // just short of one frame buffer): if anything took a piece of the
+        // freed buffers before the next stream allocates its own, that
+        // failed (ESP_ERR_NO_MEM, seen on the fourth sleep). Hold the
+        // memory with the driver's own allocation until then.
+        for h in &mut self.held {
+            *h = unsafe { sys::heap_caps_calloc(1, PIXELS * 2, FB_CAPS) };
+        }
         Ok(())
+    }
+
+    /// Stops the stream's DW-GDMA channel. `esp_lcd_panel_del` (ESP-IDF
+    /// 5.5.5) frees the channel without disabling it: it keeps streaming
+    /// from the freed frame buffers. Alone on the DW-GDMA that goes unseen
+    /// (the controller is switched off and reset with its last channel);
+    /// with the camera's CSI receiver on it too, the next stream got the
+    /// still running channel, and writing its registers was a store access
+    /// fault (`dpi_panel_init`, CH1_LLP0). The channel is found by its
+    /// source address, which lies in one of our frame buffers.
+    fn stop_stream_dma(&self) {
+        const DMAC: usize = 0x5008_1000;
+        const CHEN0: usize = DMAC + 0x18;
+        const CHANNELS: usize = 4;
+        let fb_bytes = PIXELS * 2;
+        let in_fb = |a: usize| {
+            self.fbs
+                .iter()
+                .any(|&fb| !fb.is_null() && (fb as usize..fb as usize + fb_bytes).contains(&a))
+        };
+        for ch in 0..CHANNELS {
+            // SAFETY: DW-GDMA registers (bus clock on: our channel runs).
+            unsafe {
+                let enabled = ptr::read_volatile(CHEN0 as *const u32) & (1 << ch) != 0;
+                let sar = ptr::read_volatile((DMAC + 0x100 * (ch + 1)) as *const u32) as usize;
+                if !enabled || !in_fb(sar) {
+                    continue;
+                }
+                // Enable bit off, with its write-enable bit.
+                ptr::write_volatile(CHEN0 as *mut u32, 0x100 << ch);
+                for _ in 0..100 {
+                    if ptr::read_volatile(CHEN0 as *const u32) & (1 << ch) == 0 {
+                        break;
+                    }
+                    FreeRtos::delay_ms(1);
+                }
+                log::debug!("display: stream DMA channel {ch} stopped");
+            }
+        }
     }
 
     /// Spike support: a new video stream after [`suspend_stream`] (new frame
@@ -446,6 +509,18 @@ impl Display {
     /// [`suspend_stream`]: Self::suspend_stream
     pub fn resume_stream(&mut self) -> Result<(), EspError> {
         self.start_stream()
+    }
+
+    /// Pixel clock `mhz` (80 MHz = 66 Hz refresh on the ST7123), or the
+    /// panel's own with `None`; used while the display sleeps. The frame
+    /// buffers are new afterwards (contents undefined).
+    ///
+    /// A new stream alone leaves the panel black: the whole link is rebuilt
+    /// as at boot (panel init, then the stream).
+    pub fn set_pixel_clock(&mut self, mhz: Option<f32>) -> Result<(), EspError> {
+        self.link_down()?;
+        self.pixel_clock_mhz = mhz;
+        self.link_up()
     }
 
     /// Spike support (`bin/chip_sleep`): DCS "get power mode" (0x0A):

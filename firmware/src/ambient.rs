@@ -17,7 +17,7 @@ use crate::board::Backlight;
 use crate::board::camera;
 use crate::board::i2c::SharedI2c;
 use esp_idf_svc::sys::{self, esp};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 /// Between measurements.
@@ -35,8 +35,11 @@ const PERIOD: Duration = Duration::from_secs(10);
 /// - from [`LIGHT_ROOM_END`] to [`LIGHT_BRIGHT`]: [`LEVEL_ROOM_TOP`] to
 ///   [`LEVEL_MAX`] on a log scale.
 const LEVEL_NIGHT: f32 = 0.01;
-/// A change of brightness takes this long.
-const FADE: Duration = Duration::from_secs(3);
+/// A change of brightness takes this long (3 s looked jumpy).
+const FADE: Duration = Duration::from_secs(8);
+/// Steps of the pixel brightness in a fade: each repaints the whole window
+/// (~0.2 s), so about as many as fit into [`FADE`].
+const PIXEL_STEPS: f32 = 40.0;
 const LEVEL_ROOM: f32 = 0.13;
 const LEVEL_ROOM_TOP: f32 = 0.4;
 const LEVEL_MAX: f32 = 1.0;
@@ -63,6 +66,26 @@ const MEAN_HIGH: f32 = 200.0;
 /// The room is dark (night mode), from the last measurement.
 static NIGHT: AtomicBool = AtomicBool::new(false);
 
+/// The backlight level and the last light reading (f32 bits), for the
+/// debug overlay.
+static BACKLIGHT: AtomicU32 = AtomicU32::new(0);
+static LIGHT: AtomicU32 = AtomicU32::new(0);
+
+/// The backlight level last set (0.0–1.0).
+pub fn backlight_level() -> f32 {
+    f32::from_bits(BACKLIGHT.load(Ordering::Relaxed))
+}
+
+/// The last light reading (see [`LIGHT_NIGHT`]), 0 before the first.
+pub fn last_light() -> f32 {
+    f32::from_bits(LIGHT.load(Ordering::Relaxed))
+}
+
+fn set_backlight(backlight: &mut Backlight, level: f32) -> anyhow::Result<()> {
+    BACKLIGHT.store(level.to_bits(), Ordering::Relaxed);
+    backlight.set_level(level)
+}
+
 /// True while the room is dark (night mode; `app::power` lets the display
 /// sleep then).
 pub fn night() -> bool {
@@ -81,26 +104,27 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8)
             Ok(m) => m,
             Err(e) => {
                 log::error!("ambient: no light meter, full brightness: {e}");
-                let _ = backlight.set_level(LEVEL_MAX);
+                let _ = set_backlight(&mut backlight, LEVEL_MAX);
                 return;
             }
         };
         let mut level = LEVEL_MAX;
         let mut night = false;
         let mut asleep = false;
-        let _ = backlight.set_level(level);
+        let _ = set_backlight(&mut backlight, level);
         let mut next = Instant::now();
         loop {
             // The display's sleep (`ui::power`): backlight off at once,
             // and back on once it is awake again.
             if crate::ui::power::asleep() != asleep {
                 asleep = !asleep;
-                let _ = backlight.set_level(if asleep { 0.0 } else { level });
+                let _ = set_backlight(&mut backlight, if asleep { 0.0 } else { level });
             }
             if Instant::now() >= next {
                 next = Instant::now() + PERIOD;
                 match meter.measure(&bus) {
                     Ok(light) => {
+                        LIGHT.store(light.to_bits(), Ordering::Relaxed);
                         night = if night {
                             light < LIGHT_NIGHT_END
                         } else {
@@ -156,7 +180,7 @@ fn level_for(light: f32, night: bool) -> f32 {
 
 /// Moves the backlight to `target` and the pixel brightness to `pixels`
 /// (1/256) over [`FADE`]. The backlight steps every 50 ms; the pixels
-/// change in 10 steps (each repaints the whole window, ~0.2 s).
+/// change in [`PIXEL_STEPS`] steps.
 fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
     const STEP: Duration = Duration::from_millis(50);
     let steps = (FADE.as_millis() / STEP.as_millis()) as u32;
@@ -171,17 +195,16 @@ fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
         }
         let t = i as f32 / steps as f32;
         // Geometric steps: even to the eye.
-        let _ = backlight.set_level(from * (target / from).powf(t));
-        // The pixels in tenths of the way: 10 repaints, not 60.
-        let tenth = (t * 10.0).floor() / 10.0;
-        let p = f32::from(pixels_from) * (f32::from(pixels) / f32::from(pixels_from)).powf(tenth);
+        let _ = set_backlight(backlight, from * (target / from).powf(t));
+        let part = (t * PIXEL_STEPS).floor() / PIXEL_STEPS;
+        let p = f32::from(pixels_from) * (f32::from(pixels) / f32::from(pixels_from)).powf(part);
         crate::ui::dim::set(p.round() as u16);
         std::thread::sleep(STEP);
     }
     crate::ui::dim::set(pixels);
     *level = target;
     if crate::ui::power::asleep() {
-        let _ = backlight.set_level(0.0);
+        let _ = set_backlight(backlight, 0.0);
     }
 }
 

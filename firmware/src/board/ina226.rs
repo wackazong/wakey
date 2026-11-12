@@ -20,3 +20,10 @@ pub fn current_ma(bus: &SharedI2c) -> Option<f32> {
 pub fn on_battery(bus: &SharedI2c) -> bool {
     current_ma(bus).is_some_and(|ma| ma.abs() > ON_BATTERY_MA)
 }
+
+/// Battery voltage in mV (bus voltage register, 1.25 mV per LSB).
+pub fn bus_mv(bus: &SharedI2c) -> Option<f32> {
+    let mut b = [0u8; 2];
+    lock(bus).write_read(ADDR, &[0x02], &mut b).ok()?;
+    Some(f32::from(u16::from_be_bytes(b)) * 1.25)
+}
