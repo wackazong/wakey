@@ -11,11 +11,14 @@ description = "Hardware-independent logic of the Tab5 alarm clock, tested on the
 [workspace]
 
 [dependencies]
+base64 = "0.22"
 claxon = "0.4"
+roxmltree = "0.20"
 # Sample-rate conversion (FFT based, exact for fixed ratios like 44.1 → 48 kHz).
 rubato = "0.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 
 [lints.rust]
 unsafe_code = "forbid"

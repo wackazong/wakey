@@ -44,6 +44,10 @@ enum Command {
         #[arg(long)]
         wav: bool,
     },
+    /// Print the `tidal` section for the clock's config.json: the device-code
+    /// app credentials bundled with tidlers (no network). Treat the output as
+    /// a secret; do not commit it.
+    ClockConfig,
     /// Decode a FLAC offline; for a download directory also check its recorded hash.
     Verify {
         path: PathBuf,
@@ -343,6 +347,16 @@ async fn main() -> Result<()> {
             expected_seconds,
         } => verify(&path, expected_seconds),
         Command::Doctor => doctor(&cli.session),
+        Command::ClockConfig => {
+            let a = tidlers::auth::TidalAuth::with_oauth();
+            let section = json!({ "tidal": {
+                "client_id": a.client_id,
+                "client_secret": a.client_secret,
+                "playlist": "Wecker",
+            }});
+            println!("{}", serde_json::to_string_pretty(&section)?);
+            Ok(())
+        }
         command => {
             let _lock = auth::lock_session(&cli.session)?;
             match command {

@@ -24,5 +24,6 @@ pub mod mix;
 pub mod resample;
 pub mod scroll;
 pub mod sky;
+pub mod tidal;
 pub mod tone;
 pub mod uac;

@@ -10,7 +10,8 @@
 //!   "alarms": [ { "id": 1, "enabled": true, "hour": 6, "minute": 30, … } ],
 //!   "ringing": { "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10 },
 //!   "display": { "night_pixels_percent": 35 },
-//!   "power": { "sleep_after_s": 60, "sleep_when": "dark" }
+//!   "power": { "sleep_after_s": 60, "sleep_when": "dark" },
+//!   "tidal": { "client_id": "…", "client_secret": "…", "playlist": "Wecker" }
 //! }
 //! ```
 //!
@@ -34,6 +35,7 @@ pub struct Config {
     pub ringing: RingConfig,
     pub display: DisplayConfig,
     pub power: PowerConfig,
+    pub tidal: TidalConfig,
 }
 
 impl Default for Config {
@@ -45,6 +47,7 @@ impl Default for Config {
             ringing: RingConfig::default(),
             display: DisplayConfig::default(),
             power: PowerConfig::default(),
+            tidal: TidalConfig::default(),
         }
     }
 }
@@ -111,6 +114,51 @@ impl PowerConfig {
             self.sleep_when = SleepWhen::Dark;
         }
     }
+}
+
+/// The `tidal` section: the app credentials the device login uses (copied
+/// in by hand, see `spikes/tidal-download`), the playlist the alarms take
+/// their songs from, and the session the clock writes after logging in.
+/// Anyone with the SD card can use the session: it is the account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TidalConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    /// The playlist's name in the user's TIDAL collection.
+    pub playlist: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<TidalSession>,
+}
+
+impl Default for TidalConfig {
+    fn default() -> Self {
+        Self {
+            client_id: String::new(),
+            client_secret: String::new(),
+            playlist: "Wecker".into(),
+            session: None,
+        }
+    }
+}
+
+impl TidalConfig {
+    /// Credentials are set (a login can start).
+    pub fn has_credentials(&self) -> bool {
+        !self.client_id.is_empty() && !self.client_secret.is_empty()
+    }
+}
+
+/// A logged-in TIDAL session (see [`crate::tidal::auth`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TidalSession {
+    pub access_token: String,
+    pub refresh_token: String,
+    /// Unix time the access token expires.
+    pub expires_at: i64,
+    pub user_id: u64,
+    /// For the API's `countryCode` parameter.
+    pub country_code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

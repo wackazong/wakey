@@ -41,6 +41,14 @@ Result in `.local/sounds/<id>/`: `audio.flac`, `report.json` (track, durations, 
 
 AAC converted to FLAC stays lossy (`source_lossy: true` in the report). Existing output directories are never overwritten; use `--output` to choose another one.
 
+## Credentials for the clock
+
+```sh
+cargo run -- clock-config
+```
+
+Prints the `tidal` section for the clock's `config.json`: the device-code app credentials bundled with `tidlers` (no network). Paste it into `config.json` on the SD card; the clock logs in with a device code and writes its session there. Treat the output like a password and never commit it.
+
 ## Verify offline
 
 ```sh
