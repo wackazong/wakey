@@ -87,7 +87,9 @@ impl UsbAudio {
         std::thread::Builder::new()
             .name("uac".into())
             .stack_size(8192)
-            .spawn(move || device::client_thread(thread_shared, rx, vbus, source))
+            .spawn(crate::taskstats::named("uac", move || {
+                device::client_thread(thread_shared, rx, vbus, source)
+            }))
             .expect("uac thread");
         Ok(Self { shared, cmds: tx })
     }

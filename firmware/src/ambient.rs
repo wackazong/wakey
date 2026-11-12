@@ -20,6 +20,13 @@ use esp_idf_svc::sys::{self, esp};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+/// ISP interrupt registers (raw, enable, clear) and the bits of FIFO
+/// overflow and buffer full (`ISP_LL_EVENT_ASYNC_FIFO_OVF`, `_BUF_FULL`).
+const ISP_INT_RAW: usize = 0x500A_1064;
+const ISP_INT_ENA: usize = 0x500A_106C;
+const ISP_INT_CLR: usize = 0x500A_1070;
+const ISP_OVERFLOW: u32 = (1 << 1) | (1 << 2);
+
 /// Between measurements.
 const PERIOD: Duration = Duration::from_secs(10);
 /// The panel's backlight barely dims with the PWM duty: 1 % is its
@@ -159,7 +166,7 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8)
     if let Err(e) = std::thread::Builder::new()
         .name("ambient".into())
         .stack_size(6 * 1024)
-        .spawn(run)
+        .spawn(crate::taskstats::named("ambient", run))
     {
         log::error!("ambient: thread: {e}");
     }
@@ -277,6 +284,11 @@ impl Meter {
             let mut proc_ = core::ptr::null_mut();
             esp!(sys::esp_isp_new_processor(&isp, &mut proc_))?;
             esp!(sys::esp_isp_enable(proc_))?;
+            // FIFO overflow and buffer full no longer interrupt: ESP-IDF's
+            // handler logs each from the interrupt, and a burst of them
+            // tripped the interrupt watchdog. `frame` checks them instead.
+            let ena = ISP_INT_ENA as *mut u32;
+            ena.write_volatile(ena.read_volatile() & !ISP_OVERFLOW);
             log::info!("ambient: camera light meter ready");
             Ok(Self {
                 ctlr,
@@ -337,17 +349,22 @@ impl Meter {
     /// (0–255, every 8th pixel of every 8th line).
     fn frame(&mut self) -> anyhow::Result<f32> {
         FRAME_DONE.store(false, Ordering::Release);
+        // SAFETY: ISP registers (the ISP is enabled).
+        unsafe { (ISP_INT_CLR as *mut u32).write_volatile(ISP_OVERFLOW) };
         let mut trans = sys::esp_cam_ctlr_trans_t {
             buffer: self.buf.cast(),
             buflen: PIXELS * 2,
             received_size: 0,
         };
         unsafe { esp!(sys::esp_cam_ctlr_receive(self.ctlr, &mut trans, 100))? };
-        let deadline = Instant::now() + Duration::from_millis(300);
+        // A frame takes 200 ms at 5 fps.
+        let deadline = Instant::now() + Duration::from_millis(1000);
         while !FRAME_DONE.load(Ordering::Acquire) {
             anyhow::ensure!(Instant::now() < deadline, "no frame from the camera");
             std::thread::sleep(Duration::from_millis(5));
         }
+        let raw = unsafe { (ISP_INT_RAW as *const u32).read_volatile() };
+        anyhow::ensure!(raw & ISP_OVERFLOW == 0, "ISP overflow, frame discarded");
         // The driver invalidated the cache for the buffer before the
         // callback: these reads see the frame.
         let frame = unsafe { core::slice::from_raw_parts(self.buf, PIXELS) };

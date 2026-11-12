@@ -10,9 +10,9 @@ use wakey_core::tidal::{Method, Request};
 /// Largest body read into memory (API answers; downloads stream).
 const MAX_BODY: usize = 2 << 20;
 
-fn connection(timeout: Duration) -> anyhow::Result<EspHttpConnection> {
+fn connection(timeout: Duration, rx_buffer: usize) -> anyhow::Result<EspHttpConnection> {
     Ok(EspHttpConnection::new(&Configuration {
-        buffer_size: Some(4096),
+        buffer_size: Some(rx_buffer),
         buffer_size_tx: Some(2048),
         timeout: Some(timeout),
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
@@ -23,7 +23,7 @@ fn connection(timeout: Duration) -> anyhow::Result<EspHttpConnection> {
 /// Sends `req`; the status and the body. Errors never include the URL or
 /// the body (tokens).
 pub fn send(req: &Request) -> anyhow::Result<(u16, Vec<u8>)> {
-    let mut conn = connection(Duration::from_secs(30))?;
+    let mut conn = connection(Duration::from_secs(30), 4096)?;
     let len = req.body.as_ref().map(|b| b.len().to_string());
     let mut headers: Vec<(&str, &str)> = req.headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
     if let Some(len) = &len {
@@ -57,4 +57,40 @@ pub fn send(req: &Request) -> anyhow::Result<(u16, Vec<u8>)> {
         body.extend_from_slice(&buf[..n]);
     }
     Ok((status, body))
+}
+
+/// Downloads `url` (a CDN, no authorization), handing the body to `sink`
+/// in pieces as it arrives; the number of bytes. `progress` hears the bytes
+/// so far and the Content-Length, if sent (which must then be met). Only
+/// 200 counts.
+pub fn download(
+    url: &str,
+    sink: &mut dyn FnMut(&[u8]) -> anyhow::Result<()>,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> anyhow::Result<u64> {
+    // A larger receive buffer for bulk data (4 KiB gave ~186 KiB/s).
+    let mut conn = connection(Duration::from_secs(60), 16 * 1024)?;
+    conn.initiate_request(EspMethod::Get, url, &[])
+        .map_err(|e| anyhow::anyhow!("download request: {e}"))?;
+    conn.initiate_response()
+        .map_err(|e| anyhow::anyhow!("download answer: {e}"))?;
+    let status = conn.status();
+    anyhow::ensure!(status == 200, "download: HTTP {status}");
+    let expected: Option<u64> = conn.header("Content-Length").and_then(|v| v.parse().ok());
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = conn.read(&mut buf).map_err(|e| anyhow::anyhow!("download read: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        sink(&buf[..n])?;
+        total += n as u64;
+        progress(total, expected);
+    }
+    if let Some(len) = expected {
+        anyhow::ensure!(total == len, "download cut off ({total} of {len} bytes)");
+    }
+    anyhow::ensure!(total > 0, "download empty");
+    Ok(total)
 }

@@ -223,12 +223,14 @@ pub fn cover_url(cover: &str, px: u32) -> String {
     )
 }
 
-/// The stream manifest of a track in lossless quality (the clock decodes
-/// FLAC only; `HIGH` would be AAC).
+/// The stream manifest of a track in lossless stereo (the clock decodes
+/// FLAC only; `HIGH` would be AAC). `immersiveaudio=false`: for a track
+/// with a Dolby Atmos mix, the device-login client otherwise gets that
+/// mix (E-AC-3, 5.1, reported as quality `LOW`) whatever quality it asks for.
 pub fn playback_info(session: &TidalSession, track: u64) -> Request {
     authed(
         format!(
-            "{API}/tracks/{track}/playbackinfopostpaywall?countryCode={}&audioquality=LOSSLESS&playbackmode=STREAM&assetpresentation=FULL",
+            "{API}/tracks/{track}/playbackinfopostpaywall?countryCode={}&audioquality=LOSSLESS&playbackmode=STREAM&assetpresentation=FULL&immersiveaudio=false",
             encode(&session.country_code)
         ),
         session,
@@ -249,6 +251,8 @@ pub fn parse_playback_info(
         track_id: u64,
         asset_presentation: String,
         audio_quality: String,
+        #[serde(default)]
+        audio_mode: Option<String>,
         manifest_mime_type: String,
         manifest: String,
     }
@@ -264,6 +268,9 @@ pub fn parse_playback_info(
         "stream: not lossless ({})",
         a.audio_quality
     );
+    if let Some(mode) = a.audio_mode.as_deref() {
+        ensure!(mode == "STEREO", "stream: not stereo ({mode})");
+    }
     manifest::plan(&a.manifest_mime_type, &a.manifest, seconds)
 }
 
@@ -331,6 +338,22 @@ mod tests {
         let body = br#"{"sessionId":"s","userId":42,"countryCode":"CH","channelId":1}"#;
         assert_eq!(parse_sessions(200, body).unwrap(), (42, "CH".into()));
         assert!(parse_sessions(401, b"{}").is_err());
+    }
+
+    #[test]
+    fn playback_info_asks_for_stereo() {
+        let r = playback_info(&session(), 7);
+        assert!(r.url.contains("/tracks/7/playbackinfopostpaywall?countryCode=CH"));
+        assert!(r.url.contains("audioquality=LOSSLESS"));
+        assert!(r.url.contains("immersiveaudio=false"));
+    }
+
+    #[test]
+    fn playback_info_refuses_atmos() {
+        let atmos = br#"{"trackId":7,"assetPresentation":"FULL","audioMode":"DOLBY_ATMOS",
+            "audioQuality":"LOSSLESS","manifestMimeType":"application/vnd.tidal.bts","manifest":""}"#;
+        let e = parse_playback_info(200, atmos, 7, 100.0).unwrap_err();
+        assert!(e.to_string().contains("not stereo"), "{e}");
     }
 
     #[test]

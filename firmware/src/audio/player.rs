@@ -180,7 +180,7 @@ impl Player {
         std::thread::Builder::new()
             .name("decoder".into())
             .stack_size(8192)
-            .spawn(move || {
+            .spawn(crate::taskstats::named("decoder", move || {
                 produce(&ring);
                 // Let the ring drain before reporting the end; the tail
                 // running dry is not an underrun.
@@ -191,7 +191,7 @@ impl Player {
                 }
                 ring.armed.store(false, Ordering::Release);
                 ring.playing.store(false, Ordering::Release);
-            })
+            }))
             .expect("decoder thread");
         let _ = previous.set();
     }

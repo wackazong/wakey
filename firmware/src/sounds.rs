@@ -50,12 +50,16 @@ pub fn title(sound: &Sound) -> String {
             .file_stem()
             .map(|s| s.to_string_lossy().replace('_', " "))
             .unwrap_or_else(|| path.clone()),
-        Sound::TidalTrack(_) => "TIDAL-Titel".into(),
+        Sound::TidalTrack(id) => id
+            .parse()
+            .ok()
+            .and_then(crate::tidal::track_title)
+            .map_or_else(|| "TIDAL-Titel".into(), |(title, _)| title),
     }
 }
 
 /// The file to play for alarm `id` on `date`; `None` for the built-in tone
-/// (also when TIDAL is chosen: not available yet).
+/// (also for a TIDAL track not downloaded yet).
 pub fn resolve(sound: &Sound, id: u32, date: Date) -> Option<PathBuf> {
     let root = Path::new(sd::MOUNT_POINT);
     match sound {
@@ -67,9 +71,26 @@ pub fn resolve(sound: &Sound, id: u32, date: Date) -> Option<PathBuf> {
             log::info!("sounds: today's random pick: {}", file.path);
             Some(root.join(&file.path))
         }
-        Sound::TidalTrack(_) | Sound::TidalRandom => {
-            log::warn!("sounds: TIDAL is not available yet, playing the built-in tone");
-            None
+        Sound::TidalTrack(track) => {
+            let file = track.parse().ok().and_then(crate::tidal::track_file);
+            if file.is_none() {
+                log::warn!("sounds: TIDAL track {track} not on the card, playing the built-in tone");
+            }
+            file
+        }
+        Sound::TidalRandom => {
+            let tracks = crate::tidal::downloaded();
+            let track = tracks.get(alarm::pick_daily(tracks.len(), date, id));
+            match track {
+                Some(t) => {
+                    log::info!("sounds: today's TIDAL pick: {} ({})", t.title, t.id);
+                    crate::tidal::track_file(t.id)
+                }
+                None => {
+                    log::warn!("sounds: no TIDAL tracks on the card, playing the built-in tone");
+                    None
+                }
+            }
         }
     }
 }

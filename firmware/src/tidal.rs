@@ -14,6 +14,18 @@
 //! job reads the tracks again every [`WATCH`] (edits in the TIDAL app show
 //! up); Wi-Fi stays on until the tab closes.
 //!
+//! Downloads: only selected tracks ([`Tidal::set_selected`]: those of the
+//! saved alarms and the one picked in the alarm being edited; all of the
+//! playlist while an alarm uses „Zufällig“). A change of the selection
+//! changes the queue; the download under way finishes. The job
+//! fetches the selected tracks the card lacks, one at a time in playlist
+//! order, to `tidal/<id>.flac` (via `<id>.flac.part`,
+//! renamed once complete and readable as FLAC; lossless arrives as DASH
+//! segments of FLAC in MP4, unpacked on the way: `wakey_core::tidal::flac_mp4`), and
+//! deletes the files of tracks no longer in the playlist. It keeps going
+//! after the tab closes until nothing is missing. A track that fails is
+//! not tried again in that job.
+//!
 //! The state is shared with the UI thread ([`Tidal::state`]); the work runs
 //! on the `wifi` thread.
 
@@ -21,11 +33,16 @@ use crate::board::sd;
 use crate::config::{self, TidalConfig, TidalSession};
 use crate::http;
 use crate::net::Wifi;
+use std::collections::BTreeSet;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
 use wakey_core::tidal::api::{self, Track};
+use wakey_core::audio_file::{AudioFile, Container};
 use wakey_core::tidal::auth::{self, Poll};
+use wakey_core::tidal::flac_mp4::Unpacker;
+use wakey_core::tidal::manifest::MediaPlan;
 use wakey_core::tidal::sync;
 
 /// While the tab is open: the playlist read again this often.
@@ -66,6 +83,45 @@ struct Inner {
     version: u32,
     /// The playlist's id, once found in this Wi-Fi session.
     uuid: Option<String>,
+    /// Tracks on the card (`tidal/<id>.flac`).
+    have: BTreeSet<u64>,
+    /// Tracks to have on the card (chosen in alarms).
+    selected: BTreeSet<u64>,
+    /// An alarm uses „Zufällig“: the whole playlist.
+    all: bool,
+    /// The track being downloaded, and how far (0–1).
+    downloading: Option<(u64, f32)>,
+}
+
+impl Inner {
+    /// The track is to be on the card.
+    fn wants(&self, id: u64) -> bool {
+        self.all || self.selected.contains(&id)
+    }
+}
+
+/// Where a track of the playlist stands, for the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackStatus {
+    /// On the card.
+    Ready,
+    Downloading,
+    /// Selected, waiting for its download.
+    Missing,
+    /// Neither selected nor on the card.
+    Remote,
+}
+
+
+/// The tracks on the card.
+fn scan_tracks() -> BTreeSet<u64> {
+    std::fs::read_dir(sd_path(sync::DIR))
+        .map(|dir| {
+            dir.flatten()
+                .filter_map(|e| sync::track_id_of(&e.file_name().to_string_lossy()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Sends `req`; on an error status logs TIDAL's reason (only `status`,
@@ -109,6 +165,171 @@ fn load_playlist() -> Vec<Track> {
         .unwrap_or_default()
 }
 
+/// The playlist's tracks that are on the card, in playlist order (for the
+/// alarm: `tidal:random`), and the file of one track if it is there.
+pub fn downloaded() -> Vec<Track> {
+    let have = scan_tracks();
+    load_playlist().into_iter().filter(|t| have.contains(&t.id)).collect()
+}
+
+pub fn track_file(id: u64) -> Option<PathBuf> {
+    let path = sd_path(&sync::track_path(id));
+    path.exists().then_some(path)
+}
+
+/// A track's title and artist from the stored playlist.
+pub fn track_title(id: u64) -> Option<(String, String)> {
+    load_playlist()
+        .into_iter()
+        .find(|t| t.id == id)
+        .map(|t| (t.title, t.artist))
+}
+
+/// Writes a file on its own thread, in whole 128 KiB blocks from cache-line
+/// aligned buffers, so the network and the card work at the same time.
+///
+/// Aligned: FatFs hands such a block to the SD driver as is, and the driver
+/// sends it by DMA straight from PSRAM; from an unaligned `Vec` it copied
+/// every write through a freshly allocated temporary buffer (card writes
+/// took 58 % of a download, ~380 KB/s). Own thread: writing took half of
+/// the remaining time, one after the other with receiving. [`BLOCKS`]
+/// blocks circulate between this side and the writer (back-pressure when
+/// the card falls behind). The writer runs on core 1 below the audio
+/// decoder.
+struct CardWriter {
+    /// Full blocks (pointer, length) to the writer; `None`: finish.
+    to_writer: Option<std::sync::mpsc::SyncSender<Option<(usize, usize)>>>,
+    /// Written blocks back.
+    free: std::sync::mpsc::Receiver<usize>,
+    writer: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+    /// The block being filled (address), and how full.
+    cur: usize,
+    len: usize,
+    /// All blocks, one allocation.
+    region: *mut u8,
+}
+
+const BLOCK: usize = 128 * 1024;
+const BLOCKS: usize = 4;
+
+impl CardWriter {
+    fn create(path: &std::path::Path) -> std::io::Result<Self> {
+        let mut file = std::fs::File::create(path)?;
+        let region = unsafe {
+            esp_idf_svc::sys::heap_caps_aligned_alloc(
+                128,
+                BLOCK * BLOCKS,
+                esp_idf_svc::sys::MALLOC_CAP_SPIRAM | esp_idf_svc::sys::MALLOC_CAP_8BIT,
+            )
+        }
+        .cast::<u8>();
+        if region.is_null() {
+            return Err(std::io::Error::other("no memory for the write buffers"));
+        }
+        let (to_writer, from_main) = std::sync::mpsc::sync_channel::<Option<(usize, usize)>>(BLOCKS);
+        let (to_main, free) = std::sync::mpsc::sync_channel::<usize>(BLOCKS);
+        for k in 1..BLOCKS {
+            let _ = to_main.send(region as usize + k * BLOCK);
+        }
+        let previous = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::get()
+            .unwrap_or_default();
+        let _ = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration {
+            name: Some(c"card-writer"),
+            pin_to_core: Some(esp_idf_svc::hal::cpu::Core::Core1),
+            priority: 4,
+            ..Default::default()
+        }
+        .set();
+        let writer = std::thread::Builder::new()
+            .name("card-writer".into())
+            .stack_size(6144)
+            .spawn(crate::taskstats::named("card-writer", move || {
+                while let Ok(Some((addr, len))) = from_main.recv() {
+                    // SAFETY: the block is this thread's until sent back.
+                    let data = unsafe { core::slice::from_raw_parts(addr as *const u8, len) };
+                    file.write_all(data)?;
+                    let _ = to_main.send(addr);
+                }
+                file.flush()
+            }));
+        let _ = previous.set();
+        Ok(Self {
+            to_writer: Some(to_writer),
+            free,
+            writer: Some(writer?),
+            cur: region as usize,
+            len: 0,
+            region,
+        })
+    }
+
+    /// Hands the current block to the writer and takes a free one.
+    fn pass(&mut self) -> std::io::Result<()> {
+        let gone = || std::io::Error::other("card writer stopped");
+        let tx = self.to_writer.as_ref().ok_or_else(gone)?;
+        if tx.send(Some((self.cur, self.len))).is_err() {
+            return Err(self.join().err().unwrap_or_else(gone));
+        }
+        self.len = 0;
+        match self.free.recv() {
+            Ok(b) => {
+                self.cur = b;
+                Ok(())
+            }
+            Err(_) => Err(self.join().err().unwrap_or_else(gone)),
+        }
+    }
+
+    /// Ends the writer thread; its result.
+    fn join(&mut self) -> std::io::Result<()> {
+        self.to_writer = None;
+        match self.writer.take() {
+            Some(h) => h.join().unwrap_or_else(|_| Err(std::io::Error::other("card writer panicked"))),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Write for CardWriter {
+    fn write(&mut self, mut data: &[u8]) -> std::io::Result<usize> {
+        let n = data.len();
+        while !data.is_empty() {
+            let take = (BLOCK - self.len).min(data.len());
+            // SAFETY: within the current block.
+            unsafe {
+                core::ptr::copy_nonoverlapping(data.as_ptr(), (self.cur as *mut u8).add(self.len), take)
+            };
+            self.len += take;
+            data = &data[take..];
+            if self.len == BLOCK {
+                self.pass()?;
+            }
+        }
+        Ok(n)
+    }
+
+    /// Writes what is left and waits until all is on the card.
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.len > 0 {
+            let tx = self.to_writer.as_ref().ok_or_else(|| std::io::Error::other("card writer stopped"))?;
+            let _ = tx.send(Some((self.cur, self.len)));
+            self.len = 0;
+        }
+        if let Some(tx) = &self.to_writer {
+            let _ = tx.send(None);
+        }
+        self.join()
+    }
+}
+
+impl Drop for CardWriter {
+    fn drop(&mut self) {
+        // The writer must be done with the blocks before they go.
+        let _ = self.join();
+        unsafe { esp_idf_svc::sys::heap_caps_free(self.region.cast()) };
+    }
+}
+
 /// Writes the playlist through a temporary file.
 fn save_playlist(tracks: &[Track]) -> std::io::Result<()> {
     std::fs::create_dir_all(sd_path(sync::DIR))?;
@@ -147,6 +368,10 @@ impl Tidal {
                 playlist: load_playlist(),
                 version: 0,
                 uuid: None,
+                have: scan_tracks(),
+                selected: BTreeSet::new(),
+                all: false,
+                downloading: None,
             })),
             wifi,
         }
@@ -165,14 +390,53 @@ impl Tidal {
         self.lock().playlist.clone()
     }
 
-    /// Changes when [`Self::playlist`] does.
+    /// Changes when [`Self::playlist`] or a track's status does.
     pub fn version(&self) -> u32 {
         self.lock().version
+    }
+
+    pub fn track_status(&self, id: u64) -> TrackStatus {
+        let inner = self.lock();
+        match inner.downloading {
+            Some((d, _)) if d == id => TrackStatus::Downloading,
+            _ if inner.have.contains(&id) => TrackStatus::Ready,
+            _ if inner.all || inner.selected.contains(&id) => TrackStatus::Missing,
+            _ => TrackStatus::Remote,
+        }
     }
 
     /// A login is under way (code shown or coming).
     pub fn logging_in(&self) -> bool {
         matches!(self.lock().state, State::Connecting | State::Code { .. })
+    }
+
+    /// The tracks to have on the card. Starts their downloads (a Wi-Fi
+    /// session) unless one is under way, which takes them on.
+    /// `all`: the whole playlist (an alarm uses „Zufällig“).
+    pub fn set_selected(&self, ids: BTreeSet<u64>, all: bool) {
+        let mut inner = self.lock();
+        if inner.selected != ids || inner.all != all {
+            inner.selected = ids;
+            inner.all = all;
+            inner.version = inner.version.wrapping_add(1);
+        }
+        let missing = inner
+            .playlist
+            .iter()
+            .any(|t| inner.wants(t.id) && !inner.have.contains(&t.id));
+        if !missing || inner.busy || inner.cfg.session.is_none() {
+            return;
+        }
+        inner.busy = true;
+        drop(inner);
+        let this = self.clone();
+        self.wifi.run(Box::new(move |net| {
+            match net {
+                Ok(()) => this.keep_up(),
+                Err(e) => log::warn!("tidal: downloads: {e}"),
+            }
+            this.lock().busy = false;
+        }));
     }
 
     /// The TIDAL tab opened: logs in if there is no session, else syncs the
@@ -200,7 +464,7 @@ impl Tidal {
                 Ok(()) => this.login_and_sync(),
                 Err(e) => this.lock().state = State::Failed(e),
             }
-            this.watch();
+            this.keep_up();
             this.lock().busy = false;
         }));
     }
@@ -244,24 +508,228 @@ impl Tidal {
         }
     }
 
-    /// While the tab is open and the playlist synced: reads it again every
-    /// [`WATCH`] (the state stays; errors are logged and end the watch).
-    fn watch(&self) {
+    /// After a sync: downloads what the card lacks, and while the tab is
+    /// open reads the playlist again every [`WATCH`]. Ends when the tab is
+    /// closed and nothing is left to download (or on an error).
+    fn keep_up(&self) {
+        let mut failed = BTreeSet::new();
+        let mut last_sync = Instant::now();
         loop {
-            {
-                let inner = self.lock();
-                if !inner.wanted || inner.state != State::LoggedIn {
-                    return;
-                }
-            }
-            std::thread::sleep(WATCH);
-            if !self.lock().wanted {
+            if self.lock().state != State::LoggedIn {
                 return;
             }
+            let wanted = self.lock().wanted;
+            let due = wanted && last_sync.elapsed() >= WATCH;
+            if !due && let Some(track) = self.next_missing(&failed) {
+                if let Err(e) = self.download(&track) {
+                    log::warn!("tidal: download {}: {e}", track.id);
+                    failed.insert(track.id);
+                    if e == SESSION_INVALID {
+                        self.lock().state = State::Failed(e);
+                        return;
+                    }
+                }
+                continue;
+            }
+            if !wanted {
+                return;
+            }
+            if let Some(rest) = WATCH.checked_sub(last_sync.elapsed()) {
+                std::thread::sleep(rest);
+            }
+            if !self.lock().wanted {
+                continue; // downloads may remain
+            }
+            last_sync = Instant::now();
             if let Err(e) = self.sync() {
                 log::warn!("tidal: watch: {e}");
                 self.lock().state = State::Failed(e);
                 return;
+            }
+        }
+    }
+
+    /// The first track of the playlist the card lacks (not failed before).
+    fn next_missing(&self, failed: &BTreeSet<u64>) -> Option<Track> {
+        let inner = self.lock();
+        inner
+            .playlist
+            .iter()
+            .find(|t| inner.wants(t.id) && !inner.have.contains(&t.id) && !failed.contains(&t.id))
+            .cloned()
+    }
+
+    /// The download under way and how far (0–1), for the progress bar.
+    pub fn progress(&self) -> Option<(u64, f32)> {
+        self.lock().downloading
+    }
+
+    /// Records progress; a new track also refills the list.
+    fn set_progress(&self, id: u64, fraction: f32) {
+        let mut inner = self.lock();
+        let new = inner.downloading.is_none_or(|(d, _)| d != id);
+        inner.downloading = Some((id, fraction.clamp(0.0, 1.0)));
+        if new {
+            inner.version = inner.version.wrapping_add(1);
+        }
+    }
+
+    /// Downloads one track to `tidal/<id>.flac`.
+    fn download(&self, track: &Track) -> Result<(), String> {
+        let s = self.session()?;
+        let (status, body) = send(&api::playback_info(&s, track.id), "stream")?;
+        let plan = api::parse_playback_info(status, &body, track.id, f64::from(track.duration_s))
+            .map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(sd_path(sync::DIR)).map_err(|e| e.to_string())?;
+        let path = sd_path(&sync::track_path(track.id));
+        let part = path.with_extension("flac.part");
+        let t = Instant::now();
+        self.set_progress(track.id, 0.0);
+        // The first download only: each start takes a timer and a buffer.
+        #[cfg(feature = "profile-download")]
+        let profiled = {
+            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            let first = !DONE.swap(true, std::sync::atomic::Ordering::Relaxed);
+            if first {
+                crate::profiler::start();
+            }
+            first
+        };
+        let result = self.fetch(track.id, &plan, &part);
+        #[cfg(feature = "profile-download")]
+        if profiled {
+            crate::profiler::report(300);
+        }
+        self.lock().downloading = None;
+        let bytes = match result {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                self.bump();
+                return Err(e);
+            }
+        };
+        // Readable as FLAC, or it does not count.
+        let check = AudioFile::open(&part).map_err(|e| e.to_string()).and_then(|f| {
+            (f.format.container == Container::Flac && f.format.sample_rate > 0)
+                .then_some(())
+                .ok_or_else(|| "kein FLAC".to_string())
+        });
+        if let Err(e) = check {
+            let _ = std::fs::remove_file(&part);
+            self.bump();
+            return Err(format!("Datei unbrauchbar: {e}"));
+        }
+        let _ = std::fs::remove_file(&path);
+        std::fs::rename(&part, &path).map_err(|e| e.to_string())?;
+        log::info!(
+            "tidal: downloaded {} ({} KiB in {} s)",
+            track.id,
+            bytes / 1024,
+            t.elapsed().as_secs()
+        );
+        let mut inner = self.lock();
+        inner.have.insert(track.id);
+        inner.version = inner.version.wrapping_add(1);
+        Ok(())
+    }
+
+    fn bump(&self) {
+        let mut inner = self.lock();
+        inner.version = inner.version.wrapping_add(1);
+    }
+
+    /// Writes the track to `part`; the bytes written.
+    fn fetch(&self, id: u64, plan: &MediaPlan, part: &std::path::Path) -> Result<u64, String> {
+        let open = || CardWriter::create(part).map_err(|e| e.to_string());
+        match plan {
+            MediaPlan::Mirrors(urls) => {
+                log::info!("tidal: download {id}: one file, {} mirrors", urls.len());
+                let mut last = String::from("keine Quelle");
+                for url in urls {
+                    let mut file = open()?;
+                    let mut written = 0u64;
+                    // Time spent writing to the card (the rest: network,
+                    // TLS, waiting).
+                    let writing = std::cell::Cell::new(Duration::ZERO);
+                    let mut sink = |b: &[u8]| -> anyhow::Result<()> {
+                        let w = Instant::now();
+                        file.write_all(b)?;
+                        writing.set(writing.get() + w.elapsed());
+                        written += b.len() as u64;
+                        Ok(())
+                    };
+                    let t = Instant::now();
+                    let mut logged = 0u64;
+                    let mut progress = |done: u64, total: Option<u64>| {
+                        if let Some(total) = total.filter(|t| *t > 0) {
+                            self.set_progress(id, done as f32 / total as f32);
+                        }
+                        if done >= logged + (2 << 20) {
+                            logged = done;
+                            log::info!(
+                                "tidal: download {id}: {} KiB of {:?} KiB, {} KiB/s, {} of {} ms writing to the card",
+                                done / 1024,
+                                total.map(|t| t / 1024),
+                                done / 1024 / t.elapsed().as_secs().max(1),
+                                writing.get().as_millis(),
+                                t.elapsed().as_millis()
+                            );
+                        }
+                    };
+                    match http::download(url, &mut sink, &mut progress) {
+                        Ok(_) => {
+                            file.flush().map_err(|e| e.to_string())?;
+                            return Ok(written);
+                        }
+                        Err(e) => last = e.to_string(),
+                    }
+                }
+                Err(last)
+            }
+            MediaPlan::Segments(urls) => {
+                log::info!("tidal: download {id}: {} DASH segments", urls.len());
+                let t = Instant::now();
+                let mut file = open()?;
+                let mut unpacker = Unpacker::new();
+                let mut out = Vec::new();
+                let written = std::cell::Cell::new(0u64);
+                // Bytes fed to the unpacker (it may take some without
+                // giving any out).
+                let fed = std::cell::Cell::new(0u64);
+                for (i, url) in urls.iter().enumerate() {
+                    self.set_progress(id, i as f32 / urls.len() as f32);
+                    if i % 10 == 0 {
+                        log::info!(
+                            "tidal: download {id}: segment {i} of {}, {} KiB, {} s",
+                            urls.len(),
+                            written.get() / 1024,
+                            t.elapsed().as_secs()
+                        );
+                    }
+                    let mut sink = |b: &[u8]| -> anyhow::Result<()> {
+                        fed.set(fed.get() + b.len() as u64);
+                        out.clear();
+                        unpacker.push(b, &mut out).map_err(|e| anyhow::anyhow!("{e}"))?;
+                        file.write_all(&out)?;
+                        written.set(written.get() + out.len() as u64);
+                        Ok(())
+                    };
+                    // A segment that fails is tried once more only if it
+                    // gave nothing yet (the unpacker cannot go back).
+                    let before = fed.get();
+                    let mut quiet = |_: u64, _: Option<u64>| {};
+                    if let Err(e) = http::download(url, &mut sink, &mut quiet) {
+                        log::warn!("tidal: download {id}: segment {i}: {e}");
+                        if fed.get() != before {
+                            return Err(e.to_string());
+                        }
+                        http::download(url, &mut sink, &mut quiet).map_err(|e| e.to_string())?;
+                    }
+                }
+                unpacker.finish().map_err(|e| e.to_string())?;
+                file.flush().map_err(|e| e.to_string())?;
+                Ok(written.get())
             }
         }
     }
@@ -354,6 +822,15 @@ impl Tidal {
             offset = next;
         }
         let n = tracks.len();
+        // Files of tracks no longer in the playlist go.
+        let have: Vec<u64> = self.lock().have.iter().copied().collect();
+        for id in sync::plan(&tracks, &have, &[]).delete_tracks {
+            match std::fs::remove_file(sd_path(&sync::track_path(id))) {
+                Ok(()) => log::info!("tidal: removed {id} (not in the playlist)"),
+                Err(e) => log::warn!("tidal: removing {id}: {e}"),
+            }
+            self.lock().have.remove(&id);
+        }
         if self.lock().playlist != tracks {
             save_playlist(&tracks).map_err(|e| format!("Speichern: {e}"))?;
             log::info!("tidal: playlist changed, {n} tracks");

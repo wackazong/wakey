@@ -84,12 +84,25 @@ Things that already went wrong on this board, with the fix that is in place. Rea
 
 - **`send_op_cond` timeout:** the SD pins need on-chip LDO 4 at 3.3 V — and a card that is fully inserted (that was the actual cause once).
 - Long file names need `CONFIG_FATFS_LFN_HEAP`; macOS `._*` files are skipped.
+- **Card writes took half of a download:** `fwrite` from a PSRAM buffer that is not cache-line aligned goes through a small internal bounce buffer in pieces (SDMMC DMA needs 128-byte aligned PSRAM). Write 128 KiB blocks from `heap_caps_aligned_alloc(128, …)` buffers, and run the card at 40 MHz (`speed_khz`; the default is 20).
 
 ## Wi-Fi (ESP32-C6)
 
 - **C6 never answers** (`sdmmc send_op_cond 0x107`): esp_hosted's Tab5 preset assumes an active-low reset and holds the C6 in reset. GPIO15 drives EN directly: `CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y`.
 - **Host version:** esp_hosted host 2.x works with the factory C6 firmware; 3.x is a different protocol. The factory firmware lacks transport-size reporting (warnings at start) and has a known RX stall under memory pressure (m5stack/M5Tab5-UserDemo#20); updating the C6 to slave ≥ 2.13.1 would fix both.
 - The C6 carries a factory test SSID ("M5Stack-Production"); harmless, the firmware sets its own configuration.
+
+- **Downloads stalled at ~180 KiB/s:** lwIP's default TCP window (5.7 KiB) and a 4 KiB HTTP buffer. `CONFIG_LWIP_TCP_WND_DEFAULT=65534`, larger receive mailboxes, 16 KiB read buffer.
+- **Audio dropouts during a download:** the `wifi` thread (TLS) ran on core 1 next to the decoder at the same priority. Pinned to core 0 at priority 1.
+
+## TIDAL
+
+- **„not lossless (LOW)“ for some tracks:** with the device-login client, `playbackinfopostpaywall` answers every quality (LOW to HI_RES_LOSSLESS) for a track that has a Dolby Atmos mix with that mix: E-AC-3, 5.1, 48 kHz, ~770 kbit/s, `audioQuality` "LOW", `audioMode` "DOLBY_ATMOS". `immersiveaudio=false` gives the stereo FLAC (16 bit, 44.1 kHz, BTS). The browser-login (PKCE) client gets stereo anyway; it cannot do the device login („Client is not a Limited Input Device client“).
+- **401 „Invalid access token without sessionId“** (subStatus 6004) from user calls: call `/v1/sessions` first.
+
+## Camera
+
+- **Interrupt watchdog during downloads:** at 30 fps the ISP's input FIFO overflowed while TLS, the SD card and the display all used PSRAM, and ESP-IDF's ISP driver logged each overflow from its ISR (thousands per second). The sensor now runs at 5 fps (frame length 7500 lines), the overflow interrupts are disabled after `esp_isp_enable` (ISP_INT_ENA 0x500A106C, bits 1 and 2), and a frame whose raw status shows an overflow is dropped (INT_RAW 0x500A1064, cleared through 0x500A1070).
 
 ## RTC
 

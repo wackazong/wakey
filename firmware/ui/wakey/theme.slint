@@ -212,18 +212,19 @@ export component VolumeBars inherits Rectangle {
     }
 }
 
-// A row of pills, one selected (`selected`).
+// A row of pills, one selected (`selected`). As high as a Button (88 px):
+// smaller targets were missed.
 export component Pills inherits Rectangle {
     in property <[string]> items;
     in property <int> selected;
     callback chosen(int);
-    height: 64px;
+    height: 88px;
     HorizontalLayout {
         spacing: 12px;
         alignment: start;
         for item[i] in root.items: Rectangle {
             width: 104px;
-            border-radius: 32px;
+            border-radius: 44px;
             background: ta.pressed ? Theme.surface-pressed : i == root.selected ? Theme.accent-dark : Theme.surface;
             Text {
                 text: item;

@@ -69,6 +69,11 @@ debug-overlay = []
 # The display sleeps and wakes every 8 s by itself (ignores the sleep
 # conditions); the render loop logs the PSRAM around each link rebuild.
 sleep-cycle-test = []
+# Logs CPU time per task every 5 s (`taskstats`).
+task-stats = []
+# Samples core 0 (Wi-Fi, TLS) during the first TIDAL download and logs
+# the hottest addresses (`profiler`; resolve with scripts/profile.sh).
+profile-download = []
 
 [profile.release]
 opt-level = 3

@@ -67,8 +67,14 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     editor.on_open_sound(ctx.with(sound_page::open));
     editor.on_cancel(ctx.with(|window, _| show_page(window, PAGE_LIST)));
     editor.on_save(ctx.with(|window, ctx| {
-        let cfg = ctx.draft.borrow().clone();
+        // Saving a changed alarm means it should ring: switched on.
+        let cfg = AlarmConfig {
+            enabled: true,
+            ..ctx.draft.borrow().clone()
+        };
         let result = ctx.alarm.borrow_mut().save(cfg);
+        // The saved alarms decide which TIDAL tracks stay on the card.
+        sound_page::select_tidal(ctx);
         match result {
             Ok(()) => {
                 alarm_list::refresh(window, &ctx.alarm.borrow());

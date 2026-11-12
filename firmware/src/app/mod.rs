@@ -235,6 +235,8 @@ async fn app(spawner: embassy_executor::Spawner) {
         tidal_timer: slint::Timer::default(),
         tidal_shown: RefCell::new(None),
     });
+    // The saved alarms' TIDAL tracks on the card (downloads if missing).
+    sound_page::select_tidal(&ctx);
     alarm_list::start(&ui, &ctx);
     // Rows ready before the list is first opened (rendered in idle time).
     alarm_list::refresh(&ui, &ctx.alarm.borrow());
@@ -256,6 +258,8 @@ async fn app(spawner: embassy_executor::Spawner) {
     // The light meter owns the backlight: full at first, then the room's.
     crate::ambient::start(i2c.clone(), backlight, config.display.night_pixels_percent);
     watch_render_loop();
+    #[cfg(feature = "task-stats")]
+    crate::taskstats::start();
     #[cfg(feature = "ui-bench")]
     spawner.spawn(bench::run().unwrap());
     render_loop::run(window, display, &mut rot, Some(&mut list)).await

@@ -7,8 +7,10 @@
 //!
 //! The register values are from Espressif's `esp_cam_sensor` driver
 //! (`sc202cs_mipi_1lane_24Minput_1280x720_raw8_30fps`, Apache-2.0): 1280×720
-//! RAW8 (BGGR), 30 fps, 576 Mbit/s on one lane; line time 1920 / 72 MHz =
-//! 26.7 µs, 1250 lines per frame.
+//! RAW8 (BGGR), 576 Mbit/s on one lane; line time 1920 / 72 MHz = 26.7 µs.
+//! The frame is stretched to [`FRAME_LINES`] lines (5 fps instead of 30):
+//! a light meter needs no more, and at 30 fps the ISP's FIFO overflowed
+//! while a download, TLS, the SD card and the display all used PSRAM.
 
 use super::i2c::{SharedI2c, lock};
 use esp_idf_svc::sys::EspError;
@@ -23,7 +25,10 @@ pub const CHIP_ID: u16 = 0xeb52;
 pub const WIDTH: u32 = 1280;
 pub const HEIGHT: u32 = 720;
 pub const LANE_MBPS: i32 = 576;
-/// Longest exposure, lines (frame length 1250 minus 6).
+/// Frame length, lines (registers 0x320e/0x320f; 1250 at 30 fps): 5 fps.
+pub const FRAME_LINES: u16 = 7500;
+/// Longest exposure, lines (the 30 fps frame's 1250 minus 6, kept: the
+/// light scale depends on it).
 pub const MAX_EXPOSURE: u32 = 1244;
 /// Shortest exposure, lines.
 pub const MIN_EXPOSURE: u32 = 8;
@@ -95,6 +100,9 @@ pub fn init(bus: &SharedI2c) -> anyhow::Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
+    let [h, l] = FRAME_LINES.to_be_bytes();
+    write(bus, 0x320e, h)?;
+    write(bus, 0x320f, l)?;
     Ok(())
 }
 

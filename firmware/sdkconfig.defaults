@@ -82,3 +82,16 @@ CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
 # connection) in PSRAM; internal RAM is short (~100 KiB free in a Wi-Fi
 # session). The certificate bundle (default: full) verifies the servers.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# TCP receive window: the default 5760 bytes allowed ~185 KiB/s at ~30 ms to
+# TIDAL's CDN (window / round trip; a track took 2.5 min). 64 KiB, and
+# mailboxes that hold a window's worth of segments (65534 / 1440 MSS = 46).
+# The pbufs come from the general heap (PSRAM here).
+CONFIG_LWIP_TCP_WND_DEFAULT=65534
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+
+# CPU time per task (`taskstats`, feature `task-stats`): FreeRTOS keeps a
+# run-time counter per task (esp_timer based, cheap).
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

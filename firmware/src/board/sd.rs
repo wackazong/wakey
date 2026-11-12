@@ -81,7 +81,11 @@ pub fn mount(slot: SDMMC0<'static>, p: SdPins) -> Result<SdCard, EspError> {
         None::<esp_idf_svc::hal::gpio::AnyIOPin>,
         &SdMmcHostConfiguration::new(),
     )?;
-    let card = SdCardDriver::new_mmc(host, &SdCardConfiguration::new())?;
+    // 40 MHz (high speed) instead of the default 20: downloads write tens of
+    // MB while the player reads; a card without it stays at its default.
+    let mut cfg = SdCardConfiguration::new();
+    cfg.speed_khz = 40_000;
+    let card = SdCardDriver::new_mmc(host, &cfg)?;
     let fs = MountedFatfs::mount(Fatfs::new_sdcard(0, card)?, MOUNT_POINT, 4)?;
     Ok(SdCard {
         _fs: fs,

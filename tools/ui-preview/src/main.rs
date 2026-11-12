@@ -304,6 +304,7 @@ fn sound(title: &str, sub: &str, selected: bool, kind: i32) -> SoundRow {
         sub: sub.into(),
         selected,
         kind,
+        progress: -1.0,
     }
 }
 

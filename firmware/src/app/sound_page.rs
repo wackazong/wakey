@@ -6,7 +6,7 @@
 use super::screens::{AppWindow, SoundPicker, SoundRow};
 use super::{Ctx, PAGE_ALARM, PAGE_SOUND, alarm_page, show_page};
 use crate::sounds;
-use crate::tidal::State;
+use crate::tidal::{State, TrackStatus};
 use slint::{ComponentHandle, Image, Model, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use std::rc::Rc;
 use std::time::Duration;
@@ -39,9 +39,32 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     picker.set_volume(volume.into());
     picker.set_fade(fade);
     picker.set_previewing(false);
+    select_tidal(ctx);
     fill_rows(window, ctx);
     tidal_tab(window, ctx, tab == TAB_TIDAL);
     show_page(window, PAGE_SOUND);
+}
+
+/// Tells TIDAL which tracks to have on the card: those of the saved
+/// alarms and the one picked in the alarm being edited.
+pub fn select_tidal(ctx: &Ctx) {
+    let draft = ctx.draft.borrow().sound.clone();
+    let alarm = ctx.alarm.borrow();
+    let sounds: Vec<&Sound> = alarm
+        .alarms()
+        .iter()
+        .map(|a| &a.sound)
+        .chain(std::iter::once(&draft))
+        .collect();
+    let ids = sounds
+        .iter()
+        .filter_map(|s| match s {
+            Sound::TidalTrack(id) => id.parse().ok(),
+            _ => None,
+        })
+        .collect();
+    let all = sounds.iter().any(|s| **s == Sound::TidalRandom);
+    ctx.tidal.set_selected(ids, all);
 }
 
 /// The TIDAL tab opened (log in if needed, follow the state) or closed.
@@ -64,10 +87,14 @@ fn tidal_tab(window: &AppWindow, ctx: &Ctx, open: bool) {
             let Some(window) = weak.upgrade() else { return };
             let picker = window.global::<SoundPicker>();
             let now = (tidal.state(), tidal.version());
-            if picker.get_tab() == TAB_TIDAL && now != seen {
+            if picker.get_tab() != TAB_TIDAL {
+                return;
+            }
+            if now != seen {
                 seen = now;
                 picker.invoke_refresh();
             }
+            picker.invoke_tick();
         },
     );
 }
@@ -137,7 +164,12 @@ fn qr_image(text: &str) -> Option<Image> {
 fn fill_rows(window: &AppWindow, ctx: &Ctx) {
     let picker = window.global::<SoundPicker>();
     let selected = ctx.draft.borrow().sound.clone();
+    let progress = ctx.tidal.progress();
     let row = |title: &str, sub: &str, sound: &Sound, kind| SoundRow {
+        progress: match (sound, progress) {
+            (Sound::TidalTrack(t), Some((id, f))) if *t == id.to_string() => f,
+            _ => -1.0,
+        },
         title: title.into(),
         sub: sub.into(),
         selected: *sound == selected,
@@ -177,7 +209,12 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         }
         choices.extend(tracks.iter().map(|t| {
             let sound = Sound::TidalTrack(t.id.to_string());
-            (row(&t.title, &t.artist, &sound, 2), sound)
+            let sub = match ctx.tidal.track_status(t.id) {
+                TrackStatus::Ready | TrackStatus::Remote => t.artist.clone(),
+                TrackStatus::Downloading => format!("{} · lädt …", t.artist),
+                TrackStatus::Missing => format!("{} · wird geladen", t.artist),
+            };
+            (row(&t.title, &sub, &sound, 2), sound)
         }));
         choices
     };
@@ -206,6 +243,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
             return;
         };
         ctx.draft.borrow_mut().sound = sound;
+        select_tidal(ctx);
         fill_rows(window, ctx);
         // A running preview switches to the new sound.
         let previewing = ctx.alarm.borrow().is_previewing();
@@ -218,6 +256,21 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         if window.global::<SoundPicker>().get_tab() == TAB_TIDAL {
             fill_rows(window, ctx);
             show_tidal(window, ctx);
+        }
+    }));
+    picker.on_tick(ctx.with(|window, ctx| {
+        // Only the downloading row's bar, in place (no list rebuild).
+        let Some((id, fraction)) = ctx.tidal.progress() else { return };
+        let want = Sound::TidalTrack(id.to_string());
+        let Some(i) = ctx.sound_choices.borrow().iter().position(|s| *s == want) else {
+            return;
+        };
+        let rows = window.global::<SoundPicker>().get_rows();
+        if let Some(mut row) = rows.row_data(i)
+            && (row.progress - fraction).abs() >= 0.005
+        {
+            row.progress = fraction;
+            rows.set_row_data(i, row);
         }
     }));
     picker.on_volume_changed(ctx.with_arg(|_, ctx, v: i32| {

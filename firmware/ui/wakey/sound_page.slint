@@ -19,6 +19,9 @@ export struct SoundRow {
     selected: bool,
     // 0 built-in tone, 1 random, 2 file / track.
     kind: int,
+    // A download under way: how far (0–1), drawn as a bar under the row;
+    // below 0: none.
+    progress: float,
 }
 
 // Set from Rust (`app/sound_page.rs`).
@@ -45,20 +48,23 @@ export global SoundPicker {
     callback preview();
     // The TIDAL state changed: fill the tab again.
     callback refresh();
+    // Twice a second while the TIDAL tab is open: the progress bar.
+    callback tick();
 }
 
+// As high as a Button (88 px): smaller targets were missed.
 component Segment inherits Rectangle {
     in property <[string]> items;
     in property <int> selected;
     callback chosen(int);
-    height: 72px;
-    border-radius: 36px;
+    height: 88px;
+    border-radius: 44px;
     background: Theme.surface;
     HorizontalLayout {
         padding: 6px;
         spacing: 6px;
         for item[i] in root.items: Rectangle {
-            border-radius: 30px;
+            border-radius: 38px;
             background: i == root.selected ? Theme.accent-dark : ta.pressed ? Theme.surface-pressed : transparent;
             Text {
                 text: item;
@@ -103,11 +109,12 @@ export component SoundPage inherits Rectangle {
         chosen(i) => { SoundPicker.select-tab(i); }
     }
 
+    // Below the tabs (132 + 88 + 24), down to the settings card's bottom.
     Rectangle {
         x: 40px;
-        y: 228px;
+        y: 244px;
         width: root.list-width;
-        height: 460px;
+        height: 444px;
         border-radius: 28px;
         clip: true;
         background: Theme.card;
@@ -164,6 +171,12 @@ export component SoundPage inherits Rectangle {
                 y: i * 112px;
                 height: 112px;
                 background: ta.pressed ? Theme.surface : row.selected ? Theme.selected : transparent;
+                if row.progress >= 0: Rectangle {
+                    x: 0;
+                    width: parent.width * clamp(row.progress, 0, 1);
+                    height: parent.height;
+                    background: Theme.accent-dark;
+                }
                 if row.kind == 1: Icon {
                     kind: 5;
                     x: 32px;

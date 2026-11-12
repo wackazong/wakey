@@ -38,7 +38,7 @@ pub(super) fn install() -> Result<(), EspError> {
     std::thread::Builder::new()
         .name("usb-lib".into())
         .stack_size(4096)
-        .spawn(|| {
+        .spawn(crate::taskstats::named("usb-lib", || {
             loop {
                 let mut flags = 0u32;
                 unsafe { sys::usb_host_lib_handle_events(u32::MAX, &mut flags) };
@@ -46,7 +46,7 @@ pub(super) fn install() -> Result<(), EspError> {
                     unsafe { sys::usb_host_device_free_all() };
                 }
             }
-        })
+        }))
         .expect("usb-lib thread");
     Ok(())
 }
