@@ -78,6 +78,11 @@
 //! state light sleep allows, the controller reports only its gestures
 //! (double tap, long press); a single tap cannot wake the chip.
 //!
+//! Round 9 (current `VARIANTS`): 10 single taps each with 0x86, 0x87,
+//! 0x82 (bit 1, which had let taps through twice): 0 of 30 seen, ~67
+//! scans/s. The earlier hits were two taps close enough to count as a
+//! double tap.
+//!
 //! Round 7 code, kept below (part 2 of round 6 removed):
 //!
 //! 1. Registers in normal mode: firmware, status (0x0001 low nibble: 0
@@ -624,17 +629,15 @@ struct Variant {
     diff: bool,
 }
 
-const VARIANTS: [Variant; 9] = [
-    Variant { name: "normal, panel on, stream", swk: None, panel_sleep: false, link_down: false, diff: false },
-    Variant { name: "normal, panel asleep, stream", swk: None, panel_sleep: true, link_down: false, diff: false },
-    Variant { name: "normal, panel on, link down", swk: None, panel_sleep: false, link_down: true, diff: false },
-    Variant { name: "SWK 0x84", swk: Some(0x84), panel_sleep: true, link_down: true, diff: false },
-    Variant { name: "SWK 0x85", swk: Some(0x85), panel_sleep: true, link_down: true, diff: false },
+/// Round 8 ran nine variants (results in the module docs). Round 9: bit 1
+/// of 0x00F1, which let one of five single taps through as a double tap
+/// (0x87), and once before as 0xC5: how many of 10 taps get through?
+const VARIANTS: [Variant; 3] = [
+    Variant { name: "SWK 0x86", swk: Some(0x86), panel_sleep: true, link_down: true, diff: false },
     Variant { name: "SWK 0x87", swk: Some(0x87), panel_sleep: true, link_down: true, diff: false },
-    Variant { name: "SWK 0xFC", swk: Some(0xFC), panel_sleep: true, link_down: true, diff: false },
-    Variant { name: "SWK 0x84 + differ data", swk: Some(0x84), panel_sleep: true, link_down: true, diff: true },
-    Variant { name: "normal + differ data, panel asleep, link down", swk: None, panel_sleep: true, link_down: true, diff: true },
+    Variant { name: "SWK 0x82", swk: Some(0x82), panel_sleep: true, link_down: true, diff: false },
 ];
+const TAP_SECS: u64 = 20;
 
 /// What one variant saw while the tester tapped.
 #[derive(Default)]
@@ -701,7 +704,7 @@ fn run_variant(display: &mut Display, bus: &SharedI2c, v: &Variant) -> Seen {
     let mut status = rd8(bus, 0x0001);
     let mut first_diff = None;
     edges_start();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + Duration::from_secs(TAP_SECS);
     while Instant::now() < end {
         if rd(bus, 0x0010, &mut buf[..4 + 7 * max]) {
             let any = buf[4..4 + 7 * max].chunks(7).any(|r| r[0] & 0x80 != 0);
@@ -785,7 +788,7 @@ fn main() {
     countdown(
         &mut display,
         GREEN,
-        &["SINGLE TAP TEST", "", "9 ROUNDS. IN EACH:", "TAP ONCE EVERY", "2 SECONDS FOR", "10 SECONDS.", "", "THE SCREEN MAY", "GO BLACK. KEEP", "TAPPING ANYWAY."],
+        &["SINGLE TAP TEST", "", "3 ROUNDS. IN EACH:", "TAP ONCE EVERY", "2 SECONDS FOR", "20 SECONDS.", "", "THE SCREEN MAY", "GO BLACK. KEEP", "TAPPING ANYWAY."],
         10,
         "START",
     );
@@ -793,10 +796,10 @@ fn main() {
 
     let mut results = Vec::new();
     for (i, v) in VARIANTS.iter().enumerate() {
-        let t = format!("ROUND {} OF 9", i + 1);
+        let t = format!("ROUND {} OF {}", i + 1, VARIANTS.len());
         countdown(&mut display, BLUE, &[&t, "", "GET READY TO TAP", "ONCE EVERY 2 S."], 3, "TAP");
         // The screen tells the tester to tap; it may go black right after.
-        screen(&mut display, BLUE, &[&t, "", "TAP NOW,", "ONCE EVERY 2 S,", "FOR 10 SECONDS."]);
+        screen(&mut display, BLUE, &[&t, "", "TAP NOW,", "ONCE EVERY 2 S,", "FOR 20 SECONDS."]);
         let seen = run_variant(&mut display, &bus, v);
         let a = format!("SIGNALS: {}", seen.signals);
         let b = format!("TOUCHES: {}", seen.touches);
