@@ -380,6 +380,12 @@ impl Client {
         }
         self.read_volume_range();
         self.set_mute(false);
+        // The master volume is stored in the device and was found at
+        // -20 dB (once, apparently lower: no sound). Always 0 dB; the
+        // channels carry the volume.
+        if let Some(index) = self.feature_index() {
+            let _ = self.control(0x21, 0x01, 0x0200, index, &mut 0i16.to_le_bytes());
+        }
         if let Some((_, max)) = self.device.as_ref().and_then(|d| d.volume_range_db) {
             self.set_volume_db(max - DEFAULT_VOLUME_BELOW_MAX_DB);
         }
