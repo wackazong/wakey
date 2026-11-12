@@ -62,7 +62,23 @@
 //! rebuilding it after waking as at boot (`Display::link_up`: bus, panel
 //! init, stream) brought the picture back 4 of 4 times, promptly.
 //!
-//! The code below is round 7 (part 2 of round 6 removed):
+//! Round 8 (the code in `main`): single taps only, every pathway at once,
+//! chip awake, touch controller and display set up as for sleep in nine
+//! variants (see `VARIANTS`): `TP_INT` edges (ISR), gesture register,
+//! touch points, status register changes, differ data (raw per-node
+//! values, 0x0130), scan counter. Round 7's sleep test is `sleep_round`.
+//!
+//! Result, 5 single taps per variant: only variant 1 (normal mode, panel
+//! on, stream running) saw them (5 touch points, TP_INT signals, 66
+//! scans/s). Normal mode with the panel asleep or the link down: 0 scans.
+//! Smart Wake Up (0x84, 0x85, 0x87): ~65 scans/s, but no signal, touch
+//! point or status change for a single tap (0x87 once reported two quick
+//! taps as a double tap, with a touch point). 0xFC: 1644 scans/s, nothing
+//! reported. Differ data (0x0130 = 1) read as 0 throughout. So in every
+//! state light sleep allows, the controller reports only its gestures
+//! (double tap, long press); a single tap cannot wake the chip.
+//!
+//! Round 7 code, kept below (part 2 of round 6 removed):
 //!
 //! 1. Registers in normal mode: firmware, status (0x0001 low nibble: 0
 //!    normal, 3 smart wake-up, 4 idle, 5 power down, 6 pre smart wake-up),
@@ -88,7 +104,7 @@
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
-use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
+use esp_idf_svc::nvs::{EspNvs, NvsDefault};
 use esp_idf_svc::sys;
 use std::time::{Duration, Instant};
 use wakey::board::Board;
@@ -593,11 +609,160 @@ fn report(nvs: &EspNvs<NvsDefault>) -> Vec<String> {
     lines
 }
 
+// ── Round 8: single taps, every pathway ─────────────────────────────────────
+
+/// How the touch controller and the display are set up for one variant.
+struct Variant {
+    name: &'static str,
+    /// 0x00F1 with Smart Wake Up (bit 7); `None`: normal mode.
+    swk: Option<u8>,
+    /// Panel display off and sleep in (DCS 0x28, 0x10).
+    panel_sleep: bool,
+    /// Whole display link down, as in light sleep.
+    link_down: bool,
+    /// Differ data on (0x0130 bit 0): raw per-node changes in the report.
+    diff: bool,
+}
+
+const VARIANTS: [Variant; 9] = [
+    Variant { name: "normal, panel on, stream", swk: None, panel_sleep: false, link_down: false, diff: false },
+    Variant { name: "normal, panel asleep, stream", swk: None, panel_sleep: true, link_down: false, diff: false },
+    Variant { name: "normal, panel on, link down", swk: None, panel_sleep: false, link_down: true, diff: false },
+    Variant { name: "SWK 0x84", swk: Some(0x84), panel_sleep: true, link_down: true, diff: false },
+    Variant { name: "SWK 0x85", swk: Some(0x85), panel_sleep: true, link_down: true, diff: false },
+    Variant { name: "SWK 0x87", swk: Some(0x87), panel_sleep: true, link_down: true, diff: false },
+    Variant { name: "SWK 0xFC", swk: Some(0xFC), panel_sleep: true, link_down: true, diff: false },
+    Variant { name: "SWK 0x84 + differ data", swk: Some(0x84), panel_sleep: true, link_down: true, diff: true },
+    Variant { name: "normal + differ data, panel asleep, link down", swk: None, panel_sleep: true, link_down: true, diff: true },
+];
+
+/// What one variant saw while the tester tapped.
+#[derive(Default)]
+struct Seen {
+    /// Falling edges on TP_INT (ISR).
+    signals: u32,
+    /// Finger appearances in the report (valid bit of any point).
+    touches: u32,
+    /// Non-zero gesture register readings.
+    gestures: u32,
+    /// Changes of the status register.
+    states: u32,
+    /// Reads where the differ data's largest value exceeded 3× the first.
+    diff_peaks: u32,
+    /// Largest differ value seen, and the first (baseline).
+    diff_max: i32,
+    diff_first: i32,
+    /// Scans in the 10 s (counter 0x000A/B).
+    scans: u32,
+}
+
+/// The largest absolute node value in the differ table (None: unreadable).
+fn diff_max(bus: &SharedI2c) -> Option<i32> {
+    let mut off = [0u8; 2];
+    if !rd(bus, 0x0132, &mut off) {
+        return None;
+    }
+    let off = u16::from_be_bytes(off);
+    if off == 0 {
+        return None;
+    }
+    let mut t = [0u8; 0x65];
+    if !rd(bus, off, &mut t) {
+        return None;
+    }
+    t[2..0x64]
+        .chunks(2)
+        .map(|c| i32::from(i16::from_be_bytes([c[0], c[1]])).abs())
+        .max()
+}
+
+fn run_variant(display: &mut Display, bus: &SharedI2c, v: &Variant) -> Seen {
+    // Set up as for sleep.
+    if let Some(misc) = v.swk {
+        enter_swk(display, bus, Some(misc));
+    } else if v.panel_sleep {
+        display.set_panel_sleep(true).unwrap();
+    }
+    if v.diff {
+        let ok = wr8(bus, 0x0130, 0x01);
+        log::info!("spike: differ data on written {ok}, 0x0130 reads {:?}", rd8(bus, 0x0130));
+    }
+    if v.link_down {
+        display.link_down().unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    log::info!("spike: variant {}: status {}", v.name, status_name(rd8(bus, 0x0001)));
+
+    let mut seen = Seen::default();
+    let scans0 = scans(bus);
+    let max = rd8(bus, 0x0009).unwrap_or(10).clamp(1, 10) as usize;
+    let mut buf = [0u8; 4 + 7 * 10];
+    let mut finger = false;
+    let mut status = rd8(bus, 0x0001);
+    let mut first_diff = None;
+    edges_start();
+    let end = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < end {
+        if rd(bus, 0x0010, &mut buf[..4 + 7 * max]) {
+            let any = buf[4..4 + 7 * max].chunks(7).any(|r| r[0] & 0x80 != 0);
+            if any && !finger {
+                seen.touches += 1;
+                log::info!("spike: touch point, report {:02x?}", &buf[..11]);
+            }
+            finger = any;
+            if buf[2] != 0 {
+                seen.gestures += 1;
+                log::info!("spike: gesture 0x{:02x} {}", buf[2], gesture_name(buf[2]));
+            }
+        }
+        let st = rd8(bus, 0x0001);
+        if st != status {
+            seen.states += 1;
+            log::info!("spike: status {} -> {}", status_name(status), status_name(st));
+            status = st;
+        }
+        if v.diff {
+            if let Some(m) = diff_max(bus) {
+                let base = *first_diff.get_or_insert(m.max(1));
+                seen.diff_max = seen.diff_max.max(m);
+                if m > 3 * base {
+                    seen.diff_peaks += 1;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (signals, min_us, max_us) = edges_stop();
+    seen.signals = signals;
+    seen.diff_first = first_diff.unwrap_or(0);
+    seen.scans = match (scans0, scans(bus)) {
+        (Some(a), Some(b)) => u32::from(b.wrapping_sub(a)),
+        _ => 0,
+    };
+    log::info!(
+        "spike: variant {}: {} signals ({min_us}..{max_us} us), {} touches, {} gestures, {} state changes, differ max {} (first {}), {} peaks, {} scans",
+        v.name, seen.signals, seen.touches, seen.gestures, seen.states, seen.diff_max, seen.diff_first, seen.diff_peaks, seen.scans
+    );
+
+    // Back to normal.
+    if v.diff {
+        wr8(bus, 0x0130, 0x00);
+    }
+    if v.swk.is_some() {
+        leave_touch_swk(bus);
+    }
+    if v.link_down {
+        // Panel init included (sleep out, display on).
+        display.link_up().unwrap();
+    } else if v.panel_sleep {
+        display.set_panel_sleep(false).unwrap();
+    }
+    seen
+}
+
 fn main() {
     sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
-    let nvs = EspNvs::new(EspDefaultNvsPartition::take().unwrap(), "chipsleep", true).unwrap();
-    let previous = report(&nvs);
 
     let Board {
         mut backlight,
@@ -611,46 +776,44 @@ fn main() {
         sys::gpio_set_direction(TP_INT, sys::gpio_mode_t_GPIO_MODE_INPUT);
         sys::gpio_set_pull_mode(TP_INT, sys::gpio_pull_mode_t_GPIO_PULLUP_ONLY);
     }
-    // The last run's results first (the USB log is often not connected
-    // yet at boot): on screen and in the log, 15 s.
-    for left in (1..=15).rev() {
-        log::info!("spike: previous run:");
-        report(&nvs);
-        let count = format!("START IN {left} SECONDS");
-        let mut lines: Vec<&str> = vec!["LAST RUN:", ""];
-        if previous.is_empty() {
-            lines.push("NO SLEEPS");
-        }
-        lines.extend(previous.iter().map(String::as_str));
-        lines.extend_from_slice(&["", &count]);
-        screen(&mut display, GREEN, &lines);
-        std::thread::sleep(Duration::from_secs(1));
+    // Waits for the tester.
+    screen(&mut display, GREEN, &["SINGLE TAP TEST", "", "TAP THE SCREEN", "TO START."]);
+    log::info!("spike: waiting for a tap to start");
+    while !matches!(wakey::board::touch::read_point(&mut i2c::lock(&bus)), Ok(Some(_))) {
+        std::thread::sleep(Duration::from_millis(20));
     }
-    let _ = nvs.set_u32("n", 0);
     countdown(
         &mut display,
         GREEN,
-        &["SLEEP TEST", "", "DO NOT TOUCH THE", "SCREEN UNTIL IT", "ASKS YOU TO."],
-        5,
+        &["SINGLE TAP TEST", "", "9 ROUNDS. IN EACH:", "TAP ONCE EVERY", "2 SECONDS FOR", "10 SECONDS.", "", "THE SCREEN MAY", "GO BLACK. KEEP", "TAPPING ANYWAY."],
+        10,
         "START",
     );
-
-    // Part 1: normal mode.
-    screen(&mut display, GREEN, &["PART 1 OF 3", "", "READING THE TOUCH", "CHIP. DO NOT TOUCH."]);
     registers(&bus, "normal mode");
 
-    // Part 2 (round 6): single taps with 0x00F1 = 0x84, 0x8C, 0x94, 0xA4,
-    // 0xC4: the report never showed a touch point ("touches seen" 0 in
-    // every round), so polling by timer cannot find a single tap either.
-
-    // Part 3: does the picture come back after light sleep? No touching.
-    for round in 1..=4 {
-        sleep_round(&mut display, &bus, &nvs, round);
+    let mut results = Vec::new();
+    for (i, v) in VARIANTS.iter().enumerate() {
+        let t = format!("ROUND {} OF 9", i + 1);
+        countdown(&mut display, BLUE, &[&t, "", "GET READY TO TAP", "ONCE EVERY 2 S."], 3, "TAP");
+        // The screen tells the tester to tap; it may go black right after.
+        screen(&mut display, BLUE, &[&t, "", "TAP NOW,", "ONCE EVERY 2 S,", "FOR 10 SECONDS."]);
+        let seen = run_variant(&mut display, &bus, v);
+        let a = format!("SIGNALS: {}", seen.signals);
+        let b = format!("TOUCHES: {}", seen.touches);
+        let c = format!("GESTURES: {}", seen.gestures);
+        let d = format!("STATE CHANGES: {}", seen.states);
+        countdown(&mut display, ORANGE, &[&t, "", "STOP TAPPING.", "", &a, &b, &c, &d], 4, "NEXT");
+        results.push(format!(
+            "variant {} ({}): {} signals, {} touches, {} gestures, {} state changes, differ max {} (first {}), {} peaks, {} scans",
+            i + 1, v.name, seen.signals, seen.touches, seen.gestures, seen.states, seen.diff_max, seen.diff_first, seen.diff_peaks, seen.scans
+        ));
     }
-    screen(&mut display, GREEN, &["DONE.", "", "THANK YOU!"]);
+    screen(&mut display, GREEN, &["DONE.", "", "THANK YOU!", "", "NOTE THEM."]);
     loop {
         log::info!("spike: done");
-        report(&nvs);
+        for r in &results {
+            log::info!("spike: {r}");
+        }
         std::thread::sleep(Duration::from_secs(10));
     }
 }
