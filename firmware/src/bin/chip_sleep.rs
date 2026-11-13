@@ -439,12 +439,12 @@ fn collect(bus: &SharedI2c, secs: u64) -> (u32, Vec<String>) {
             if polled {
                 next_poll = Instant::now() + Duration::from_millis(100);
             }
-            if rd8(bus, 0x0012).unwrap_or(0) != 0 || low {
-                if let Some(g) = read_report(bus).filter(|g| *g != 0) {
-                    let how = if low { "INT" } else { "READ" };
-                    log::info!("spike: gesture 0x{g:02x} {} ({how})", gesture_name(g));
-                    seen.push(format!("{} ({how})", gesture_name(g)));
-                }
+            if (rd8(bus, 0x0012).unwrap_or(0) != 0 || low)
+                && let Some(g) = read_report(bus).filter(|g| *g != 0)
+            {
+                let how = if low { "INT" } else { "READ" };
+                log::info!("spike: gesture 0x{g:02x} {} ({how})", gesture_name(g));
+                seen.push(format!("{} ({how})", gesture_name(g)));
             }
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -772,13 +772,13 @@ fn run_variant(display: &mut Display, bus: &SharedI2c, v: &Variant) -> Seen {
             );
             status = st;
         }
-        if v.diff {
-            if let Some(m) = diff_max(bus) {
-                let base = *first_diff.get_or_insert(m.max(1));
-                seen.diff_max = seen.diff_max.max(m);
-                if m > 3 * base {
-                    seen.diff_peaks += 1;
-                }
+        if v.diff
+            && let Some(m) = diff_max(bus)
+        {
+            let base = *first_diff.get_or_insert(m.max(1));
+            seen.diff_max = seen.diff_max.max(m);
+            if m > 3 * base {
+                seen.diff_peaks += 1;
             }
         }
         std::thread::sleep(Duration::from_millis(20));

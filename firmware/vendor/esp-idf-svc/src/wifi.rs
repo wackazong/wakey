@@ -3119,10 +3119,7 @@ where
     }
 }
 
-// wakey: disabled. rustc nightly-2026-10-15 panics checking this impl
-// (`scan_n<const N: usize>` in an async trait from another crate:
-// "DefId::expect_local ... isn't local" in compare_impl_item). Unused here.
-#[cfg(any())]
+#[cfg(all(feature = "alloc", esp_idf_comp_esp_timer_enabled))]
 impl<T> embedded_svc::wifi::asynch::Wifi for AsyncWifi<T>
 where
     T: Wifi<Error = EspError> + NonBlocking,

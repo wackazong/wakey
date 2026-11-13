@@ -444,6 +444,7 @@ fn free_task_buffers(buffers: Vec<(&'static core::ffi::CStr, *mut u8, *mut u8)>)
 /// One session: C6 on, driver up, connect and sync the clock (or scan once
 /// without credentials), driver down. True if the clock was synced. The
 /// caller switches the C6 off.
+#[allow(clippy::too_many_arguments)]
 fn session(
     modem: &mut Modem<'static>,
     power: &Switch,

@@ -53,7 +53,7 @@ pub fn start() {
                             .to_string_lossy()
                             .into_owned(),
                     };
-                    let key = t.xTaskNumber as u32;
+                    let key = t.xTaskNumber;
                     let run = t.ulRunTimeCounter;
                     let delta = u64::from(run.wrapping_sub(*last.get(&key).unwrap_or(&run)));
                     now.insert(key, run);
@@ -61,7 +61,7 @@ pub fn start() {
                 }
                 last = now;
                 last_total = total;
-                used.sort_by(|a, b| b.0.cmp(&a.0));
+                used.sort_by_key(|(delta, _)| core::cmp::Reverse(*delta));
                 let line: Vec<String> = used
                     .iter()
                     .take(8)
