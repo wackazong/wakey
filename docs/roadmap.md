@@ -10,13 +10,8 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 
 ## Next steps
 
-- make the slider line orange not yellow
-- Button text white not yellow
 - move the tidal track list to the list layer
-- Show just the TIDAL song name on the alarm settings screen
-- Album covers
 - open: each C6 session leaks ~2.3 KiB internal RAM (`docs/pitfalls.md`).
-- preview: play a downloading song as soon as enough has arrived (now silent until it is on the card)
 - make the first sync after opening the tab faster (Wi-Fi up when the alarm page opens, one connection for the requests, no playlist search once known)
 
 ## Development tools (idea)
