@@ -11,7 +11,7 @@ Wakey is a bedside alarm clock on the M5Stack Tab5: a 1280×720 touch clock that
 | Framework | Rust std on **ESP-IDF 5.5.5** (`esp-idf-sys`/`-hal`/`-svc`) |
 | Async | Embassy executor (std platform) on one FreeRTOS task; `embassy-time` driver from `esp-idf-svc` |
 | UI | Slint 1.18 software renderer (vendored with patches, see [vendor/README.md](../firmware/vendor/README.md)) |
-| Toolchain | nightly-2026-10-15, `build-std`, target `riscv32imafc-esp-espidf` |
+| Toolchain | nightly-2026-10-17 (the only usable pin right now, see [pitfalls.md](pitfalls.md)), `build-std`, target `riscv32imafc-esp-espidf` |
 
 **Rust only:** the project contains no C or C++ of its own and no C board support package. ESP-IDF itself and Espressif's registry components for the Wi-Fi link (`esp_hosted`, `esp_wifi_remote`) are the only C. Panel init tables are ported to Rust; the USB audio class driver is written in Rust on ESP-IDF's USB host library.
 

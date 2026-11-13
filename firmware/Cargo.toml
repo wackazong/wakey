@@ -117,5 +117,6 @@ remote_component = { name = "espressif/esp_wifi_remote", version = "==1.6.5" }
 [patch.crates-io]
 i-slint-renderer-software = { path = "vendor/i-slint-renderer-software" }
 i-slint-core = { path = "vendor/i-slint-core" }
-# One impl disabled to dodge a rustc ICE (vendor/README.md).
+# HTTP client: headers of the previous request deleted on a reused
+# connection, TLS session tickets (vendor/README.md).
 esp-idf-svc = { path = "vendor/esp-idf-svc" }
