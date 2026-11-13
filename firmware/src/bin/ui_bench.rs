@@ -138,6 +138,8 @@ async fn app(spawner: embassy_executor::Spawner) {
         slop: 12.0,
         background: LIST_BACKGROUND,
         page_draws_still: false,
+        swipe: true,
+        corners: None,
     };
     let mut list = ListLayer::new(layout, row_window, Tracks { row });
     list.prerender(&mut rot);

@@ -108,6 +108,11 @@ pub trait ListSource {
     /// The layer took over (a scroll or a swipe): drop any touch feedback
     /// on the page (a highlight).
     fn layer_started(&mut self);
+    /// When a scroll starts, render the visible rows again (they show
+    /// something that moved on the page meanwhile, e.g. scrolling text).
+    fn render_visible_on_scroll(&self) -> bool {
+        false
+    }
     /// The list stopped at `offset` (whole pixels): the page draws it there.
     fn scroll_ended(&mut self, offset: f32);
     /// The swipe of row `i` ended: the page shows it again, or deletes it.
@@ -134,6 +139,61 @@ pub struct Layout {
     /// it moves. Otherwise the layer always shows it (the page leaves the
     /// area blank) and has all its touches.
     pub page_draws_still: bool,
+    /// A sideways drag on a row swipes it (to delete); otherwise it is the
+    /// page's.
+    pub swipe: bool,
+    /// The list sits in a card with rounded corners: radius and the colour
+    /// outside them (RGB565). Slint clips rectangles only, so the page
+    /// draws caps over the corners ([`corner_alpha`]); the layer blends the
+    /// same caps into what it copied.
+    pub corners: Option<(usize, u16)>,
+}
+
+/// How much of each pixel of a `radius` × `radius` top-left corner lies
+/// outside the rounding, 0..=16 (4 × 4 samples), row by row (landscape y,
+/// then x). The caps over a card's corners: the page's images and the
+/// layer's blend use the same values.
+pub fn corner_alpha(radius: usize) -> Vec<u8> {
+    let r = radius as f32;
+    let mut out = Vec::with_capacity(radius * radius);
+    for y in 0..radius {
+        for x in 0..radius {
+            let mut n = 0u8;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let px = x as f32 + (sx as f32 + 0.5) / 4.0;
+                    let py = y as f32 + (sy as f32 + 0.5) / 4.0;
+                    if (r - px).powi(2) + (r - py).powi(2) > r * r {
+                        n += 1;
+                    }
+                }
+            }
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// `bg` over `px` (RGB565) with weight `a` of 16.
+fn blend565(px: u16, bg: u16, a: u8) -> u16 {
+    let a = u32::from(a);
+    let mix = |shift: u32, mask: u32| {
+        let p = (u32::from(px) >> shift) & mask;
+        let b = (u32::from(bg) >> shift) & mask;
+        ((b * a + p * (16 - a) + 8) / 16) << shift
+    };
+    (mix(11, 0x1f) | mix(5, 0x3f) | mix(0, 0x1f)) as u16
+}
+
+/// The PSRAM a layer draws into: the ring, the blank picture and the swipe
+/// pictures, with their sizes in pixels. Two layers whose pages are never
+/// on screen together can share it ([`ListLayer::new_in`],
+/// [`SharedLayers`]).
+#[derive(Clone, Copy, Debug)]
+pub struct Buffers {
+    ring: (*mut u16, usize),
+    blank: (*mut u16, usize),
+    swipe: (*mut u16, usize),
 }
 
 /// One 2D-DMA copy into the frame buffer: source picture, source position,
@@ -220,12 +280,30 @@ pub struct ListLayer<S: ListSource> {
     settle: u8,
     /// Offset composed in the previous frame.
     shown: Option<i32>,
+    /// The corner caps as runs in the frame buffer: start pixel and the
+    /// weights of its pixels (see [`Layout::corners`]).
+    caps: Vec<(usize, Vec<u8>)>,
+    /// This frame's copies came from the layer (the caps go on them).
+    drew: bool,
+    /// Rows rendered and the time it took (logged every 32 rows).
+    rendered: (u32, Duration),
 }
 
 impl<S: ListSource> ListLayer<S> {
     /// `row_window` must be the offscreen window of the row component
     /// (`width × row_h`).
     pub fn new(layout: Layout, row_window: Rc<MinimalSoftwareWindow>, source: S) -> Self {
+        Self::new_in(layout, row_window, source, None)
+    }
+
+    /// [`Self::new`], drawing into `shared` (another layer's buffers, see
+    /// [`Self::buffers`]) instead of its own.
+    pub fn new_in(
+        layout: Layout,
+        row_window: Rc<MinimalSoftwareWindow>,
+        source: S,
+        shared: Option<Buffers>,
+    ) -> Self {
         let Layout {
             x,
             y,
@@ -252,29 +330,46 @@ impl<S: ListSource> ListLayer<S> {
             p.cast::<u16>()
         };
         let w = slots * row_h;
+        // As tall as the view (the blank): covers it even when the list is
+        // shorter.
+        let (ring_px, blank_px, swipe_px) = (w * width, height * width, 3 * row_h * width);
+        let (layer, blank, swipe_pics) = match shared {
+            Some(b) => {
+                assert!(
+                    ring_px <= b.ring.1 && blank_px <= b.blank.1 && (!layout.swipe || swipe_px <= b.swipe.1),
+                    "shared list layer buffers too small"
+                );
+                log::info!("list layer: ring of {slots} rows ({w}×{width} px), shared");
+                (b.ring.0, b.blank.0, b.swipe.0)
+            }
+            None => {
+                log::info!(
+                    "list layer: ring of {slots} rows ({w}×{width} px, {} KiB PSRAM)",
+                    ring_px * 2 / 1024
+                );
+                (alloc(ring_px), alloc(blank_px), alloc(swipe_px))
+            }
+        };
         let layer = Picture {
-            buf: alloc(w * width),
+            buf: layer,
             w,
             h: width,
         };
         let swipe_pics = Picture {
-            buf: alloc(3 * row_h * width),
+            buf: swipe_pics,
             w: 3 * row_h,
             h: width,
         };
-        // As tall as the view: covers it even when the list is shorter.
         let blank = Picture {
-            buf: alloc(height * width),
+            buf: blank,
             w: height,
             h: width,
         };
-        // Filled once by the CPU, then written back for the DMA.
-        unsafe { core::slice::from_raw_parts_mut(blank.buf, blank.w * blank.h) }.fill(background);
-        cache::writeback(blank.buf, blank.w * blank.h);
-        log::info!(
-            "list layer: ring of {slots} rows ({w}×{width} px, {} KiB PSRAM)",
-            w * width * 2 / 1024
-        );
+        if shared.is_none() {
+            // Filled once by the CPU, then written back for the DMA.
+            unsafe { core::slice::from_raw_parts_mut(blank.buf, blank.w * blank.h) }.fill(background);
+            cache::writeback(blank.buf, blank.w * blank.h);
+        }
         Self {
             layout,
             behind,
@@ -300,7 +395,33 @@ impl<S: ListSource> ListLayer<S> {
             underlay_epoch: 0,
             settle: 0,
             shown: None,
+            caps: layout.corners.map_or(Vec::new(), |(r, _)| caps(&layout, r)),
+            drew: false,
+            rendered: (0, Duration::from_ticks(0)),
         }
+    }
+
+    /// This layer's buffers, for a layer that shares them
+    /// ([`Self::new_in`]).
+    pub fn buffers(&self) -> Buffers {
+        Buffers {
+            ring: (self.layer.buf, self.layer.w * self.layer.h),
+            blank: (self.blank.buf, self.blank.w * self.blank.h),
+            swipe: (self.swipe_pics.buf, self.swipe_pics.w * self.swipe_pics.h),
+        }
+    }
+
+    /// The list's page is on screen.
+    pub fn is_shown(&self) -> bool {
+        self.source.shown()
+    }
+
+    /// Another layer drew into the shared buffers: every row, the blank and
+    /// the swipe pictures are rendered again.
+    pub fn invalidate(&mut self) {
+        self.slot_row.fill(None);
+        self.blank_epoch = crate::ui::dim::epoch().wrapping_sub(1);
+        self.underlay_ready = false;
     }
 
     /// Renders the rows around the current position now (otherwise idle
@@ -370,8 +491,18 @@ impl<S: ListSource> ListLayer<S> {
             row_ref: self.layout.width - 1,
             lines: self.layout.row_h,
         };
+        let t = Instant::now();
         platform::render_offscreen(&self.row_window, rot, target);
         self.slot_row[i % slots] = Some((i, stamp));
+        self.rendered.0 += 1;
+        self.rendered.1 += t.elapsed();
+        if self.rendered.0 == 32 {
+            log::info!(
+                "list layer: 32 rows rendered, {} µs each",
+                self.rendered.1.as_micros() / 32
+            );
+            self.rendered = (0, Duration::from_ticks(0));
+        }
     }
 
     /// Next row near the view that is missing or stale, nearest first,
@@ -482,6 +613,13 @@ impl<S: ListSource> ListLayer<S> {
             self.composing = true;
             self.shown = None;
             self.source.layer_started();
+            if self.source.render_visible_on_scroll()
+                && let Some((first, last)) = self.visible_rows(self.offset())
+            {
+                for i in first..=last {
+                    self.slot_row[i % self.layout.slots] = None;
+                }
+            }
         }
         self.scroller.press(y, at);
         self.settle = SETTLE_FRAMES;
@@ -511,6 +649,27 @@ impl<S: ListSource> ListLayer<S> {
         self.pending.clear();
         self.pending.extend(copies);
         self.pending_fb = fb.buf;
+        self.drew = true;
+    }
+
+    /// Blends the corner caps into the frame buffer `fb` (after the copies
+    /// arrived).
+    fn apply_caps(&self, fb: *mut u16) {
+        let Some((_, outside)) = self.layout.corners else { return };
+        let bg = crate::ui::dim::scale(outside);
+        for (start, weights) in &self.caps {
+            let n = weights.len();
+            // SAFETY: the runs lie inside the frame buffer (`caps`).
+            let px = unsafe { fb.add(*start) };
+            cache::invalidate(px, n);
+            let run = unsafe { core::slice::from_raw_parts_mut(px, n) };
+            for (p, &a) in run.iter_mut().zip(weights) {
+                if a > 0 {
+                    *p = blend565(*p, bg, a);
+                }
+            }
+            cache::writeback(px, n);
+        }
     }
 
     /// Hands the list back to the page where it is.
@@ -787,6 +946,10 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
                     self.start_scroll(y, at);
                     self.touch = Touch::Scroll;
                     Route::TakeOver
+                } else if dx > self.layout.slop && !self.layout.swipe {
+                    // No swiping here: the page has sideways drags.
+                    self.touch = Touch::Slint;
+                    Route::Slint
                 } else if dx > self.layout.slop {
                     match self.row_at(y0 - self.layout.y as f32) {
                         Some(row) => {
@@ -842,6 +1005,7 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
     fn start(&mut self, fb: Target, rot: &mut PpaRotator) {
         self.frame_start = Instant::now();
         self.pending.clear();
+        self.drew = false;
         if self.swipe.is_some() {
             if self.step_swipe(rot) {
                 self.draw_swipe(fb, rot);
@@ -888,6 +1052,9 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
         // is not disturbed.
         while self.frame_start.elapsed() < FRAME_BUDGET && self.fill_one(rot) {}
         self.dma.wait();
+        if self.drew && self.swipe.is_none() {
+            self.apply_caps(self.pending_fb);
+        }
     }
 
     fn overlaps(&mut self, x: Range<usize>, y: Range<usize>) -> bool {
@@ -904,5 +1071,100 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
         // Nothing moves: render rows ahead, so the next scroll starts at
         // once.
         self.fill_one(rot)
+    }
+}
+
+/// The runs of the four corner caps of `layout`'s area in the frame buffer:
+/// each landscape column of a corner is one panel row (landscape x maps to
+/// panel row `HEIGHT - 1 - x`, landscape y to the panel column).
+fn caps(layout: &Layout, radius: usize) -> Vec<(usize, Vec<u8>)> {
+    let alpha = corner_alpha(radius);
+    let (x0, y0, w, h) = (layout.x, layout.y, layout.width, layout.height);
+    let mut runs = Vec::new();
+    // Landscape column `cx` (0..radius from the corner's side), the
+    // corner's y offset and whether it is at the top, bottom / left, right.
+    for (left, top) in [(true, true), (false, true), (true, false), (false, false)] {
+        for i in 0..radius {
+            let lx = if left { x0 + i } else { x0 + w - 1 - i };
+            let ly = if top { y0 } else { y0 + h - radius };
+            // Weights along y in the corner, top to bottom on screen.
+            let weights: Vec<u8> = (0..radius)
+                .map(|k| {
+                    let j = if top { k } else { radius - 1 - k };
+                    alpha[j * radius + i]
+                })
+                .collect();
+            runs.push(((HEIGHT - 1 - lx) * WIDTH + ly, weights));
+        }
+    }
+    runs
+}
+
+/// Two list layers whose pages are never on screen together, sharing one
+/// set of buffers ([`ListLayer::new_in`]): the one shown owns them (with
+/// neither shown, `a`, so its rows are ready when its page opens). A new
+/// owner renders its rows again ([`ListLayer::invalidate`]).
+pub struct SharedLayers<A: ListSource, B: ListSource> {
+    a: ListLayer<A>,
+    b: ListLayer<B>,
+    /// `b` owns the buffers.
+    b_owns: bool,
+}
+
+impl<A: ListSource, B: ListSource> SharedLayers<A, B> {
+    pub fn new(a: ListLayer<A>, b: ListLayer<B>) -> Self {
+        Self { a, b, b_owns: false }
+    }
+
+    /// Hands the buffers to the layer shown (else `a`).
+    fn claim(&mut self) {
+        let b = self.b.is_shown();
+        if b != self.b_owns {
+            self.b_owns = b;
+            if b {
+                self.b.invalidate();
+            } else {
+                self.a.invalidate();
+            }
+        }
+    }
+
+    fn owner(&mut self) -> &mut dyn FrameHook {
+        if self.b_owns { &mut self.b } else { &mut self.a }
+    }
+}
+
+impl<A: ListSource, B: ListSource> FrameHook for SharedLayers<A, B> {
+    fn active(&mut self) -> bool {
+        // Both: one whose page went away mid-scroll hands back.
+        let (a, b) = (self.a.active(), self.b.active());
+        self.claim();
+        if self.b_owns { b } else { a }
+    }
+
+    fn pointer(&mut self, ev: &TouchEvent) -> Route {
+        self.claim();
+        self.owner().pointer(ev)
+    }
+
+    fn start(&mut self, fb: Target, rot: &mut PpaRotator) {
+        self.owner().start(fb, rot);
+    }
+
+    fn repeat(&mut self, fb: Target, rot: &mut PpaRotator) {
+        self.owner().repeat(fb, rot);
+    }
+
+    fn finish(&mut self, rot: &mut PpaRotator) {
+        self.owner().finish(rot);
+    }
+
+    fn overlaps(&mut self, x: Range<usize>, y: Range<usize>) -> bool {
+        self.owner().overlaps(x, y)
+    }
+
+    fn idle_work(&mut self, rot: &mut PpaRotator) -> bool {
+        self.claim();
+        self.owner().idle_work(rot)
     }
 }

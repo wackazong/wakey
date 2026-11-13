@@ -366,15 +366,14 @@ export component Roll inherits Rectangle {
 }
 
 // One line of text that scrolls when it is wider than the box: endlessly
-// at 40 px/s to the left (1 px every 25 ms, a timer: the render loop draws
-// frames for timers, not for `animation-tick()`), its end joined to its
-// start by a dot. Text that fits stays still and asks for no frames;
-// `running: false` (a list not shown) stops it too.
+// at 40 px/s to the left, its end joined to its start by a dot. Where it
+// is follows `time-ms` (a clock the page advances while the text is seen;
+// offscreen copies get the time they show). Text that fits stays still.
 export component Marquee inherits Rectangle {
     in property <string> text;
     in property <length> font-size: 30px;
     in property <color> text-color: Theme.text-dim;
-    in property <bool> running: true;
+    in property <int> time-ms;
     clip: true;
     property <length> text-width: first.preferred-width;
     property <bool> scrolls: root.text-width > root.width;
@@ -382,15 +381,9 @@ export component Marquee inherits Rectangle {
     // not count in its width).
     property <length> gap: 10px;
     property <length> period: root.text-width + root.gap + dot.preferred-width + root.gap;
-    property <int> step;
     property <length> offset: root.scrolls
-        ? Math.mod(root.step, Math.max(1, Math.round(root.period / 1px))) * 1px
+        ? Math.mod(root.time-ms * 0.04, Math.max(1, Math.round(root.period / 1px))) * 1px
         : 0px;
-    Timer {
-        interval: 25ms;
-        running: root.scrolls && root.running;
-        triggered => { root.step += 1; }
-    }
     first := Text {
         x: -root.offset;
         width: self.preferred-width;

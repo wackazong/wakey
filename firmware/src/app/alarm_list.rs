@@ -108,6 +108,8 @@ pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
         slop: l.get_slop(),
         background: crate::ui::rgb565(window.global::<Theme>().get_background()),
         page_draws_still: true,
+        swipe: true,
+        corners: None,
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
     let view = AppWindow::new().expect("alarm row view");

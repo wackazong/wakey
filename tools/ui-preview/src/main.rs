@@ -325,6 +325,45 @@ fn track(title: &str, artist: &str, selected: bool, a: [u8; 3], b: [u8; 3]) -> S
     row
 }
 
+/// The list card's corner caps, as the firmware makes them
+/// (`sound_page::set_corner_caps`, `list_layer::corner_alpha`).
+fn set_corner_caps(ui: &AppWindow) {
+    let r = 28usize;
+    let rf = r as f32;
+    let bg = ui.global::<Theme>().get_background();
+    let alpha: Vec<u8> = (0..r * r)
+        .map(|k| {
+            let (x, y) = (k % r, k / r);
+            let mut n = 0u8;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let px = x as f32 + (sx as f32 + 0.5) / 4.0;
+                    let py = y as f32 + (sy as f32 + 0.5) / 4.0;
+                    if (rf - px).powi(2) + (rf - py).powi(2) > rf * rf {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        })
+        .collect();
+    let cap = |mx: bool, my: bool| {
+        let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(r as u32, r as u32);
+        for (k, p) in buf.make_mut_slice().iter_mut().enumerate() {
+            let (x, y) = (k % r, k / r);
+            let (i, j) = (if mx { r - 1 - x } else { x }, if my { r - 1 - y } else { y });
+            let a = alpha[j * r + i];
+            *p = slint::Rgba8Pixel { r: bg.red(), g: bg.green(), b: bg.blue(), a: ((u32::from(a) * 255 + 8) / 16) as u8 };
+        }
+        slint::Image::from_rgba8(buf)
+    };
+    let sp = ui.global::<SoundPicker>();
+    sp.set_corner_tl(cap(false, false));
+    sp.set_corner_tr(cap(true, false));
+    sp.set_corner_bl(cap(false, true));
+    sp.set_corner_br(cap(true, true));
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let by_line = args.iter().any(|a| a == "--by-line");
@@ -620,6 +659,12 @@ fn main() {
         track("Golden Hour", "JVKE", false, [250, 170, 60], [90, 40, 120]),
     ])));
     p.shot("3-sound-tidal-picked-failed");
+    // The selected row at the top of the card: its corners stay round.
+    sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
+        track("Here Comes the Sun", "The Beatles", true, [240, 200, 80], [200, 90, 40]),
+        track("Golden Hour", "JVKE", false, [250, 170, 60], [90, 40, 120]),
+    ])));
+    p.shot("3-sound-tidal-corners");
 
     // Name.
     let ne = ui.global::<NameEditor>();

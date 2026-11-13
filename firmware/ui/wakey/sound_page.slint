@@ -42,6 +42,22 @@ export global SoundPicker {
     // A note below the rows (no sound files; no TIDAL yet), or empty.
     in property <string> empty;
     in property <string> tidal-empty;
+    // Scroll positions of both lists (content y at the top), set by the
+    // list layer when a scroll ends; it shows the list while it moves.
+    in property <length> files-scroll;
+    in property <length> tidal-scroll;
+    in property <bool> layer-active;
+    // The scrolling texts' clock (ms, wraps hourly): advanced every 25 ms
+    // while the page draws the list (`SoundPage`), paused while the list
+    // layer moves it.
+    in-out property <int> marquee-ms;
+    // Caps over the list card's rounded corners (Slint clips rectangles
+    // only): page background outside the rounding (from Rust, the list
+    // layer blends the same).
+    in property <image> corner-tl;
+    in property <image> corner-tr;
+    in property <image> corner-bl;
+    in property <image> corner-br;
     in-out property <int> volume;
     // Index into 0, 10, 30, 60 s.
     in-out property <int> fade;
@@ -129,19 +145,136 @@ component Segment inherits Rectangle {
     }
 }
 
-// One tab's list: rows, and a note below them.
+// Where the sound list is (landscape px) and its rows' pitch: the page and
+// the list layer (`app/sound_page.rs`) both use it.
+export global SoundListLayout {
+    out property <length> x: 40px;
+    out property <length> y: 244px;
+    // What the settings card leaves (see `SoundPage`).
+    out property <length> width: 1280px - 40px - 40px - 24px - (4 * 104px + 3 * 12px + 2 * 32px);
+    out property <length> height: 444px;
+    out property <length> pitch: 112px;
+    // How far a finger moves before the touch counts as a scroll.
+    out property <length> slop: 12px;
+}
+
+// One row of the sound list, as the page draws it and as the list layer
+// renders it offscreen (the same pixels).
+export component SoundRowItem inherits Rectangle {
+    in property <SoundRow> item;
+    // 1: TIDAL („Zufällig“'s icon in the covers' column).
+    in property <int> tab;
+    // The clock of the scrolling second line (`Marquee.time-ms`).
+    in property <int> marquee-ms;
+    // Offscreen (the list layer's copy) the row brings the card's colour;
+    // on the page the card shows through (its rounded corners stay).
+    in property <bool> opaque;
+    callback clicked();
+    width: SoundListLayout.width;
+    height: SoundListLayout.pitch;
+    background: ta.pressed && !root.item.failed ? Theme.surface
+        : root.item.selected ? Theme.selected
+        : root.opaque ? Theme.card : transparent;
+
+    if root.item.progress >= 0: Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.item.progress, 0, 1);
+        height: parent.height;
+        background: Theme.accent-dark;
+    }
+    // On the TIDAL tab „Zufällig“'s icon sits in the covers'
+    // column, so the texts line up.
+    if root.item.kind == 1: Icon {
+        kind: 5;
+        x: root.tab == 1 ? 46px : 32px;
+        y: 34px;
+        width: 44px;
+        height: 44px;
+        color: Theme.accent;
+    }
+    if root.item.kind == 3: Rectangle {
+        x: 24px;
+        y: 12px;
+        width: 88px;
+        height: 88px;
+        background: Theme.surface;
+        opacity: root.item.failed ? 0.4 : 1;
+        Image {
+            width: 88px;
+            height: 88px;
+            source: root.item.cover;
+        }
+    }
+    Text {
+        x: root.item.kind == 3 || (root.item.kind == 1 && root.tab == 1) ? 132px : root.item.kind == 1 ? 96px : 32px;
+        y: root.item.sub != "" ? 10px : 0;
+        height: root.item.sub != "" ? 54px : 112px;
+        width: parent.width - self.x - 96px;
+        text: root.item.title;
+        font-size: 40px;
+        color: root.item.failed ? Theme.text-faint : Theme.text;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
+    if root.item.sub != "": Marquee {
+        x: root.item.kind == 3 || (root.item.kind == 1 && root.tab == 1) ? 132px : root.item.kind == 1 ? 96px : 32px;
+        y: 62px;
+        height: 40px;
+        width: parent.width - self.x - 96px;
+        text: root.item.sub;
+        font-size: 30px;
+        text-color: root.item.failed ? Theme.text-faint : Theme.text-dim;
+        time-ms: root.marquee-ms;
+    }
+    if root.item.selected && !root.item.failed: Icon {
+        kind: 2;
+        x: parent.width - 90px;
+        y: 24px;
+        width: 64px;
+        height: 64px;
+        weight: 4.5px;
+        color: Theme.accent;
+    }
+    // Failed: a white cross on a red circle.
+    if root.item.failed: Rectangle {
+        x: parent.width - 80px;
+        y: 34px;
+        width: 44px;
+        height: 44px;
+        border-radius: 22px;
+        background: Theme.error;
+        Icon {
+            kind: 13;
+            x: 7px;
+            y: 7px;
+            width: 30px;
+            height: 30px;
+            color: Theme.text;
+        }
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// One tab's list: rows at the scroll position `scroll` (the list layer
+// moves it), and a note below them.
 component SoundList inherits Rectangle {
     in property <[SoundRow]> rows;
     in property <string> empty;
     // 1: TIDAL („Zufällig“'s icon in the covers' column).
     in property <int> tab;
+    in property <length> scroll;
+    // The list layer shows the list (it moves): no scrolling text.
+    in property <bool> layer-active;
     callback select(int);
     // Below the rows, in the space left.
     if root.empty != "": Text {
         x: 40px;
-        y: root.rows.length * 112px;
+        y: root.rows.length * SoundListLayout.pitch - root.scroll;
         width: parent.width - 80px;
-        height: parent.height - self.y;
+        height: Math.max(0px, parent.height - self.y);
         text: root.empty;
         font-size: 30px;
         color: Theme.text-faint;
@@ -149,94 +282,13 @@ component SoundList inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    Flickable {
-        content-height: root.rows.length * 112px;
-        for row[i] in root.rows: Rectangle {
-            y: i * 112px;
-            height: 112px;
-            background: ta.pressed && !row.failed ? Theme.surface : row.selected ? Theme.selected : transparent;
-            if row.progress >= 0: Rectangle {
-                x: 0;
-                width: parent.width * clamp(row.progress, 0, 1);
-                height: parent.height;
-                background: Theme.accent-dark;
-            }
-            // On the TIDAL tab „Zufällig“'s icon sits in the covers'
-            // column, so the texts line up.
-            if row.kind == 1: Icon {
-                kind: 5;
-                x: root.tab == 1 ? 46px : 32px;
-                y: 34px;
-                width: 44px;
-                height: 44px;
-                color: Theme.accent;
-            }
-            if row.kind == 3: Rectangle {
-                x: 24px;
-                y: 12px;
-                width: 88px;
-                height: 88px;
-                background: Theme.surface;
-                opacity: row.failed ? 0.4 : 1;
-                Image {
-                    width: 88px;
-                    height: 88px;
-                    source: row.cover;
-                }
-            }
-            Text {
-                x: row.kind == 3 || (row.kind == 1 && root.tab == 1) ? 132px : row.kind == 1 ? 96px : 32px;
-                y: row.sub != "" ? 10px : 0;
-                height: row.sub != "" ? 54px : 112px;
-                width: parent.width - self.x - 96px;
-                text: row.title;
-                font-size: 40px;
-                color: row.failed ? Theme.text-faint : Theme.text;
-                overflow: elide;
-                vertical-alignment: center;
-            }
-            // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
-            if row.sub != "": Marquee {
-                x: row.kind == 3 || (row.kind == 1 && root.tab == 1) ? 132px : row.kind == 1 ? 96px : 32px;
-                y: 62px;
-                height: 40px;
-                width: parent.width - self.x - 96px;
-                text: row.sub;
-                font-size: 30px;
-                text-color: row.failed ? Theme.text-faint : Theme.text-dim;
-                // Not while this list is hidden (the other tab).
-                running: root.visible;
-            }
-            if row.selected && !row.failed: Icon {
-                kind: 2;
-                x: parent.width - 90px;
-                y: 24px;
-                width: 64px;
-                height: 64px;
-                weight: 4.5px;
-                color: Theme.accent;
-            }
-            // Failed: a white cross on a red circle.
-            if row.failed: Rectangle {
-                x: parent.width - 80px;
-                y: 34px;
-                width: 44px;
-                height: 44px;
-                border-radius: 22px;
-                background: Theme.error;
-                Icon {
-                    kind: 13;
-                    x: 7px;
-                    y: 7px;
-                    width: 30px;
-                    height: 30px;
-                    color: Theme.text;
-                }
-            }
-            ta := TouchArea {
-                clicked => { root.select(i); }
-            }
-        }
+    for row[i] in root.rows: SoundRowItem {
+        x: 0;
+        y: i * SoundListLayout.pitch - root.scroll;
+        item: row;
+        tab: root.tab;
+        marquee-ms: SoundPicker.marquee-ms;
+        clicked => { root.select(i); }
     }
 }
 
@@ -246,6 +298,24 @@ export component SoundPage inherits Rectangle {
     background: Theme.background;
 
     TouchArea { }
+    // The scrolling texts' clock: a timer, as the render loop draws
+    // frames for timers (not for `animation-tick()` alone). It runs only
+    // while the page shows the texts and adds the time since the last tick;
+    // after a pause (the list layer moved the list) one step, so the texts
+    // go on from where they stood.
+    property <float> marquee-last;
+    property <float> marquee-dt;
+    Timer {
+        interval: 25ms;
+        running: !SoundPicker.layer-active;
+        triggered => {
+            root.marquee-dt = animation-tick() / 1ms - root.marquee-last;
+            root.marquee-last = animation-tick() / 1ms;
+            SoundPicker.marquee-ms = Math.mod(
+                SoundPicker.marquee-ms + Math.round(root.marquee-dt > 0 && root.marquee-dt < 100 ? root.marquee-dt : 25),
+                3600000);
+        }
+    }
 
     BackButton {
         x: 24px;
@@ -281,10 +351,10 @@ export component SoundPage inherits Rectangle {
 
     // Below the tabs (132 + 88 + 24), down to the settings card's bottom.
     Rectangle {
-        x: 40px;
-        y: 244px;
-        width: root.list-width;
-        height: 444px;
+        x: SoundListLayout.x;
+        y: SoundListLayout.y;
+        width: SoundListLayout.width;
+        height: SoundListLayout.height;
         border-radius: 28px;
         clip: true;
         background: Theme.card;
@@ -294,6 +364,8 @@ export component SoundPage inherits Rectangle {
             rows: SoundPicker.rows;
             empty: SoundPicker.empty;
             tab: 0;
+            scroll: SoundPicker.files-scroll;
+            layer-active: SoundPicker.layer-active;
             select(i) => { SoundPicker.select(i); }
         }
         SoundList {
@@ -301,6 +373,8 @@ export component SoundPage inherits Rectangle {
             rows: SoundPicker.tidal-rows;
             empty: SoundPicker.tidal-empty;
             tab: 1;
+            scroll: SoundPicker.tidal-scroll;
+            layer-active: SoundPicker.layer-active;
             select(i) => { SoundPicker.select(i); }
         }
         // The login: QR code of the link, and the code.
@@ -336,6 +410,11 @@ export component SoundPage inherits Rectangle {
                 color: Theme.text-dim;
             }
         }
+        // Over everything in the card: its rounded corners.
+        Image { x: 0; y: 0; width: 28px; height: 28px; source: SoundPicker.corner-tl; }
+        Image { x: parent.width - 28px; y: 0; width: 28px; height: 28px; source: SoundPicker.corner-tr; }
+        Image { x: 0; y: parent.height - 28px; width: 28px; height: 28px; source: SoundPicker.corner-bl; }
+        Image { x: parent.width - 28px; y: parent.height - 28px; width: 28px; height: 28px; source: SoundPicker.corner-br; }
     }
 
     Rectangle {

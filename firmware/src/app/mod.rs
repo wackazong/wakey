@@ -50,6 +50,8 @@ const PAGE_NAME: i32 = 4;
 const PAGE_LIST_ROW: i32 = 5;
 /// `config.json` cannot be read: the clock stops there.
 const PAGE_CONFIG_ERROR: i32 = 6;
+/// One sound list row, offscreen, for the list layer (`sound_page::layer`).
+const PAGE_SOUND_ROW: i32 = 7;
 
 /// How deep a page is: going deeper slides the new page in from the
 /// right, going back from the left.
@@ -253,7 +255,11 @@ async fn app(spawner: embassy_executor::Spawner) {
     alarm_list::start(&ui, &ctx);
     // Rows ready before the list is first opened (rendered in idle time).
     alarm_list::refresh(&ui, &ctx.alarm.borrow());
-    let mut list = alarm_list::layer(&ui);
+    // The alarm list and the sound page's list each scroll on a list layer;
+    // their pages are never shown together, so they share its buffers.
+    let alarm_layer = alarm_list::layer(&ui);
+    let sound_layer = sound_page::layer(&ui, alarm_layer.buffers());
+    let mut list = crate::ui::list_layer::SharedLayers::new(alarm_layer, sound_layer);
     alarm_page::start(&ui, &ctx);
     sound_page::start(&ui, &ctx);
     name_page::start(&ui, &ctx);
