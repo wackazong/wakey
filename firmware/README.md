@@ -34,10 +34,8 @@ Before committing: `cargo fmt`, `cargo clippy --release --bins` (here and in `wa
 
 FAT, in the root:
 
-- `config.json`: `wifi` (`ssid`, `password`), `sync_interval_h` (hours between clock syncs, Wi-Fi off in between, 1–168, default 24), `alarms` (a list the settings pages edit; each with `id`, optional `name`, `enabled`, `hour`, `minute`, `weekdays` Monday to Sunday as 0/1, `sound`, `volume` 1–100, `fade_in_s`) and `ringing` (`snooze_min`, `max_snoozes`, `ring_timeout_min`, shared by all alarms). `sound` is `"beep"` (built-in tone), `"random"` (a different file from `sounds/` each day), or a path such as `"sounds/morgen.wav"`. A file with the old single `alarm` section is migrated on boot. `display` (`night_pixels_percent`: pixel brightness in a dark room, 10–100, default 35) and `power` (`sleep_after_s`: light sleep after this long without a touch, 10–3600, default 60; `sleep_when`: `"dark"` in a dark room and always on battery, `"always"` or `"never"`). The firmware adds missing settings at their defaults (3 snoozes of 9 min, 10 min ring timeout), so after the first boot the file lists everything.
-- `sounds/`: WAV and AIFF files for the alarms, listed by file name (`_` shown as a space).
+- `config.json` and `sounds/`: see [Configure the clock](../README.md#configure-the-clock).
 - For development the build environment can provide Wi-Fi credentials (`WAKEY_WIFI_SSID=… WAKEY_WIFI_PASSWORD=…`) and a test alarm (`WAKEY_ALARM=07:38`: one alarm "Test", every day, replacing the file's alarms while that build runs) to `cargo run --release --bin wakey`. Flash a build without `WAKEY_ALARM` afterwards, or it rings every day at that time (and saving on the alarm pages writes the test alarm into the file).
-- Sound files (WAV or AIFF/AIFC, PCM 8–32 bit, mono or stereo, any sample rate) in the root or `sounds/`.
 
 ## Layout
 

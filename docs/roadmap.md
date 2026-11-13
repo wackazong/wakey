@@ -10,33 +10,14 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 
 ## Next steps
 
+- make the slider line orange not yellow
+- Button text white not yellow
 - move the tidal track list to the list layer
 - Show just the TIDAL song name on the alarm settings screen
-- Ablum covers
-- Show failed downloads, retry after restart
+- Album covers
 - open: each C6 session leaks ~2.3 KiB internal RAM (`docs/pitfalls.md`).
-- play downloading songs as soon as possible, never play the built-in tone as a replacement in preview
+- preview: play a downloading song as soon as enough has arrived (now silent until it is on the card)
 - make the first sync after opening the tab faster (Wi-Fi up when the alarm page opens, one connection for the requests, no playlist search once known)
-
-## `config.json`
-
-All sections are read (see [architecture.md](architecture.md#alarm) and `firmware/README.md`); `sound` is `"beep"`, `"random"`, a file path or (V2) `"tidal:…"`. Missing fields get defaults and are written back.
-
-```json
-{
-  "wifi": { "ssid": "MeinNetz", "password": "geheim" },
-  "alarms": [
-    { "id": 1, "name": "Arbeit", "enabled": true, "hour": 6, "minute": 30,
-      "weekdays": [1, 1, 1, 1, 1, 0, 0], "sound": "random",
-      "volume": 60, "fade_in_s": 10 }
-  ],
-  "ringing": { "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10 },
-  "display": { "night_pixels_percent": 35 },
-  "power": { "sleep_after_s": 60, "sleep_when": "dark" }
-}
-```
-
-`weekdays` counts Monday to Sunday. SD card layout: `config.json`, `sounds/*.wav|aiff|flac`, later `covers/`.
 
 ## Development tools (idea)
 
