@@ -55,7 +55,7 @@ The clock reads `config.json` from the root of the microSD card (FAT) at boot. A
 | `wifi` | `ssid` and `password` of a 2.4 GHz network. Without it the clock scans once and shows the networks in range. |
 | `sync_interval_h` | Hours between clock syncs over Wi-Fi (NTP), 1–168, default 24. Wi-Fi is off in between. |
 | `alarms` | The alarms, as the settings pages edit them: `id`, optional `name`, `enabled`, `hour`, `minute`, `weekdays` (Monday to Sunday, 0/1), `sound`, `volume` (1–100 %), `fade_in_s`. A file with the old single `alarm` section is migrated. |
-| `sound` | `"beep"` (the built-in tone), `"random"` (a different file from `sounds/` each day), a path such as `"sounds/morgen.flac"`, or a TIDAL track: `"tidal:<track id>"`, `"tidal:random"`. |
+| `sound` | `"random"` (a different file from `sounds/` each day; the default), a path such as `"sounds/morgen.flac"`, or a TIDAL track: `"tidal:<track id>"`, `"tidal:random"`. The built-in tone (`"beep"`) is only the fallback when the sound cannot be played; the sound page does not offer it. |
 | `ringing` | For all alarms: `snooze_min` (9), `max_snoozes` (3), `ring_timeout_min` (10; then the alarm stops for the day). |
 | `display` | `night_pixels_percent`: pixel brightness in a dark room, 10–100, default 35. |
 | `power` | `sleep_after_s`: the display sleeps after this long without a touch on the clock page, 10–3600, default 60. `sleep_when`: `"dark"` (default: in a dark room, and always on battery), `"always"` or `"never"`. |

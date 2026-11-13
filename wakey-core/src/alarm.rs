@@ -117,7 +117,7 @@ impl Default for AlarmConfig {
             hour: 7,
             minute: 0,
             weekdays: [1, 1, 1, 1, 1, 0, 0],
-            sound: Sound::Beep,
+            sound: Sound::RandomFile,
             volume: 60,
             fade_in_s: 10,
         }

@@ -407,7 +407,7 @@ mod tests {
         // An old section without "enabled" or with "sound": null.
         let c = Config::parse(r#"{ "alarm": { "hour": 6, "sound": null } }"#).unwrap();
         assert!(!c.alarms[0].enabled);
-        assert_eq!(c.alarms[0].sound, Sound::Beep);
+        assert_eq!(c.alarms[0].sound, Sound::RandomFile);
     }
 
     #[test]
@@ -419,7 +419,7 @@ mod tests {
         let v: Value = serde_json::from_str(&filled).unwrap();
         assert_eq!(v["alarms"][0]["hour"], 7);
         assert_eq!(v["alarms"][0]["minute"], 0);
-        assert_eq!(v["alarms"][0]["sound"], "beep");
+        assert_eq!(v["alarms"][0]["sound"], "random");
         assert_eq!(v["ringing"]["max_snoozes"], 3);
         assert_eq!(v["future"], 1);
         assert_eq!(v["wifi"]["ssid"], "Netz");

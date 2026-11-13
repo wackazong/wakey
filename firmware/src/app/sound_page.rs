@@ -222,11 +222,10 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
     };
     // Each row and the sound it stands for.
     let choices: Vec<(SoundRow, Sound)> = if tab == TAB_FILES {
+        // The built-in tone is only the fallback (a sound that cannot be
+        // played), never a choice of its own.
         let files = ctx.sound_files.borrow();
-        let mut choices = vec![(
-            row("Eingebauter Ton", "Piepen", &Sound::Beep, 0),
-            Sound::Beep,
-        )];
+        let mut choices = Vec::new();
         if files.is_empty() {
             // "Zufällig" would only play the built-in tone.
             picker.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());

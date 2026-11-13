@@ -592,8 +592,8 @@ fn main() {
 
     // Sound page.
     let sp = ui.global::<SoundPicker>();
+    set_corner_caps(&ui);
     sp.set_rows(ModelRc::new(VecModel::from(vec![
-        sound("Eingebauter Ton", "Piepen", false, 0),
         sound("Zufällig", "wechselt jeden Tag", false, 1),
         sound("Morgenlicht", "", true, 2),
         sound("Vogelstimmen", "", false, 2),
@@ -616,13 +616,8 @@ fn main() {
     p.release(380.0, 176.0);
     // Back to „Datei“ (nothing here switches the tab), animation done.
     std::thread::sleep(Duration::from_millis(300));
-    // No sound files: the built-in tone and a note, no "Zufällig".
-    sp.set_rows(ModelRc::new(VecModel::from(vec![sound(
-        "Eingebauter Ton",
-        "Piepen",
-        true,
-        0,
-    )])));
+    // No sound files: only the note (the built-in tone is no choice).
+    sp.set_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
     sp.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());
     p.shot("3-sound-no-files");
     sp.set_tab(1);
