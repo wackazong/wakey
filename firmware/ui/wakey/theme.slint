@@ -32,14 +32,16 @@ export component Icon inherits Path {
     // 0 back chevron, 1 forward chevron, 2 check, 3 play, 4 stop,
     // 5 shuffle, 6 backspace, 7 shift, 8 plus, 9 fade-in (a level rising
     // from silence, then holding), 10 alarm clock, 11 no speaker, 12 no
-    // network.
+    // network, 13 cross (white on a red circle: a failed download).
     in property <int> kind;
     in property <color> color: Theme.text;
+    // Line width (on screen, whatever the icon's size).
+    in property <length> weight: 3.2px;
     viewbox-width: 24;
     viewbox-height: 24;
     stroke: root.kind == 3 || root.kind == 4 ? transparent : root.color;
     fill: root.kind == 3 || root.kind == 4 ? root.color : transparent;
-    stroke-width: 2.6px;
+    stroke-width: root.weight;
     commands: root.kind == 0 ? "M 15 4 L 7 12 L 15 20"
         : root.kind == 1 ? "M 9 4 L 17 12 L 9 20"
         : root.kind == 2 ? "M 4 12.5 L 9.5 18 L 20 6"
@@ -52,6 +54,7 @@ export component Icon inherits Path {
         : root.kind == 10 ? "M 12 5 A 8 8 0 1 1 11.99 5 Z M 12 9 L 12 13 L 15 15 M 2.5 6.5 L 6.5 2.5 M 21.5 6.5 L 17.5 2.5 M 6.5 19.5 L 5 21.5 M 17.5 19.5 L 19 21.5"
         : root.kind == 11 ? "M 3 9 L 7 9 L 12 5 L 12 19 L 7 15 L 3 15 Z M 16 9.5 L 21 14.5 M 21 9.5 L 16 14.5"
         : root.kind == 12 ? "M 2 9.5 A 15 15 0 0 1 22 9.5 M 5.5 13 A 10 10 0 0 1 18.5 13 M 9 16.5 A 5 5 0 0 1 15 16.5 M 12 20 L 12 20.2 M 3 3 L 21 21"
+        : root.kind == 13 ? "M 5 5 L 19 19 M 19 5 L 5 19"
         : "M 12 4 L 12 20 M 4 12 L 20 12";
 }
 
