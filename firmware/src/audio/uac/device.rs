@@ -133,14 +133,20 @@ pub(super) fn client_thread(
         esp!(sys::usb_host_client_register(&cfg, &mut client.handle)).expect("usb client");
     }
 
-    // Power: VBUS, let the device boot, then the root port. If nothing
-    // enumerates (the first port resets fail on this board), cycle the port.
+    // Power: VBUS, let the device boot, then the root port, once: it stays
+    // powered. If nothing enumerates (the first port resets fail on this
+    // board), cycle the 5 V (the device restarts, the hub driver recovers
+    // the port). Never the root port's power: switched off while a device
+    // was still enumerating, the next disconnection made ESP-IDF's hub
+    // driver abort (`hub.c`, `dev_tree_node_dev_gone` on a device it never
+    // added; docs/pitfalls.md).
     if let Err(e) = vbus(true) {
         log::error!("uac: switching USB-A 5 V on failed: {e}");
     }
     client.pump_for(Duration::from_secs(1));
     let mut attempt = 0;
     let mut port_on_at: Option<Instant> = None;
+    let mut root_port_on = false;
     // Off (`Cmd::Power(false)`): no port power attempts.
     let mut powered = true;
 
@@ -152,15 +158,25 @@ pub(super) fn client_thread(
             match port_on_at {
                 None if attempt < PORT_ATTEMPTS => {
                     attempt += 1;
-                    if let Err(e) = set_port_power(true) {
-                        log::error!("uac: root port power failed: {e}");
+                    if !root_port_on {
+                        match set_port_power(true) {
+                            Ok(()) => root_port_on = true,
+                            Err(e) => log::error!("uac: root port power failed: {e}"),
+                        }
                     }
                     port_on_at = Some(Instant::now());
                 }
                 Some(t) if t.elapsed() > Duration::from_secs(3) && attempt < PORT_ATTEMPTS => {
-                    log::warn!("uac: no device after attempt {attempt}, cycling the root port");
-                    let _ = set_port_power(false);
+                    log::warn!("uac: no device after attempt {attempt}, cycling USB-A's 5 V");
+                    if let Err(e) = vbus(false) {
+                        log::error!("uac: switching USB-A 5 V off failed: {e}");
+                    }
                     client.pump_for(Duration::from_millis(500));
+                    if let Err(e) = vbus(true) {
+                        log::error!("uac: switching USB-A 5 V on failed: {e}");
+                    }
+                    // Let the device boot (it may enumerate meanwhile).
+                    client.pump_for(Duration::from_secs(1));
                     port_on_at = None;
                 }
                 _ => {}
@@ -207,12 +223,11 @@ pub(super) fn client_thread(
                             client.teardown();
                             client.shared.connected.store(false, Ordering::Release);
                         }
-                        let _ = set_port_power(false);
-                        // The 5 V off: the Pebble clicks (its amplifier
-                        // losing power; muting or ramping the volume first
-                        // did not help), but with only the root port off it
-                        // still drew ~80 mA. ESP-IDF 5.5.5 has no USB
-                        // suspend.
+                        // Only the 5 V off (the root port stays powered: see
+                        // above). The Pebble clicks (its amplifier losing
+                        // power; muting or ramping the volume first did not
+                        // help); with only the root port off it still drew
+                        // ~80 mA. ESP-IDF 5.5.5 has no USB suspend.
                         if let Err(e) = vbus(false) {
                             log::error!("uac: switching USB-A 5 V off failed: {e}");
                         }

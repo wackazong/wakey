@@ -82,6 +82,12 @@ download-bench = []
 # Wi-Fi session if it runs another version than the image, then restarts.
 # The image is c6/esp_hosted_slave-2.13.1-esp32c6.bin (c6/README.md).
 c6-update = []
+# USB-A switched on and off at random 50–3000 ms intervals (the USB host's
+# handling of power changes during enumeration; `app::power`).
+usb-cycle-test = []
+# At start: Wi-Fi sessions in growing stages (driver; connect; one HTTPS
+# request), five each, logging the free heap after each (`net::leak_test`).
+wifi-leak-test = []
 
 [profile.release]
 opt-level = 3

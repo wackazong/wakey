@@ -35,6 +35,33 @@ pub fn start(
     usb: UsbAudio,
 ) -> Timer {
     let weak = window.as_weak();
+    // Feature `usb-cycle-test`: USB-A on and off at random 50–3000 ms, so
+    // power changes hit device enumeration and port resets (the hub
+    // driver's abort, docs/pitfalls.md); the normal USB-A rule is off.
+    #[cfg(feature = "usb-cycle-test")]
+    {
+        let usb = usb.clone();
+        std::thread::Builder::new()
+            .name("usb-cycle".into())
+            .stack_size(4096)
+            .spawn(move || {
+                let mut x: u32 = 0x1234_5678;
+                let mut on = true;
+                let mut n = 0u32;
+                loop {
+                    n += 1;
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    let ms = 50 + x % 2950;
+                    std::thread::sleep(Duration::from_millis(u64::from(ms)));
+                    on = !on;
+                    log::info!("usb-cycle-test: {n}: USB-A {} after {ms} ms", if on { "on" } else { "off" });
+                    usb.set_power(on);
+                }
+            })
+            .expect("usb-cycle thread");
+    }
     // The battery reading is an I2C transfer: every 5 s is plenty.
     let mut ticks = 0u32;
     let mut on_battery = false;
@@ -73,7 +100,7 @@ pub fn start(
             .secs_to_ring()
             .is_some_and(|s| s <= USB_LEAD_S);
         let usb_wanted = soon || window.get_page() != PAGE_CLOCK;
-        if usb_wanted != usb_on {
+        if usb_wanted != usb_on && !cfg!(feature = "usb-cycle-test") {
             usb.set_power(usb_wanted);
             usb_on = usb_wanted;
         }

@@ -51,9 +51,9 @@ pub(super) fn install() -> Result<(), EspError> {
     Ok(())
 }
 
-/// Powers the root port (connection detection, reset, enumeration) or
-/// powers it down. After a failed port reset ESP-IDF leaves the port
-/// disabled; cycling the power retries.
+/// Powers the root port (connection detection, reset, enumeration). Only
+/// ever switched on: powered down while a device was still enumerating,
+/// ESP-IDF's hub driver aborted at the next disconnection (`device.rs`).
 pub(super) fn set_port_power(on: bool) -> Result<(), EspError> {
     unsafe { esp!(sys::usb_host_lib_set_root_port_power(on)) }
 }

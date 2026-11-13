@@ -188,6 +188,8 @@ pub fn start(
                     return;
                 }
             };
+            #[cfg(feature = "wifi-leak-test")]
+            leak_test(&mut modem, &power, &sysloop, &nvs, cfg.as_ref());
             let ssid = cfg.as_ref().map_or("WLAN".into(), |c| c.ssid.clone());
             let mut retry = RETRY_FIRST;
             let mut job: Option<Job> = None;
@@ -253,15 +255,190 @@ pub fn start(
     wifi
 }
 
+/// Feature `wifi-leak-test`: Wi-Fi sessions in growing stages, five each,
+/// logging the free heap after every one (`wifi: leak test …` lines):
+/// B driver up and down, C also connected, D also one HTTPS request. The
+/// first round of a stage may keep memory for good; rounds 2–5 show what
+/// a session loses.
+#[cfg(feature = "wifi-leak-test")]
+fn leak_test(
+    modem: &mut Modem<'static>,
+    power: &Switch,
+    sysloop: &EspSystemEventLoop,
+    nvs: &EspDefaultNvsPartition,
+    cfg: Option<&WifiConfig>,
+) {
+    use esp_idf_svc::sys::{MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM, heap_caps_get_free_size};
+    let free = || unsafe {
+        (
+            heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        )
+    };
+    let Some(cfg) = cfg else {
+        log::warn!("wifi: leak test needs Wi-Fi credentials");
+        return;
+    };
+    // E: one transport session (esp_hosted init … deinit), the driver up
+    // and down five times in it: does the driver or the transport lose it?
+    {
+        let start = free();
+        let _ = power(true);
+        std::thread::sleep(Duration::from_millis(500));
+        let err = unsafe { esp_idf_svc::sys::esp_hosted_init() };
+        log::info!("wifi: leak test E: esp_hosted_init {err}");
+        for round in 1..=5 {
+            let before = free();
+            let modem = unsafe { modem.reborrow() };
+            let r = EspWifi::new(modem, sysloop.clone(), Some(nvs.clone()))
+                .and_then(|w| BlockingWifi::wrap(w, sysloop.clone()));
+            let ok = r.is_ok();
+            drop(r);
+            std::thread::sleep(Duration::from_millis(500));
+            let after = free();
+            log::info!(
+                "wifi: leak test E{round}: driver {}; internal {:+} B, PSRAM {:+} B",
+                if ok { "up/down" } else { "failed" },
+                after.0 as i64 - before.0 as i64,
+                after.1 as i64 - before.1 as i64
+            );
+        }
+        end_session(power);
+        std::thread::sleep(Duration::from_secs(1));
+        let end = free();
+        log::info!(
+            "wifi: leak test E total with the transport: internal {:+} B, PSRAM {:+} B",
+            end.0 as i64 - start.0 as i64,
+            end.1 as i64 - start.1 as i64
+        );
+    }
+    for stage in ['B', 'C', 'D'] {
+        for round in 1..=5 {
+            let before = free();
+            let result = (|| -> anyhow::Result<()> {
+                power(true)?;
+                std::thread::sleep(Duration::from_millis(500));
+                let err = unsafe { esp_idf_svc::sys::esp_hosted_init() };
+                anyhow::ensure!(err == 0, "esp_hosted_init: {err}");
+                let modem = unsafe { modem.reborrow() };
+                let mut wifi = BlockingWifi::wrap(
+                    EspWifi::new(modem, sysloop.clone(), Some(nvs.clone()))?,
+                    sysloop.clone(),
+                )?;
+                if stage != 'B' {
+                    wifi.set_configuration(&Configuration::Client(ClientConfiguration {
+                        ssid: cfg.ssid.as_str().try_into().map_err(|_| anyhow::anyhow!("ssid"))?,
+                        password: cfg.password.as_str().try_into().map_err(|_| anyhow::anyhow!("pw"))?,
+                        auth_method: if cfg.password.is_empty() { AuthMethod::None } else { AuthMethod::WPA2Personal },
+                        ..Default::default()
+                    }))?;
+                    wifi.start()?;
+                    wifi.connect()?;
+                    wifi.wait_netif_up()?;
+                    if stage == 'D' {
+                        let r = crate::http::download("https://example.com/", &mut |_| Ok(()), &mut |_, _| {});
+                        log::info!("wifi: leak test: request {:?}", r.map_err(|e| e.to_string()));
+                        crate::http::close_all();
+                    }
+                    let _ = wifi.disconnect();
+                    let _ = wifi.stop();
+                }
+                drop(wifi);
+                Ok(())
+            })();
+            end_session(power);
+            std::thread::sleep(Duration::from_secs(1));
+            let after = free();
+            log::info!(
+                "wifi: leak test {stage}{round}: {:?}; internal {} → {} ({:+} B), PSRAM {:+} B",
+                result.err(),
+                before.0,
+                after.0,
+                after.0 as i64 - before.0 as i64,
+                after.1 as i64 - before.1 as i64
+            );
+        }
+    }
+}
+
 /// After a session (the driver dropped): tears down esp_hosted's transport
 /// to the C6, then powers the C6 off. Powered off with the transport still
 /// up, the next session's link finds the C6 "unresponsive" and aborts.
+///
+/// esp_hosted's tasks have their stacks in PSRAM
+/// (`CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM`): created static, with stack
+/// and control block from the heap, and deleted without freeing them
+/// (`hosted_thread_cancel`): 2136 B internal RAM and ~28.7 KB PSRAM lost per
+/// session. Their buffers are taken before the deinit and freed once the
+/// tasks are gone.
 fn end_session(power: &Switch) {
+    let leftovers = hosted_task_buffers();
     let err = unsafe { esp_idf_svc::sys::esp_hosted_deinit() };
     if err != 0 {
         log::warn!("wifi: esp_hosted_deinit: {err}");
     }
+    free_task_buffers(leftovers);
     let _ = power(false);
+}
+
+/// esp_hosted's tasks (SDIO transport and RPC; `hosted_thread_create`).
+const HOSTED_TASKS: [&core::ffi::CStr; 7] = [
+    c"sdio_rx_buf",
+    c"sdio_read",
+    c"sdio_process_rx",
+    c"sdio_write",
+    c"rpc_rx",
+    c"rpc_tx",
+    c"rpc_supp_cb",
+];
+
+/// Stack and control block of each running esp_hosted task that was
+/// created static (by name).
+fn hosted_task_buffers() -> Vec<(&'static core::ffi::CStr, *mut u8, *mut u8)> {
+    use esp_idf_svc::sys;
+    HOSTED_TASKS
+        .iter()
+        .filter_map(|name| {
+            // SAFETY: plain FreeRTOS queries on a running task.
+            unsafe {
+                let task = sys::xTaskGetHandle(name.as_ptr());
+                if task.is_null() {
+                    return None;
+                }
+                let mut stack: *mut sys::StackType_t = core::ptr::null_mut();
+                let mut tcb: *mut sys::StaticTask_t = core::ptr::null_mut();
+                (sys::xTaskGetStaticBuffers(task, &mut stack, &mut tcb) == 1)
+                    .then(|| (*name, stack.cast(), tcb.cast()))
+            }
+        })
+        .collect()
+}
+
+/// Frees the buffers of tasks that are gone (deleted by
+/// `esp_hosted_deinit`; a task deleting itself is removed by the idle
+/// task, hence the wait). One still there keeps them.
+fn free_task_buffers(buffers: Vec<(&'static core::ffi::CStr, *mut u8, *mut u8)>) {
+    use esp_idf_svc::sys;
+    if buffers.is_empty() {
+        return;
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let mut freed = 0;
+    for (name, stack, tcb) in buffers {
+        // SAFETY: the task no longer exists (looked up by name, including
+        // tasks waiting for deletion), so nothing uses its buffers; both
+        // came from `heap_caps_*` (`hosted_thread_create`).
+        unsafe {
+            if !sys::xTaskGetHandle(name.as_ptr()).is_null() {
+                log::warn!("wifi: task {name:?} still there, its buffers kept");
+                continue;
+            }
+            sys::heap_caps_free(stack.cast());
+            sys::heap_caps_free(tcb.cast());
+        }
+        freed += 1;
+    }
+    log::info!("wifi: freed the buffers of {freed} esp_hosted tasks");
 }
 
 /// One session: C6 on, driver up, connect and sync the clock (or scan once
