@@ -161,13 +161,15 @@ pub fn start(
         active: active.clone(),
         jobs,
     };
-    // On core 0 at the UI's priority (1): a download takes about half a
-    // core, which on core 1 starved the audio decoder (dropouts); core 0
-    // is mostly idle, and equal priority shares it with the UI.
+    // On core 1 at priority 1, below the audio decoder (5) and the card
+    // writer (4), so neither starves: a download takes about half a core.
+    // On core 0 it shared the UI's priority there and made animations
+    // stutter (a list row's repaint went from ~20 to ~40 ms). Core 1 is
+    // mostly idle; a download there is as fast (`netbench`).
     let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
     let pinned = ThreadSpawnConfiguration {
         name: Some(c"wifi"),
-        pin_to_core: Some(Core::Core0),
+        pin_to_core: Some(Core::Core1),
         priority: 1,
         ..ThreadSpawnConfiguration::default()
     };

@@ -63,7 +63,7 @@ Each layer uses only the ones below it. Rules that keep it that way:
 | `decoder` | 8 KiB | 1 / 5 | player: file or tone → 48 kHz → ring (while playing); pinned away from the UI |
 | `speaker` | 4 KiB | any / 5 | built-in speaker mixer (I2S): player sound, clicks, keep-alive; amplifier on/off |
 | `ui-watch` | 4 KiB | any / 5 | logs where the render loop is when it has not gone round for 2 s |
-| `wifi` | 16 KiB | 0 / 1 | Wi-Fi sessions, SNTP, TIDAL jobs (sync, downloads); on core 0 at the UI's priority so a download (TLS, about half a core) leaves the decoder on core 1 alone |
+| `wifi` | 16 KiB | 1 / 1 | Wi-Fi sessions, SNTP, TIDAL jobs (sync, downloads); on core 1 below the decoder and the card writer, so a download (TLS, about half a core) leaves core 0 to the UI (on core 0 at the UI's priority it made animations stutter) |
 | `card-writer` | 6 KiB | 1 / 4 | during a TIDAL download: writes 32 KiB blocks to the card while the next ones arrive |
 | `ambient` | 6 KiB | any / 5 | camera light meter every 10 s; owns and fades the backlight |
 | esp_hosted tasks | PSRAM | – | SDIO transport to the C6 |

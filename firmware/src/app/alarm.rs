@@ -201,6 +201,10 @@ impl AlarmClock {
     pub fn stop_preview(&mut self) {
         self.cancel_stream();
         if self.previewing {
+            log::info!(
+                "alarm: preview stopped (underruns so far: {})",
+                crate::audio::player::UNDERRUNS.load(std::sync::atomic::Ordering::Relaxed)
+            );
             self.previewing = false;
             if self.sounding.is_none() {
                 self.player.stop();
