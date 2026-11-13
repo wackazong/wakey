@@ -78,6 +78,10 @@ profile-download = []
 # After boot, downloads the TIDAL playlist's first track twice to a
 # scratch file and once without writing it; logs speeds and the link.
 download-bench = []
+# Updates the C6's esp_hosted firmware over SDIO (slave OTA) in the first
+# Wi-Fi session if it runs another version than the image, then restarts.
+# The image is c6/esp_hosted_slave-2.13.1-esp32c6.bin (c6/README.md).
+c6-update = []
 
 [profile.release]
 opt-level = 3

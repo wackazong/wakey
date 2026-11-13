@@ -291,7 +291,10 @@ fn session(
         sysloop.clone(),
     )?;
     log::info!("wifi: driver up after {} ms", t.elapsed().as_millis());
-    log_c6_version();
+    if let Some(_version) = log_c6_version() {
+        #[cfg(feature = "c6-update")]
+        crate::c6_update::run(_version);
+    }
     // The driver goes down when `wifi` is dropped (`esp_wifi_deinit`).
     match cfg {
         Some(cfg) => sync_clock(wifi, cfg, set, job, more),
@@ -304,11 +307,12 @@ fn session(
 
 /// Logs the C6 firmware's version once per boot (`GetCoprocessorFwVersion`
 /// RPC, slave ≥ 1.0.0; the startup event of the factory firmware carries
-/// none and shows as 0.0.0).
-fn log_c6_version() {
+/// none and shows as 0.0.0). Returns it (major, minor, patch) the first
+/// time.
+fn log_c6_version() -> Option<[u32; 3]> {
     static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        return;
+        return None;
     }
     let mut v = esp_idf_svc::sys::esp_hosted_coprocessor_fwver_t::default();
     // SAFETY: `v` is a plain out-parameter, valid for the call.
@@ -323,8 +327,10 @@ fn log_c6_version() {
             v.prerelease,
             v.build
         );
+        Some([v.major1, v.minor1, v.patch1])
     } else {
         log::warn!("wifi: C6 firmware version not available: {err}");
+        None
     }
 }
 

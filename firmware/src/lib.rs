@@ -21,6 +21,8 @@ pub mod ambient;
 pub mod app;
 pub mod audio;
 pub mod board;
+#[cfg(feature = "c6-update")]
+pub mod c6_update;
 pub mod clock;
 pub mod config;
 pub mod display;
