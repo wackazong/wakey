@@ -305,7 +305,24 @@ fn sound(title: &str, sub: &str, selected: bool, kind: i32) -> SoundRow {
         selected,
         kind,
         progress: -1.0,
+        failed: false,
+        cover: slint::Image::default(),
     }
+}
+
+/// A TIDAL track row with a sample cover (a two-colour gradient).
+fn track(title: &str, artist: &str, selected: bool, a: [u8; 3], b: [u8; 3]) -> SoundRow {
+    let px = 88u32;
+    let mut buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(px, px);
+    for (i, p) in buf.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = (i as u32 % px, i as u32 / px);
+        let f = (x + y) as f32 / (2 * px) as f32;
+        let mix = |c0: u8, c1: u8| (f32::from(c0) * (1.0 - f) + f32::from(c1) * f) as u8;
+        *p = slint::Rgb8Pixel { r: mix(a[0], b[0]), g: mix(a[1], b[1]), b: mix(a[2], b[2]) };
+    }
+    let mut row = sound(title, artist, selected, 3);
+    row.cover = slint::Image::from_rgb8(buf);
+    row
 }
 
 fn main() {
@@ -566,20 +583,33 @@ fn main() {
     p.shot("3-sound-tidal");
     // TIDAL tracks: one selected, one downloading, one selected and
     // downloading (the selection must show next to the progress bar).
-    let mut loading = sound("Point and Kill", "Little Simz · wird geladen", false, 2);
+    let mut loading = track("Point and Kill", "Little Simz · wird geladen", false, [40, 40, 40], [200, 60, 50]);
     loading.progress = 0.45;
-    let mut both = sound("Sunrise", "Norah Jones · wird geladen", true, 2);
+    let mut both = sound("Sunrise", "Norah Jones · wird geladen", true, 3);
     both.progress = 0.7;
+    let mut failed_row = track("Morning Song", "The Lumineers", false, [120, 90, 60], [30, 50, 40]);
+    failed_row.failed = true;
     sp.set_empty("".into());
     sp.set_rows(ModelRc::new(VecModel::from(vec![
         sound("Zufällig", "wechselt jeden Tag", false, 1),
-        sound("Here Comes the Sun", "The Beatles", true, 2),
+        track("Here Comes the Sun", "The Beatles", true, [240, 200, 80], [200, 90, 40]),
+        failed_row,
         loading,
         both,
-        sound("Golden Hour", "JVKE", false, 2),
-        sound("Morning Song", "The Lumineers · wird geladen", false, 2),
+        track("Golden Hour", "JVKE", false, [250, 170, 60], [90, 40, 120]),
     ])));
     p.shot("3-sound-tidal-list");
+    // The alarm's track failed to download: still selected (the alarm rings
+    // the built-in tone), shown failed.
+    let mut picked_failed = track("Morning Song", "The Lumineers", true, [120, 90, 60], [30, 50, 40]);
+    picked_failed.failed = true;
+    sp.set_rows(ModelRc::new(VecModel::from(vec![
+        sound("Zufällig", "wechselt jeden Tag", false, 1),
+        track("Here Comes the Sun", "The Beatles", false, [240, 200, 80], [200, 90, 40]),
+        picked_failed,
+        track("Golden Hour", "JVKE", false, [250, 170, 60], [90, 40, 120]),
+    ])));
+    p.shot("3-sound-tidal-picked-failed");
 
     // Name.
     let ne = ui.global::<NameEditor>();

@@ -134,6 +134,9 @@ pub struct Ctx {
     tidal_timer: slint::Timer,
     /// The TIDAL state last shown.
     tidal_shown: RefCell<Option<crate::tidal::State>>,
+    /// Album covers read from the card, by cover id (RGB888, 88 px: ~23
+    /// KiB each).
+    covers: RefCell<std::collections::HashMap<String, slint::Image>>,
 }
 
 impl Ctx {
@@ -234,6 +237,7 @@ async fn app(spawner: embassy_executor::Spawner) {
         tidal: crate::tidal::Tidal::new(config.tidal.clone(), wifi.clone()),
         tidal_timer: slint::Timer::default(),
         tidal_shown: RefCell::new(None),
+        covers: RefCell::new(std::collections::HashMap::new()),
     });
     // The saved alarms' TIDAL tracks on the card (downloads if missing).
     sound_page::select_tidal(&ctx);

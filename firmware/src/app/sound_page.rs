@@ -161,6 +161,21 @@ fn qr_image(text: &str) -> Option<Image> {
     Some(Image::from_rgb8(buf))
 }
 
+/// A cover from the card, once (kept in `ctx.covers`); empty while it is
+/// not there yet.
+fn cover_image(ctx: &Ctx, id: &str) -> Image {
+    if let Some(image) = ctx.covers.borrow().get(id) {
+        return image.clone();
+    }
+    let Some(rgb) = crate::tidal::cover_rgb(id) else {
+        return Image::default();
+    };
+    let px = wakey_core::tidal::sync::COVER_PX;
+    let image = Image::from_rgb8(SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(&rgb, px, px));
+    ctx.covers.borrow_mut().insert(id.to_string(), image.clone());
+    image
+}
+
 fn fill_rows(window: &AppWindow, ctx: &Ctx) {
     let picker = window.global::<SoundPicker>();
     let selected = ctx.draft.borrow().sound.clone();
@@ -174,6 +189,8 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         sub: sub.into(),
         selected: *sound == selected,
         kind,
+        failed: false,
+        cover: Image::default(),
     };
     // Each row and the sound it stands for.
     let choices: Vec<(SoundRow, Sound)> = if picker.get_tab() == TAB_FILES {
@@ -209,12 +226,19 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         }
         choices.extend(tracks.iter().map(|t| {
             let sound = Sound::TidalTrack(t.id.to_string());
-            let sub = match ctx.tidal.track_status(t.id) {
-                TrackStatus::Ready | TrackStatus::Remote => t.artist.clone(),
+            let status = ctx.tidal.track_status(t.id);
+            let sub = match status {
+                // Failed: the row's icon says it.
+                TrackStatus::Ready | TrackStatus::Remote | TrackStatus::Failed => t.artist.clone(),
                 TrackStatus::Downloading => format!("{} · lädt …", t.artist),
                 TrackStatus::Missing => format!("{} · wird geladen", t.artist),
             };
-            (row(&t.title, &sub, &sound, 2), sound)
+            let mut r = row(&t.title, &sub, &sound, 3);
+            r.failed = status == TrackStatus::Failed;
+            if let Some(c) = &t.cover {
+                r.cover = cover_image(ctx, c);
+            }
+            (r, sound)
         }));
         choices
     };
@@ -242,6 +266,18 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         let Some(sound) = ctx.sound_choices.borrow().get(i as usize).cloned() else {
             return;
         };
+        // A failed download cannot be the alarm's sound.
+        if let Sound::TidalTrack(id) = &sound
+            && id.parse().is_ok_and(|id| ctx.tidal.track_status(id) == TrackStatus::Failed)
+        {
+            return;
+        }
+        // A TIDAL track not on the card: downloaded next, before others.
+        if let Sound::TidalTrack(id) = &sound
+            && let Ok(id) = id.parse()
+        {
+            ctx.tidal.prefer(id);
+        }
         ctx.draft.borrow_mut().sound = sound;
         select_tidal(ctx);
         fill_rows(window, ctx);
@@ -249,7 +285,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         let previewing = ctx.alarm.borrow().is_previewing();
         if previewing {
             let cfg = ctx.draft.borrow().clone();
-            ctx.alarm.borrow_mut().preview(&cfg);
+            ctx.alarm.borrow_mut().preview(&cfg, &ctx.tidal);
         }
     }));
     picker.on_refresh(ctx.with(|window, ctx| {
@@ -289,7 +325,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
             ctx.alarm.borrow_mut().stop_preview();
         } else {
             let cfg = ctx.draft.borrow().clone();
-            ctx.alarm.borrow_mut().preview(&cfg);
+            ctx.alarm.borrow_mut().preview(&cfg, &ctx.tidal);
         }
         let now = ctx.alarm.borrow().is_previewing();
         window.global::<SoundPicker>().set_previewing(now);

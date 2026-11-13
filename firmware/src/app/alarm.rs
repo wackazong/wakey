@@ -10,6 +10,8 @@
 use crate::audio::output::Output;
 use crate::audio::player::{Player, Sound as PlayerSound};
 use crate::{clock, config, sounds};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use wakey_core::alarm::{self, AlarmConfig, Alarms, Input, Phase, RingConfig, State};
 use wakey_core::datetime::DateTime;
@@ -30,6 +32,9 @@ pub struct AlarmClock {
     sounding: Option<u32>,
     /// A sound page preview is playing.
     previewing: bool,
+    /// Set to end a preview's stream (a track still downloading): its
+    /// reader stops waiting for data.
+    stream_cancel: Option<Arc<AtomicBool>>,
 }
 
 /// What the screens show of the alarms.
@@ -74,6 +79,7 @@ impl AlarmClock {
             output,
             sounding: None,
             previewing: false,
+            stream_cancel: None,
         }
     }
 
@@ -139,18 +145,50 @@ impl AlarmClock {
 
     /// Plays `cfg`'s sound at its volume, without fade-in, until
     /// [`stop_preview`](Self::stop_preview). Not while an alarm rings.
-    pub fn preview(&mut self, cfg: &AlarmConfig) {
+    ///
+    /// Never the built-in tone in place of the sound (only if the tone is
+    /// the sound): a TIDAL track still downloading plays from what has
+    /// arrived ([`crate::tidal::Tidal::stream`]); a sound that cannot be
+    /// played (not on the card, download failed) is silent. A real alarm
+    /// still rings the tone then.
+    pub fn preview(&mut self, cfg: &AlarmConfig, tidal: &crate::tidal::Tidal) {
         if self.sounding.is_some() {
             return;
         }
-        let sound = match sounds::resolve(&cfg.sound, cfg.id, clock::now().date()) {
-            Some(path) => PlayerSound::File(path),
-            None => PlayerSound::Tone,
+        self.cancel_stream();
+        let sound = match (sounds::resolve(&cfg.sound, cfg.id, clock::now().date()), &cfg.sound) {
+            (Some(path), _) => Some(PlayerSound::File(path)),
+            (None, alarm::Sound::Beep) => Some(PlayerSound::Tone),
+            (None, alarm::Sound::TidalTrack(id)) => id.parse().ok().and_then(|id| {
+                let cancel = Arc::new(AtomicBool::new(false));
+                let stream = tidal.stream(id, cancel.clone())?;
+                self.stream_cancel = Some(cancel);
+                Some(PlayerSound::Stream(format!("TIDAL {id} (downloading)"), Box::new(stream)))
+            }),
+            (None, _) => None,
         };
-        log::info!("alarm: preview {:?} at {} %", cfg.sound, cfg.volume);
-        self.output.set_streaming(true);
-        self.player.ring(sound, tone::volume_gain(cfg.volume), 0);
         self.previewing = true;
+        match sound {
+            Some(sound) => {
+                log::info!("alarm: preview {:?} at {} %", cfg.sound, cfg.volume);
+                self.output.set_streaming(true);
+                self.player.preview(sound, tone::volume_gain(cfg.volume));
+            }
+            None => {
+                // Silent; a sound previewed before stops.
+                log::info!("alarm: preview {:?}: cannot be played, silent", cfg.sound);
+                self.player.stop();
+                self.output.set_streaming(false);
+            }
+        }
+    }
+
+    /// Ends a preview's stream: its reader stops waiting, so the player's
+    /// decoder ends at once (the player waits for it before the next sound).
+    fn cancel_stream(&mut self) {
+        if let Some(cancel) = self.stream_cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
     }
 
     /// The volume slider moved during a preview.
@@ -161,6 +199,7 @@ impl AlarmClock {
     }
 
     pub fn stop_preview(&mut self) {
+        self.cancel_stream();
         if self.previewing {
             self.previewing = false;
             if self.sounding.is_none() {
@@ -234,6 +273,7 @@ impl AlarmClock {
         self.sounding = ringing;
         // An alarm takes over from a preview.
         self.previewing = false;
+        self.cancel_stream();
         match ringing.and_then(|id| self.get(id)).cloned() {
             Some(cfg) => {
                 let sound = match sounds::resolve(&cfg.sound, cfg.id, clock::now().date()) {
