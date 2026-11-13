@@ -18,6 +18,40 @@ const MAX_SAMPLES: usize = 16_384;
 
 /// Sample buffer, allocated in [`start`] (64 KiB, ends up in PSRAM).
 static SAMPLES: AtomicPtr<u32> = AtomicPtr::new(ptr::null_mut());
+/// The interrupted code's return address per sample (its caller, if it is
+/// a leaf at that moment): [`report`] lists them for samples in
+/// `vPortExitCriticalMultiCore`, which stand for time spent with
+/// interrupts off, to show who turned them off.
+static CALLERS: AtomicPtr<u32> = AtomicPtr::new(ptr::null_mut());
+
+unsafe extern "C" {
+    /// FreeRTOS (tasks.c): the running task per core; the first field of a
+    /// TCB is its saved stack pointer, written on interrupt entry
+    /// (`rtos_int_enter`), where the frame holds `mepc`, then `ra`.
+    static pxCurrentTCBs: [*const *const u32; 2];
+    fn vPortExitCriticalMultiCore(mux: *mut c_void);
+}
+
+/// `ra` of the interrupted task, 0 if its saved stack pointer looks wrong.
+#[inline(always)]
+fn interrupted_ra() -> u32 {
+    // SAFETY: read-only peeks at FreeRTOS state; the pointers are checked
+    // for plausible RAM addresses before they are followed.
+    unsafe {
+        let core: usize;
+        core::arch::asm!("csrr {0}, mhartid", out(reg) core);
+        let tcb = ptr::read_volatile(ptr::addr_of!(pxCurrentTCBs).cast::<*const *const u32>().add(core & 1));
+        if tcb.is_null() {
+            return 0;
+        }
+        let sp = ptr::read_volatile(tcb);
+        let a = sp as usize;
+        if !(0x4800_0000..0x5000_0000).contains(&a) || a % 4 != 0 {
+            return 0;
+        }
+        ptr::read_volatile(sp.add(1))
+    }
+}
 static COUNT: AtomicUsize = AtomicUsize::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -36,17 +70,28 @@ unsafe extern "C" fn on_alarm(
     if RUNNING.load(Ordering::Relaxed) {
         let i = COUNT.load(Ordering::Relaxed);
         if i < MAX_SAMPLES {
-            unsafe { *SAMPLES.load(Ordering::Relaxed).add(i) = mepc() };
+            unsafe {
+                *SAMPLES.load(Ordering::Relaxed).add(i) = mepc();
+                *CALLERS.load(Ordering::Relaxed).add(i) = interrupted_ra();
+            }
             COUNT.store(i + 1, Ordering::Relaxed);
         }
     }
     false
 }
 
-/// Starts sampling the calling core.
+/// Starts sampling the calling core at [`RATE_HZ`].
 pub fn start() {
+    start_at(RATE_HZ);
+}
+
+/// Starts sampling the calling core at `rate_hz` ([`MAX_SAMPLES`] samples
+/// at most: lower rates for longer runs).
+pub fn start_at(rate_hz: u32) {
     let buf: &'static mut [u32] = Vec::leak(vec![0u32; MAX_SAMPLES]);
     SAMPLES.store(buf.as_mut_ptr(), Ordering::Release);
+    let callers: &'static mut [u32] = Vec::leak(vec![0u32; MAX_SAMPLES]);
+    CALLERS.store(callers.as_mut_ptr(), Ordering::Release);
     unsafe {
         let mut timer: sys::gptimer_handle_t = ptr::null_mut();
         let mut cfg: sys::gptimer_config_t = core::mem::zeroed();
@@ -64,7 +109,7 @@ pub fn start() {
         ))
         .expect("profiler cb");
         let mut alarm: sys::gptimer_alarm_config_t = core::mem::zeroed();
-        alarm.alarm_count = u64::from(1_000_000 / RATE_HZ);
+        alarm.alarm_count = u64::from(1_000_000 / rate_hz);
         alarm.reload_count = 0;
         alarm.flags.set_auto_reload_on_alarm(1);
         esp!(sys::gptimer_set_alarm_action(timer, &alarm)).expect("profiler alarm");
@@ -73,7 +118,7 @@ pub fn start() {
     }
     COUNT.store(0, Ordering::Relaxed);
     RUNNING.store(true, Ordering::Release);
-    log::info!("profiler: sampling core 0 at {RATE_HZ} Hz");
+    log::info!("profiler: sampling at {rate_hz} Hz");
 }
 
 /// Stops sampling and logs the top addresses (`profile: <hits> 0x<pc>`).
@@ -82,6 +127,27 @@ pub fn report(top: usize) {
     let n = COUNT.load(Ordering::Acquire);
     // SAFETY: sampling has stopped, the ISR no longer writes.
     let samples = unsafe { core::slice::from_raw_parts_mut(SAMPLES.load(Ordering::Acquire), n) };
+    let callers = unsafe { core::slice::from_raw_parts_mut(CALLERS.load(Ordering::Acquire), n) };
+    let exit = vPortExitCriticalMultiCore as *const () as usize as u32;
+    let mut critical: Vec<u32> = samples
+        .iter()
+        .zip(callers.iter())
+        .filter(|&(&pc, _)| pc.wrapping_sub(exit) < 512)
+        .map(|(_, &ra)| ra)
+        .collect();
+    critical.sort_unstable();
+    let mut by_caller: Vec<(u32, u32)> = Vec::new();
+    for &ra in &critical {
+        match by_caller.last_mut() {
+            Some((p, c)) if *p == ra => *c += 1,
+            _ => by_caller.push((ra, 1)),
+        }
+    }
+    by_caller.sort_unstable_by_key(|&(_, hits)| core::cmp::Reverse(hits));
+    log::info!("profile-ra: {} samples", critical.len());
+    for (ra, hits) in by_caller.iter().take(top) {
+        log::info!("profile-ra: {hits} 0x{ra:08x}");
+    }
     samples.sort_unstable();
     let mut hist: Vec<(u32, u32)> = Vec::new();
     for &pc in samples.iter() {

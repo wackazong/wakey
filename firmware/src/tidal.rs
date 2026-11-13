@@ -586,12 +586,13 @@ impl Tidal {
         let t = Instant::now();
         self.set_progress(track.id, 0.0);
         // The first download only: each start takes a timer and a buffer.
+        // 1 kHz: the buffer lasts 16 s, about one track.
         #[cfg(feature = "profile-download")]
         let profiled = {
             static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             let first = !DONE.swap(true, std::sync::atomic::Ordering::Relaxed);
             if first {
-                crate::profiler::start();
+                crate::profiler::start_at(1000);
             }
             first
         };
@@ -632,6 +633,91 @@ impl Tidal {
         inner.have.insert(track.id);
         inner.version = inner.version.wrapping_add(1);
         Ok(())
+    }
+
+    /// Feature `download-bench`: downloads the playlist's first track to a
+    /// scratch file twice, then once more without writing it, and logs the
+    /// speed of each and the Wi-Fi link (`bench:` lines).
+    #[cfg(feature = "download-bench")]
+    pub fn bench(&self) {
+        let this = self.clone();
+        self.wifi.run(Box::new(move |net| {
+            if let Err(e) = net {
+                log::warn!("bench: no network: {e}");
+                return;
+            }
+            let Some(track) = this.lock().playlist.first().cloned() else {
+                log::warn!("bench: no playlist");
+                return;
+            };
+            let plan = match this.session().and_then(|s| {
+                let (status, body) = send(&api::playback_info(&s, track.id), "stream")?;
+                api::parse_playback_info(status, &body, track.id, f64::from(track.duration_s))
+                    .map_err(|e| e.to_string())
+            }) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("bench: {e}");
+                    return;
+                }
+            };
+            let _ = std::fs::create_dir_all(sd_path(sync::DIR));
+            let part = sd_path("tidal/bench.part");
+            for round in 1..=2 {
+                // Round 2 sampled whole (56 s at 250 Hz fit the buffer).
+                #[cfg(feature = "profile-download")]
+                if round == 2 {
+                    crate::profiler::start_at(250);
+                }
+                let t = Instant::now();
+                let result = this.fetch(track.id, &plan, &part);
+                let ms = t.elapsed().as_millis().max(1) as u64;
+                #[cfg(feature = "profile-download")]
+                if round == 2 {
+                    crate::profiler::report(800);
+                }
+                match result {
+                    Ok(bytes) => log::info!(
+                        "bench: round {round}: {} KiB in {ms} ms, {} KiB/s",
+                        bytes / 1024,
+                        bytes * 1000 / 1024 / ms
+                    ),
+                    Err(e) => log::warn!("bench: round {round}: {e}"),
+                }
+                let _ = std::fs::remove_file(&part);
+            }
+            // The link: signal and Wi-Fi mode.
+            let mut ap: esp_idf_svc::sys::wifi_ap_record_t = unsafe { core::mem::zeroed() };
+            // SAFETY: fills `ap`.
+            if unsafe { esp_idf_svc::sys::esp_wifi_sta_get_ap_info(&mut ap) } == 0 {
+                log::info!(
+                    "bench: link: RSSI {} dBm, channel {}, 11b/g/n/ax {}{}{}{}, bandwidth {}",
+                    ap.rssi,
+                    ap.primary,
+                    ap.phy_11b(),
+                    ap.phy_11g(),
+                    ap.phy_11n(),
+                    ap.phy_11ax(),
+                    ap.second
+                );
+            }
+            // Round 3: the network alone, nothing written to the card.
+            if let MediaPlan::Mirrors(urls) = &plan {
+                let t = Instant::now();
+                let result = http::download(&urls[0], &mut |_| Ok(()), &mut |_, _| {});
+                let ms = t.elapsed().as_millis().max(1) as u64;
+                match result {
+                    Ok(bytes) => log::info!(
+                        "bench: round 3 (no card): {} KiB in {ms} ms, {} KiB/s",
+                        bytes / 1024,
+                        bytes * 1000 / 1024 / ms
+                    ),
+                    Err(e) => log::warn!("bench: round 3: {e}"),
+                }
+            }
+            this.lock().downloading = None;
+            this.bump();
+        }));
     }
 
     fn bump(&self) {

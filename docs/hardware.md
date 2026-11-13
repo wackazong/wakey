@@ -9,7 +9,7 @@ M5Stack Tab5 Kit (ESP32-P4 + ESP32-C6, 5" 720×1280 touch panel, NP-F550 battery
 | ESP32-P4 | rev **v1.3** (`espflash board-info`), 360 MHz, 32 MB PSRAM (hex, 200 MHz), 16 MB flash |
 | Panel | **ST7123** TDDI (display and touch in one chip), touch firmware 3 |
 | USB | USB-C: P4's USB Serial/JTAG at `/dev/cu.usbmodem2101` (flashing, console) |
-| C6 firmware | M5Stack factory esp_hosted slave, reports protocol version 0.0.0 |
+| C6 firmware | M5Stack factory esp_hosted slave 1.4.1 (`GetCoprocessorFwVersion`; its startup event carries no version and shows as 0.0.0) |
 | Battery | not connected |
 
 Three panel variants exist across production runs; the firmware detects them from the touch controller: ST712x at 0x55 with firmware 3 → ST7123, 1 → ST7121; GT911 (0x14/0x5D) → ILI9881C. Only the ST712x touch is implemented.

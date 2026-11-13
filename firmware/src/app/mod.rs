@@ -237,6 +237,8 @@ async fn app(spawner: embassy_executor::Spawner) {
     });
     // The saved alarms' TIDAL tracks on the card (downloads if missing).
     sound_page::select_tidal(&ctx);
+    #[cfg(feature = "download-bench")]
+    ctx.tidal.bench();
     alarm_list::start(&ui, &ctx);
     // Rows ready before the list is first opened (rendered in idle time).
     alarm_list::refresh(&ui, &ctx.alarm.borrow());

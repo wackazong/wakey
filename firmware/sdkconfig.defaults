@@ -71,25 +71,50 @@ CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
 # main task: keep its pools and task stacks out of internal RAM and its
 # queues short (internal RAM is tight; see src/runtime.rs).
 CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
+# Longer queues (20/40) and RX double buffering were tried for downloads:
+# no faster (the C6 link gives ~1.1 MiB/s), 3 KiB less internal RAM.
 CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=10
 CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=10
 CONFIG_ESP_HOSTED_SDIO_RX_DOUBLE_BUFFERING=n
 CONFIG_ESP_HOSTED_CLI_ENABLED=n
 CONFIG_ESP_HOSTED_MEM_MONITOR=n
 CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
+# The C6's Wi-Fi buffers: sent to the C6 with esp_wifi_init (the slave
+# uses the host's values), allocated in the C6's RAM, none on the P4.
+# Espressif's P4+C6 performance profile (esp_hosted
+# docs/performance_optimization.md).
+CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=16
+CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_AMPDU_RX_ENABLED=y
+CONFIG_WIFI_RMT_RX_BA_WIN=32
+CONFIG_WIFI_RMT_AMPDU_TX_ENABLED=y
+CONFIG_WIFI_RMT_TX_BA_WIN=32
 
 # HTTPS (TIDAL): mbedTLS's buffers (a 16 KiB record buffer and more per
 # connection) in PSRAM; internal RAM is short (~100 KiB free in a Wi-Fi
 # session). The certificate bundle (default: full) verifies the servers.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# ChaCha20-Poly1305: mbedTLS offers it first and TIDAL's CDN (Fastly)
+# takes the client's order. AES-GCM cost ~60 % of core 0 at 1 MiB/s: the
+# AES DMA driver syncs caches with interrupts off for each record (buffers
+# in PSRAM), GHASH runs in software; software AES was slower still.
+CONFIG_MBEDTLS_CHACHA20_C=y
+CONFIG_MBEDTLS_POLY1305_C=y
+CONFIG_MBEDTLS_CHACHAPOLY_C=y
 
 # TCP receive window: the default 5760 bytes allowed ~185 KiB/s at ~30 ms to
 # TIDAL's CDN (window / round trip; a track took 2.5 min). 64 KiB, and
 # mailboxes that hold a window's worth of segments (65534 / 1440 MSS = 46).
 # The pbufs come from the general heap (PSRAM here).
-CONFIG_LWIP_TCP_WND_DEFAULT=65534
-CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
-CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+# Window scaling (needs lwIP's memory allowed in PSRAM): 256 KiB, and
+# mailboxes for 256 KiB / 1440 = 182 segments.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_LWIP_WND_SCALE=y
+CONFIG_LWIP_TCP_RCV_SCALE=3
+CONFIG_LWIP_TCP_WND_DEFAULT=262144
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=192
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=192
 
 # CPU time per task (`taskstats`, feature `task-stats`): FreeRTOS keeps a
 # run-time counter per task (esp_timer based, cheap).

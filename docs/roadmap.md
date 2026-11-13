@@ -8,18 +8,15 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 
 **Done:** clock screen with RTC time, Europe/Zurich, NTP sync over Wi-Fi; touch; USB audio with file playback (WAV/AIFF/FLAC, any rate → 48 kHz); fast scrolling lists; `config.json` (Wi-Fi, alarm; missing settings written back); the alarm (state machine in `wakey-core`, state in NVS, ringing with fade-in and the built-in tone as fallback, ringing screen: tap to snooze up to 3 times, hold the corner button 1.5 s to stop, silenced for good after the ring timeout); several alarms with their own sound, volume and fade-in; settings pages in the design agreed on 2026-11-10 (alarm list with swipe-to-delete, alarm page with time wheels that click on the built-in speaker, sound page with "Zufällig", name keyboard); the built-in speaker (ES8388) for the wheel click and as the alarm speaker when no USB speaker is connected; the clock face's sky that follows the sun; brightness from the room's light with the camera as light meter (night mode with darkened pixels); `config.json` `display` and `power` sections; the display asleep (backlight off) in the dark after a minute without a touch, woken by a touch, an alarm or daylight, with the panel at 33 Hz and USB-A off (see the power concept).
 
-**V1 (next):**
+## Next steps
 
-1. **Built-in speaker volume:** the alarm's volume curve is the Pebble's; check by ear how loud 60 % is on the built-in speaker (preview without the Pebble) and calibrate it separately if needed.
-2. **Screens:** the sound list on the list layer (as the alarm list) once it can be long (TIDAL); check page switches while audio plays (~130 ms during a preview, measured before the internal RAM fix).
-3. **Power, the rest** (below): fewer wake-ups (touch by `TP_INT` instead of 10 ms polls, the USB client's 10 ms pump; not planned for now); the periodic ~20–35 mA dip seen with the meter.
-4. **Wi-Fi only when needed:** done (sessions every `sync_interval_h`, C6 off in between); open: each session leaks ~2.3 KiB internal RAM (`docs/pitfalls.md`).
-
-**V2: TIDAL.** Songs are chosen in the TIDAL app in a playlist ("Wecker"); the device syncs that playlist silently each time the sound page's TIDAL tab opens, shows it with covers (160×160 RGB565, decoded once) and "Zufällige Auswahl" on top, and downloads tracks as FLAC to `sounds/`. Before login the tab shows the login code. An alarm stores `"tidal:<track id>"` or `"tidal:random"` (already parsed; it plays the built-in tone until then). Groundwork: [`spikes/tidal-download`](../spikes/tidal-download) (host tool, working login and download). On the device: HTTP via `esp_idf_svc::http::client`, login code shown on the display, the session in `config.json`'s `tidal` section (with the app credentials, pasted in from `cargo run -- clock-config` in the spike).
-
-Steps: 1. FLAC playback (done). 2. The protocol in `wakey_core::tidal` (done, host-tested): device code login and refresh, playlists and their tracks, cover URLs, the stream manifest (BTS mirrors, DASH segments; lossless arrives as DASH, FLAC in fragmented MP4, unpacked to `.flac` while downloading), the sync plan (`tidal/playlist.json`, `tidal/<id>.flac`, `tidal/covers/<id>.rgb`). 3. HTTPS on the device and the login (done: QR code of the device code link on the sound page's TIDAL tab, session saved to `config.json`). 4. Playlist sync (done: the tab lists „Zufällig“ and the playlist's tracks, kept in `tidal/playlist.json`). 5. Downloads and `tidal:` alarms (done: the tracks the alarms use, all for „Zufällig“; progress bar in the row; ~1 MiB/s). 6. Covers (JPEG → RGB565, 160 × 160). 7. Open: a failed download says so in its row (now „wird geladen“ stays) and is not retried until the next start; the first sync after opening the tab is faster (Wi-Fi up when the alarm page opens, one connection for the requests, no playlist search once known); the TIDAL tracks in the list view; „Probehören“ of a track that is still downloading plays it as soon as enough has arrived instead of the built-in tone; downloads faster still (profile core 0 over a whole download, feature `profile-download`).
-
-**Not planned:** radio, OTA, USB hub.
+- move the tidal track list to the list layer
+- Show just the TIDAL song name on the alarm settings screen
+- Ablum covers
+- Show failed downloads, retry after restart
+- open: each C6 session leaks ~2.3 KiB internal RAM (`docs/pitfalls.md`).
+- play downloading songs as soon as possible, never play the built-in tone as a replacement in preview
+- make the first sync after opening the tab faster (Wi-Fi up when the alarm page opens, one connection for the requests, no playlist search once known)
 
 ## Power concept
 
