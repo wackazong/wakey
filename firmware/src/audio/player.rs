@@ -8,12 +8,15 @@
 //! [`Player::play`] plays a file once (tests); [`Player::ring`] is the
 //! alarm: a file in a loop, or the built-in [`Beeper`] tone if there is no
 //! file or it cannot be read, with a volume and a fade-in applied in
-//! [`Player::source`].
+//! [`Player::source`]. [`Player::preview`] is the sound page's preview:
+//! the same, but silent instead of the tone when the sound cannot be
+//! played; it also plays a [`Sound::Stream`] (a track still downloading).
 
 use super::uac::{self, Source};
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use std::collections::VecDeque;
+use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -40,12 +43,19 @@ struct Ring {
     restart_fade: AtomicBool,
 }
 
-/// What [`Player::ring`] plays.
+/// What [`Player::ring`] and [`Player::preview`] play.
 pub enum Sound {
-    /// A file, repeated; the tone if it cannot be played.
+    /// A file, repeated; the tone if it cannot be played (alarm only).
     File(PathBuf),
     Tone,
+    /// A file that is still being written (a name for the log, a reader
+    /// that waits for more).
+    Stream(String, Box<dyn ReadSeek + Send>),
 }
+
+/// A source for [`Sound::Stream`].
+pub trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
 
 /// Counters for logs.
 pub static UNDERRUNS: AtomicU32 = AtomicU32::new(0);
@@ -132,13 +142,20 @@ impl Player {
     pub fn ring(&self, sound: Sound, gain: f32, fade_s: u16) {
         let fade_frames = u32::from(fade_s) * uac::SAMPLE_RATE;
         self.start(gain, fade_frames, move |ring| {
-            if let Sound::File(path) = sound {
-                match decode(&path, ring, true) {
-                    Ok(()) => return,
-                    Err(e) => log::error!("player: {}: {e}; playing the tone", path.display()),
-                }
+            if let Err(e) = play_sound(sound, ring) {
+                log::error!("player: {e}; playing the tone");
+                beep(ring);
             }
-            beep(ring);
+        });
+    }
+
+    /// Plays `sound` until [`stop`](Self::stop), at `gain`, without fade-in;
+    /// silent if it cannot be played (no tone in its place).
+    pub fn preview(&self, sound: Sound, gain: f32) {
+        self.start(gain, 0, move |ring| {
+            if let Err(e) = play_sound(sound, ring) {
+                log::warn!("player: preview: {e}; silent");
+            }
         });
     }
 
@@ -197,14 +214,41 @@ impl Player {
     }
 }
 
+/// Plays `sound` into the ring until it is stopped (files and streams
+/// repeat); an error if it cannot be played.
+fn play_sound(sound: Sound, ring: &Ring) -> Result<(), String> {
+    match sound {
+        Sound::Tone => {
+            beep(ring);
+            Ok(())
+        }
+        Sound::File(path) => decode(&path, ring, true).map_err(|e| format!("{}: {e}", path.display())),
+        Sound::Stream(name, reader) => {
+            AudioFile::from_reader(BufReader::with_capacity(32 * 1024, reader))
+                .and_then(|file| decode_from(&name, file, ring, true))
+                .map_err(|e| format!("{name}: {e}"))
+        }
+    }
+}
+
 /// Decodes `path` into the ring, from the start again at its end if
 /// `repeat`.
 fn decode(path: &std::path::Path, ring: &Ring, repeat: bool) -> std::io::Result<()> {
-    let mut file = AudioFile::open(path)?;
+    let file = AudioFile::open(path)?;
+    decode_from(&path.display().to_string(), file, ring, repeat)
+}
+
+/// [`decode`] from an opened file (`name` for the log).
+fn decode_from<R: Read + Seek>(
+    name: &str,
+    mut file: AudioFile<R>,
+    ring: &Ring,
+    repeat: bool,
+) -> std::io::Result<()> {
     let f = file.format.clone();
     log::info!(
         "player: {}: {:?}, {} Hz, {} ch, {} bit, {:.1} s",
-        path.display(),
+        name,
         f.container,
         f.sample_rate,
         f.channels,
