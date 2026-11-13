@@ -16,6 +16,8 @@ use wakey_core::alarm::AlarmConfig;
 pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
     // The wheels click: the speaker starts now, not at the first click.
     ctx.click.wake();
+    // Wi-Fi up and the TIDAL playlist synced before the sound page opens.
+    ctx.tidal.warm();
     let editor = window.global::<AlarmEditor>();
     editor.set_hour(cfg.hour.into());
     editor.set_minute(cfg.minute.into());

@@ -84,6 +84,9 @@ pub struct Configuration {
     pub keep_alive_idle: Option<usize>,
     pub keep_alive_interval: Option<usize>,
     pub keep_alive_count: Option<usize>,
+    /// Keep the TLS session ticket of a connection for the next one
+    /// (`CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS`; wakey).
+    pub save_client_session: bool,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -104,6 +107,9 @@ pub struct EspHttpConnection {
     follow_redirects: bool,
     headers: BTreeMap<Uncased<'static>, String>,
     content_len_header: UnsafeCell<Option<Option<String>>>,
+    /// Request headers set by the previous request: ESP-IDF keeps them on
+    /// the client, so a reused connection would send them again (wakey).
+    request_headers: alloc::vec::Vec<alloc::ffi::CString>,
 }
 
 impl EspHttpConnection {
@@ -121,6 +127,7 @@ impl EspHttpConnection {
             use_global_ca_store: configuration.use_global_ca_store,
             crt_bundle_attach: configuration.crt_bundle_attach,
             keep_alive_enable: configuration.keep_alive_enable,
+            save_client_session: configuration.save_client_session,
 
             ..Default::default()
         };
@@ -194,6 +201,7 @@ impl EspHttpConnection {
                 follow_redirects: false,
                 headers: BTreeMap::new(),
                 content_len_header: UnsafeCell::new(None),
+                request_headers: alloc::vec::Vec::new(),
             })
         }
     }
@@ -258,6 +266,11 @@ impl EspHttpConnection {
 
         let mut content_len = None;
 
+        // The previous request's headers go (a reused connection; wakey).
+        for c_name in self.request_headers.drain(..) {
+            unsafe { esp_http_client_delete_header(self.raw_client, c_name.as_ptr() as _) };
+        }
+
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("Content-Length") {
                 if let Ok(len) = value.parse::<i64>() {
@@ -265,6 +278,7 @@ impl EspHttpConnection {
                 }
             } else {
                 let c_name = to_cstring_arg(name)?;
+                self.request_headers.push(c_name.clone());
 
                 // TODO: Replace with a proper conversion from UTF8 to ISO-8859-1
                 let c_value = to_cstring_arg(value)?;
@@ -389,6 +403,13 @@ impl EspHttpConnection {
         } else {
             Ok(())
         }
+    }
+
+    /// Closes the connection and keeps the client (its TLS session ticket
+    /// resumes the next connection; wakey).
+    pub fn close(&mut self) {
+        unsafe { esp_http_client_close(self.raw_client) };
+        self.state = State::New;
     }
 
     fn flush_response(&mut self) -> Result<(), EspError> {

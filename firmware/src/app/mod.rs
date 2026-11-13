@@ -68,6 +68,8 @@ fn depth(page: i32) -> i32 {
 /// go down again; within them deeper pages come from the right.
 fn show_page(window: &screens::AppWindow, page: i32) {
     use transition::Direction;
+    // A Wi-Fi session for TIDAL stays up while an alarm is edited.
+    crate::tidal::set_editing(matches!(page, PAGE_ALARM | PAGE_SOUND | PAGE_NAME));
     let from = window.get_page();
     if from == page {
         return;

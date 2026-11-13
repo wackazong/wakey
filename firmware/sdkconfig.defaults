@@ -95,6 +95,9 @@ CONFIG_WIFI_RMT_TX_BA_WIN=32
 # connection) in PSRAM; internal RAM is short (~100 KiB free in a Wi-Fi
 # session). The certificate bundle (default: full) verifies the servers.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# A new connection to a host seen before resumes the TLS session (ticket,
+# RFC 5077) instead of a full handshake (~1.5 s on this chip): `http.rs`.
+CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 # ChaCha20-Poly1305: mbedTLS offers it first and TIDAL's CDN (Fastly)
 # takes the client's order. AES-GCM cost ~60 % of core 0 at 1 MiB/s: the
 # AES DMA driver syncs caches with interrupts off for each record (buffers

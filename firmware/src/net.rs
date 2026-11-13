@@ -486,6 +486,8 @@ fn sync_clock(
     };
     drop(sntp);
     run_more();
+    // Kept HTTPS connections (`http`) end with the session.
+    crate::http::close_all();
     let _ = wifi.disconnect();
     let _ = wifi.stop();
     if !synced {

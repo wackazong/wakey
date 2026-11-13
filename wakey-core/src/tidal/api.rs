@@ -101,6 +101,52 @@ pub fn find_playlist<'a>(playlists: &'a [Playlist], name: &str) -> Option<&'a Pl
         .find(|p| p.title.trim().to_lowercase() == want)
 }
 
+/// A playlist's own data (no tracks): one small request that tells whether
+/// its tracks changed ([`PlaylistInfo::last_updated`]).
+pub fn playlist(session: &TidalSession, uuid: &str) -> Request {
+    authed(
+        format!(
+            "{API}/playlists/{}?countryCode={}",
+            encode(uuid),
+            encode(&session.country_code)
+        ),
+        session,
+    )
+}
+
+/// What [`playlist`] answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistInfo {
+    pub title: String,
+    pub tracks: u32,
+    /// Changes whenever the playlist does (tracks added, removed, moved).
+    pub last_updated: String,
+}
+
+/// Reads the answer to [`playlist`]; `Ok(None)` for 404 (the playlist is
+/// gone: look it up by name again).
+pub fn parse_playlist(status: u16, body: &[u8]) -> Result<Option<PlaylistInfo>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Answer {
+        title: String,
+        #[serde(default)]
+        number_of_tracks: u32,
+        #[serde(default)]
+        last_updated: String,
+    }
+    if status == 404 {
+        return Ok(None);
+    }
+    ensure!(status == 200, "{}", status_error("playlist", status));
+    let a: Answer = json("playlist", body)?;
+    Ok(Some(PlaylistInfo {
+        title: a.title,
+        tracks: a.number_of_tracks,
+        last_updated: a.last_updated,
+    }))
+}
+
 /// One page of a playlist's items, in the playlist's order.
 pub fn playlist_items(session: &TidalSession, uuid: &str, offset: u32) -> Request {
     authed(
@@ -277,6 +323,20 @@ pub fn parse_playback_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playlist_info() {
+        let r = playlist(&session(), "ab-cd");
+        assert_eq!(r.url, format!("{API}/playlists/ab-cd?countryCode=CH"));
+        let body = br#"{"uuid":"ab-cd","title":"Wecker","numberOfTracks":4,
+            "lastUpdated":"2026-11-13T10:00:00.000+0000","duration":900}"#;
+        let info = parse_playlist(200, body).unwrap().unwrap();
+        assert_eq!(info.title, "Wecker");
+        assert_eq!(info.tracks, 4);
+        assert_eq!(info.last_updated, "2026-11-13T10:00:00.000+0000");
+        assert_eq!(parse_playlist(404, b"{}").unwrap(), None);
+        assert!(parse_playlist(500, b"{}").is_err());
+    }
 
     fn session() -> TidalSession {
         TidalSession {
