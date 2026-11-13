@@ -104,12 +104,55 @@ struct Inner {
     /// Tracks whose download stopped for another one with their
     /// `.flac.part` kept (one file, not DASH): resumed where they stopped.
     resumable: BTreeSet<u64>,
+    /// Tracks seen in the playlist ([`KNOWN_FILE`]).
+    known: Known,
+    /// Tracks no longer in the playlist that stay listed while the tab is
+    /// open (the alarm being edited used them when it opened, or since):
+    /// one can go back to them until the tab closes.
+    keep: BTreeSet<u64>,
+    /// The track of the alarm being edited (listed even if it left the
+    /// playlist).
+    draft: Option<u64>,
 }
 
 impl Inner {
     /// The track is to be on the card.
     fn wants(&self, id: u64) -> bool {
         self.all || self.selected.contains(&id)
+    }
+
+    /// Tracks of `ids` no longer in the playlist, as last seen.
+    fn orphans_of<'a>(&self, ids: impl Iterator<Item = &'a u64>) -> Vec<Track> {
+        ids.collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|id| !self.playlist.iter().any(|t| t.id == **id))
+            .filter_map(|id| self.known.get(id).cloned())
+            .collect()
+    }
+
+    /// Listed after the playlist: the edited alarm's track and those kept
+    /// while the tab is open, if they left the playlist.
+    fn listed_orphans(&self) -> Vec<Track> {
+        self.orphans_of(self.draft.iter().chain(&self.keep))
+    }
+
+    /// The tracks to have (downloads): the playlist and the tracks that
+    /// left it but an alarm uses or the tab lists.
+    fn tracks(&self) -> Vec<Track> {
+        let mut all = self.playlist.clone();
+        all.extend(self.orphans_of(self.selected.iter().chain(&self.keep)));
+        all
+    }
+
+    /// While the tab is open: the edited alarm's track, if it left the
+    /// playlist, stays listed until the tab closes.
+    fn keep_draft(&mut self) {
+        if self.wanted
+            && let Some(id) = self.draft
+            && !self.playlist.iter().any(|t| t.id == id)
+        {
+            self.keep.insert(id);
+        }
     }
 
     /// A track to download: wanted, not on the card, not failed before.
@@ -262,11 +305,38 @@ pub fn track_file(id: u64) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-/// A track's title and artist from the stored playlist.
+/// Tracks seen in the playlist that an alarm may still use after they
+/// left it (title, artist, cover for the list and the alarm page), by id.
+const KNOWN_FILE: &str = "tidal/known.json";
+
+type Known = std::collections::BTreeMap<u64, Track>;
+
+fn load_known() -> Known {
+    std::fs::read(sd_path(KNOWN_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_known(known: &Known) {
+    match serde_json::to_vec(known) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(sd_path(KNOWN_FILE), json) {
+                log::warn!("tidal: {KNOWN_FILE}: {e}");
+            }
+        }
+        Err(e) => log::warn!("tidal: {KNOWN_FILE}: {e}"),
+    }
+}
+
+/// A track's title and artist: from the stored playlist, else from the
+/// tracks seen before ([`KNOWN_FILE`]: an alarm keeps its track's name
+/// after the track left the playlist).
 pub fn track_title(id: u64) -> Option<(String, String)> {
     load_playlist()
         .into_iter()
         .find(|t| t.id == id)
+        .or_else(|| load_known().remove(&id))
         .map(|t| (t.title, t.artist))
 }
 
@@ -583,6 +653,13 @@ impl Tidal {
                 covers_failed: BTreeSet::new(),
                 prefer: None,
                 resumable: BTreeSet::new(),
+                known: {
+                    let mut known = load_known();
+                    known.extend(load_playlist().into_iter().map(|t| (t.id, t)));
+                    known
+                },
+                keep: BTreeSet::new(),
+                draft: None,
             })),
             kick: Arc::new(std::sync::Condvar::new()),
             wifi,
@@ -600,6 +677,16 @@ impl Tidal {
     /// The playlist's tracks, in order.
     pub fn playlist(&self) -> Vec<Track> {
         self.lock().playlist.clone()
+    }
+
+    /// The tracks the TIDAL tab lists: the playlist, then tracks that left
+    /// it but the alarm being edited uses (or used since the tab opened),
+    /// each with `true` if it is one of those.
+    pub fn listed(&self) -> Vec<(Track, bool)> {
+        let inner = self.lock();
+        let mut list: Vec<(Track, bool)> = inner.playlist.iter().cloned().map(|t| (t, false)).collect();
+        list.extend(inner.listed_orphans().into_iter().map(|t| (t, true)));
+        list
     }
 
     /// Changes when [`Self::playlist`] or a track's status does.
@@ -626,14 +713,19 @@ impl Tidal {
     /// The tracks to have on the card. Starts their downloads (a Wi-Fi
     /// session) unless one is under way, which takes them on.
     /// `all`: the whole playlist (an alarm uses „Zufällig“).
-    pub fn set_selected(&self, ids: BTreeSet<u64>, all: bool) {
+    ///
+    /// `draft`: the track of the alarm being edited (the tab lists it even
+    /// if it left the playlist).
+    pub fn set_selected(&self, ids: BTreeSet<u64>, all: bool, draft: Option<u64>) {
         let mut inner = self.lock();
-        if inner.selected != ids || inner.all != all {
+        if inner.selected != ids || inner.all != all || inner.draft != draft {
             inner.selected = ids;
             inner.all = all;
+            inner.draft = draft;
             inner.version = inner.version.wrapping_add(1);
         }
-        let missing = inner.playlist.iter().any(|t| inner.lacks(t.id));
+        inner.keep_draft();
+        let missing = inner.tracks().iter().any(|t| inner.lacks(t.id));
         self.kick.notify_all();
         if !missing || inner.busy || inner.cfg.session.is_none() {
             return;
@@ -655,6 +747,8 @@ impl Tidal {
     pub fn open(&self) {
         let mut inner = self.lock();
         inner.wanted = true;
+        inner.keep.clear();
+        inner.keep_draft();
         if inner.busy || !inner.cfg.has_credentials() {
             return;
         }
@@ -760,7 +854,7 @@ impl Tidal {
                 // Until the next sync, or a pick (checked under the lock
                 // the pick takes: no wake-up lost).
                 let inner = self.lock();
-                if !inner.playlist.iter().any(|t| inner.lacks(t.id)) {
+                if !inner.tracks().iter().any(|t| inner.lacks(t.id)) {
                     let _ = self.kick.wait_timeout(inner, rest);
                 }
                 continue;
@@ -781,11 +875,11 @@ impl Tidal {
     fn next_missing(&self) -> Option<Track> {
         let inner = self.lock();
         let preferred = inner.prefer.filter(|&id| inner.lacks(id));
-        inner
-            .playlist
+        let tracks = inner.tracks();
+        tracks
             .iter()
             .find(|t| Some(t.id) == preferred)
-            .or_else(|| inner.playlist.iter().find(|t| inner.lacks(t.id)))
+            .or_else(|| tracks.iter().find(|t| inner.lacks(t.id)))
             .cloned()
     }
 
@@ -1155,7 +1249,11 @@ impl Tidal {
 
     /// The TIDAL tab closed (another tab, or the page left).
     pub fn close(&self) {
-        self.lock().wanted = false;
+        let mut inner = self.lock();
+        inner.wanted = false;
+        // Tracks that left the playlist and no alarm uses go at the next
+        // sync.
+        inner.keep.clear();
     }
 
     /// The session, refreshed (and saved) if its token is about to expire.
@@ -1218,9 +1316,29 @@ impl Tidal {
             offset = next;
         }
         let n = tracks.len();
-        // Files of tracks no longer in the playlist go.
-        let have: Vec<u64> = self.lock().have.iter().copied().collect();
-        for id in sync::plan(&tracks, &have, &[]).delete_tracks {
+        // Every track seen is remembered (an alarm may keep it after it
+        // leaves the playlist).
+        let mut known_changed = false;
+        {
+            let mut inner = self.lock();
+            for t in &tracks {
+                if inner.known.get(&t.id) != Some(t) {
+                    inner.known.insert(t.id, t.clone());
+                    known_changed = true;
+                }
+            }
+        }
+        // Files of tracks no longer in the playlist go, unless an alarm
+        // uses them or the open tab still lists them.
+        let (have, spare): (Vec<u64>, BTreeSet<u64>) = {
+            let inner = self.lock();
+            (
+                inner.have.iter().copied().collect(),
+                inner.selected.union(&inner.keep).copied().collect(),
+            )
+        };
+        let gone = sync::plan(&tracks, &have, &[]).delete_tracks;
+        for id in gone.into_iter().filter(|id| !spare.contains(id)) {
             match std::fs::remove_file(sd_path(&sync::track_path(id))) {
                 Ok(()) => log::info!("tidal: removed {id} (not in the playlist)"),
                 Err(e) => log::warn!("tidal: removing {id}: {e}"),
@@ -1234,7 +1352,25 @@ impl Tidal {
             inner.playlist = tracks.clone();
             inner.version = inner.version.wrapping_add(1);
         }
-        self.sync_covers(&tracks);
+        // Remembered: the playlist, what alarms use, what is on the card.
+        let listed = {
+            let mut inner = self.lock();
+            let before = inner.known.len();
+            let Inner { known, playlist, selected, keep, have, .. } = &mut *inner;
+            known.retain(|id, _| {
+                playlist.iter().any(|t| t.id == *id)
+                    || selected.contains(id)
+                    || keep.contains(id)
+                    || have.contains(id)
+            });
+            if known_changed || inner.known.len() != before {
+                save_known(&inner.known);
+            }
+            let mut listed = inner.playlist.clone();
+            listed.extend(inner.listed_orphans());
+            listed
+        };
+        self.sync_covers(&listed);
         Ok(n)
     }
 

@@ -64,7 +64,11 @@ pub fn select_tidal(ctx: &Ctx) {
         })
         .collect();
     let all = sounds.iter().any(|s| **s == Sound::TidalRandom);
-    ctx.tidal.set_selected(ids, all);
+    let draft_track = match &draft {
+        Sound::TidalTrack(id) => id.parse().ok(),
+        _ => None,
+    };
+    ctx.tidal.set_selected(ids, all, draft_track);
 }
 
 /// The TIDAL tab opened (log in if needed, follow the state) or closed.
@@ -215,8 +219,9 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         }));
         choices
     } else {
-        // The playlist; the login or the state shown by `show_state`.
-        let tracks = ctx.tidal.playlist();
+        // The playlist, then tracks that left it but an alarm uses; the
+        // login or the state shown by `show_state`.
+        let tracks = ctx.tidal.listed();
         let mut choices = Vec::new();
         if !tracks.is_empty() {
             choices.push((
@@ -224,7 +229,7 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
                 Sound::TidalRandom,
             ));
         }
-        choices.extend(tracks.iter().map(|t| {
+        choices.extend(tracks.iter().map(|(t, removed)| {
             let sound = Sound::TidalTrack(t.id.to_string());
             let status = ctx.tidal.track_status(t.id);
             let sub = match status {
@@ -232,6 +237,12 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
                 TrackStatus::Ready | TrackStatus::Remote | TrackStatus::Failed => t.artist.clone(),
                 TrackStatus::Downloading => format!("{} · lädt …", t.artist),
                 TrackStatus::Missing => format!("{} · wird geladen", t.artist),
+            };
+            // First, so a long artist cannot cut it off.
+            let sub = if *removed {
+                format!("Nicht mehr in der Playlist · {sub}")
+            } else {
+                sub
             };
             let mut r = row(&t.title, &sub, &sound, 3);
             r.failed = status == TrackStatus::Failed;
