@@ -75,7 +75,7 @@ Registers ([`board/rtc.rs`](../firmware/src/board/rtc.rs), data sheet, M5Unified
 
 ## Power
 
-- USB-C path: `USB_5VIN` (FU1 2 A) → U34 MAX40200 (**1 A**) → `SYS_5VBUS` → U23 LPW5209 (≈ 2.4 A) → `SYS_INT5V` → U27 MT9700 (≈ 1.33 A) → USB-A. All 5 V outputs sit behind U34. Budget for the Pebble ≈ 0.5 A (gain switch "L", limited USB volume; not measured yet).
+- USB-C path: `USB_5VIN` (FU1 2 A) → U34 MAX40200 (**1 A**) → `SYS_5VBUS` → U23 LPW5209 (≈ 2.4 A) → `SYS_INT5V` → U27 MT9700 (≈ 1.33 A) → USB-A. All 5 V outputs sit behind U34. Budget for the Pebble ≈ 0.5 A (gain switch "L", limited USB volume; not measured yet, see below).
 - Battery path locked out in hardware when external power is present.
 - Power-off: `PWROFF_PULSE` → PMS150G (U28) → `MPWR_EN` = 0 → main switch and battery buck off. `VDD_STBY` keeps PMS150, RTC and IMU alive.
 - Power-on sources: power button, RTC `nIRQ`, IMU INT1 (all via the PMS150).
@@ -88,6 +88,26 @@ Registers ([`board/rtc.rs`](../firmware/src/board/rtc.rs), data sheet, M5Unified
 | RTC alarm | `nIRQ` → PMS150 | no | no | yes |
 | IMU tap | INT1 → PMS150 | no | no | yes, if configured |
 | Power button | PMS150 | – | – | yes |
+
+### Power states
+
+Two states, decided 2026-11-11; the second is a display sleep, not chip light sleep (decided 2026-11-12, see below):
+
+| State | Display | Wi-Fi | USB-A 5 V | Wakes on |
+| --- | --- | --- | --- | --- |
+| On | on, brightness from the room's light | only for a sync session | only on the alarm pages and from 60 s before something rings | – |
+| Display sleep | backlight off, panel at 33 Hz | as above | as above | any touch, alarm, daylight |
+
+Display sleep starts after `power.sleep_after_s` (60 s) without a touch on the clock page, when `power.sleep_when` allows it: `"dark"` (default) in a dark room (the light meter's night mode) or on battery; `"always"`; `"never"`. It ends on a touch (which only wakes), when an alarm rings, and when the condition ends (daylight on USB power).
+
+Implemented: backlight off, nothing drawn, light meter running ([`app/power.rs`](../firmware/src/app/power.rs), `ui::power`); the panel streams at 33 Hz instead of 66 Hz (the display link is rebuilt for it, 0.45 s each way); USB-A is off except on the alarm pages and from 60 s before something rings. The panel is not put into sleep mode: the ST7123's touch stops scanning then. Measured at the USB-C input (5 V, Pebble switched on): screen on 237–242 mA, display sleep before these changes 237 mA, USB-A off −80 mA, 33 Hz −21 mA; ~138 mA asleep; the built-in speaker's codec and I2S off while silent: 132 mA (dipping to ~99 mA now and then).
+
+**Not chip light sleep:** a single tap must wake the clock, and in light sleep it cannot (spike `chip_sleep`, 2026-11-12): the ST7123 senses touches only while the P4 streams video, which light sleep stops; in its "Smart Wake Up" mode it keeps sensing but reports only gestures (double tap, long press), never a single tap. A double-tap wake from light sleep works (with `gpio_sleep_sel_dis(23)` and the whole display link rebuilt after waking) and would save roughly another 0.1–0.2 W (estimated).
+
+### Open power measurements
+
+- Pebble current at gain "L" and the planned volume cap (target ≤ 0.5 A); `SYS_USB5V` under load (≥ 4.75 V, no reset).
+- The periodic ~20–35 mA dip in display sleep.
 
 ## Creative Pebble V3 (USB)
 

@@ -564,6 +564,22 @@ fn main() {
     sp.set_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
     sp.set_empty("TIDAL ist noch nicht eingerichtet.".into());
     p.shot("3-sound-tidal");
+    // TIDAL tracks: one selected, one downloading, one selected and
+    // downloading (the selection must show next to the progress bar).
+    let mut loading = sound("Point and Kill", "Little Simz · wird geladen", false, 2);
+    loading.progress = 0.45;
+    let mut both = sound("Sunrise", "Norah Jones · wird geladen", true, 2);
+    both.progress = 0.7;
+    sp.set_empty("".into());
+    sp.set_rows(ModelRc::new(VecModel::from(vec![
+        sound("Zufällig", "wechselt jeden Tag", false, 1),
+        sound("Here Comes the Sun", "The Beatles", true, 2),
+        loading,
+        both,
+        sound("Golden Hour", "JVKE", false, 2),
+        sound("Morning Song", "The Lumineers · wird geladen", false, 2),
+    ])));
+    p.shot("3-sound-tidal-list");
 
     // Name.
     let ne = ui.global::<NameEditor>();
