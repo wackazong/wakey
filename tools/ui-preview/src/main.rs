@@ -587,7 +587,7 @@ fn main() {
     loading.progress = 0.45;
     let mut both = sound("Sunrise", "Norah Jones · wird geladen", true, 3);
     both.progress = 0.7;
-    let mut failed_row = track("Morning Song", "The Lumineers", false, [120, 90, 60], [30, 50, 40]);
+    let mut failed_row = track("Morning Song", "Nicht mehr in der Playlist · The Lumineers", false, [120, 90, 60], [30, 50, 40]);
     failed_row.failed = true;
     sp.set_empty("".into());
     sp.set_rows(ModelRc::new(VecModel::from(vec![
@@ -596,7 +596,7 @@ fn main() {
         failed_row,
         loading,
         both,
-        track("Golden Hour", "JVKE", false, [250, 170, 60], [90, 40, 120]),
+        track("Golden Hour", "Nicht mehr in der Playlist · JVKE", false, [250, 170, 60], [90, 40, 120]),
     ])));
     p.shot("3-sound-tidal-list");
     // The alarm's track failed to download: still selected (the alarm rings

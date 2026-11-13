@@ -93,7 +93,6 @@ export component Button inherits Rectangle {
             text: root.text;
             font-size: 40px;
             color: !root.enabled ? Theme.text-faint
-                : root.kind == 1 ? Theme.accent
                 : root.kind == 2 ? Theme.text-dim : Theme.text;
             vertical-alignment: center;
         }
@@ -267,7 +266,7 @@ export component Slider inherits Rectangle {
         width: root.knob / 2 + root.span * root.value / 100;
         height: 12px;
         border-radius: 6px;
-        background: Theme.accent;
+        background: Theme.text-dim;
     }
     Rectangle {
         x: root.span * root.value / 100;
@@ -275,7 +274,7 @@ export component Slider inherits Rectangle {
         width: root.knob;
         height: root.knob;
         border-radius: root.knob / 2;
-        background: ta.pressed ? Theme.accent : Theme.text;
+        background: ta.pressed ? Theme.accent-dark.brighter(25%) : Theme.accent-dark;
     }
     ta := TouchArea {
         function set(x: length) {
@@ -361,5 +360,55 @@ export component Roll inherits Rectangle {
             self.running = false;
             root.rolling = false;
         }
+    }
+}
+
+// One line of text that scrolls when it is wider than the box: endlessly
+// at 40 px/s to the left, its end joined to its start by a dot. Text that
+// fits stays still and asks for no frames.
+export component Marquee inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size: 30px;
+    in property <color> text-color: Theme.text-dim;
+    clip: true;
+    property <length> text-width: first.preferred-width;
+    property <bool> scrolls: root.text-width > root.width;
+    // The joint: a dot with a gap on each side (spaces at a text's end do
+    // not count in its width).
+    property <length> gap: 10px;
+    property <length> period: root.text-width + root.gap + dot.preferred-width + root.gap;
+    property <length> offset: root.scrolls
+        ? Math.mod(animation-tick() / 1ms * 0.04, root.period / 1px) * 1px
+        : 0px;
+    first := Text {
+        x: -root.offset;
+        width: self.preferred-width;
+        height: root.height;
+        text: root.text;
+        font-size: root.font-size;
+        color: root.text-color;
+        vertical-alignment: center;
+    }
+    dot := Text {
+        visible: root.scrolls;
+        x: root.text-width + root.gap - root.offset;
+        width: self.preferred-width;
+        height: root.height;
+        text: "·";
+        font-size: root.font-size;
+        color: root.text-color;
+        vertical-alignment: center;
+    }
+    // The start again after the dot (the box is narrower than the text, so
+    // no second dot is ever in view).
+    Text {
+        visible: root.scrolls;
+        x: root.period - root.offset;
+        width: self.preferred-width;
+        height: root.height;
+        text: root.text;
+        font-size: root.font-size;
+        color: root.text-color;
+        vertical-alignment: center;
     }
 }

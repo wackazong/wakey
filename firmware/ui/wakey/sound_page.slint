@@ -10,7 +10,7 @@
 // │ Vogelstimmen              │ [▶ Probehören]            │
 // └───────────────────────────────────────────────────────┘
 
-import { Theme, Button, BackButton, Icon, Pills, Slider } from "theme.slint";
+import { Theme, Button, BackButton, Icon, Marquee, Pills, Slider } from "theme.slint";
 
 export struct SoundRow {
     title: string,
@@ -57,31 +57,38 @@ export global SoundPicker {
     callback tick();
 }
 
-// As high as a Button (88 px): smaller targets were missed.
+// As high as a Button (88 px): smaller targets were missed. The active
+// item's background fills the whole height and slides to a new choice.
 component Segment inherits Rectangle {
     in property <[string]> items;
     in property <int> selected;
     callback chosen(int);
     height: 88px;
     border-radius: 44px;
-    background: Theme.surface;
-    HorizontalLayout {
-        padding: 6px;
-        spacing: 6px;
-        for item[i] in root.items: Rectangle {
-            border-radius: 38px;
-            background: i == root.selected ? Theme.accent-dark : ta.pressed ? Theme.surface-pressed : transparent;
-            Text {
-                text: item;
-                font-size: 40px;
-                color: i == root.selected ? Theme.text : Theme.text-dim;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-            ta := TouchArea {
-                clicked => { root.chosen(i); }
-            }
+    // Pressed: the whole bar lights up (no gaps at the bends next to the
+    // active item).
+    background: ta.pressed ? Theme.surface-pressed : Theme.surface;
+    property <length> item-width: root.width / Math.max(1, root.items.length);
+    ta := TouchArea {
+        clicked => {
+            root.chosen(Math.clamp(Math.floor(self.mouse-x / root.item-width), 0, root.items.length - 1));
         }
+    }
+    Rectangle {
+        x: root.selected * root.item-width;
+        width: root.item-width;
+        border-radius: 44px;
+        background: Theme.accent-dark;
+        animate x { duration: 180ms; easing: ease-out; }
+    }
+    for item[i] in root.items: Text {
+        x: i * root.item-width;
+        width: root.item-width;
+        text: item;
+        font-size: 40px;
+        color: i == root.selected ? Theme.text : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
 
@@ -216,16 +223,15 @@ export component SoundPage inherits Rectangle {
                     overflow: elide;
                     vertical-alignment: center;
                 }
-                if row.sub != "": Text {
+                // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
+                if row.sub != "": Marquee {
                     x: row.kind == 3 || (row.kind == 1 && SoundPicker.tab == 1) ? 132px : row.kind == 1 ? 96px : 32px;
                     y: 62px;
                     height: 40px;
                     width: parent.width - self.x - 96px;
                     text: row.sub;
                     font-size: 30px;
-                    color: row.failed ? Theme.text-faint : Theme.text-dim;
-                    overflow: elide;
-                    vertical-alignment: center;
+                    text-color: row.failed ? Theme.text-faint : Theme.text-dim;
                 }
                 if row.selected && !row.failed: Icon {
                     kind: 2;
