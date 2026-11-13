@@ -10,7 +10,7 @@ Wakey is a bedside alarm clock on the M5Stack Tab5: a 1280×720 touch clock that
 | Radio | ESP32-C6 co-processor on SDIO (esp_hosted firmware by M5Stack) |
 | Framework | Rust std on **ESP-IDF 5.5.5** (`esp-idf-sys`/`-hal`/`-svc`) |
 | Async | Embassy executor (std platform) on one FreeRTOS task; `embassy-time` driver from `esp-idf-svc` |
-| UI | Slint 1.18 software renderer (vendored with two patches) |
+| UI | Slint 1.18 software renderer (vendored with patches, see [vendor/README.md](../firmware/vendor/README.md)) |
 | Toolchain | nightly-2026-10-15, `build-std`, target `riscv32imafc-esp-espidf` |
 
 **Rust only:** the project contains no C or C++ of its own and no C board support package. ESP-IDF itself and Espressif's registry components for the Wi-Fi link (`esp_hosted`, `esp_wifi_remote`) are the only C. Panel init tables are ported to Rust; the USB audio class driver is written in Rust on ESP-IDF's USB host library.
@@ -202,4 +202,4 @@ The C6 behaves as the normal `esp_wifi` driver through `esp_wifi_remote`, so `Es
 - `firmware/.cargo/config.toml`: target, `build-std`, runner `scripts/flash.sh` (flashes with ESP-IDF's bootloader, built for rev < v3, and `partitions.csv`: 12 MB app, NVS).
 - `esp-idf-sys` builds ESP-IDF 5.5.5 into `firmware/.embuild/` (first build ~10 min; every `sdkconfig.defaults` change rebuilds much of it). `[package.metadata.esp-idf-sys]` adds bindings (`bindings/extra.h`: PPA) and the registry components `esp_hosted` 2.13.1 and `esp_wifi_remote` 1.6.5.
 - `build.rs`: compiles `ui/wakey.slint` and `ui/ui_bench.slint` (fonts pre-rendered for the software renderer, style `fluent-dark`), exports `BUILD_UNIX_TIME`. The renderer's `path` feature is on (icons).
-- Vendored crates (`firmware/vendor/`, `[patch.crates-io]`): Slint's renderer (glyph fast path), `i-slint-core` (16 dirty rectangles instead of 3, and rectangles sharing lines merged into one band) and `esp-idf-svc` (one impl compiled out to avoid a rustc ICE). See [vendor/README.md](../firmware/vendor/README.md).
+- Vendored crates (`firmware/vendor/`, `[patch.crates-io]`): Slint's renderer (glyph fast path, paths in line-by-line mode, rounded rectangles as opaque coverage, dithered gradients), `i-slint-core` (16 dirty rectangles instead of 3, and rectangles sharing lines merged into one band) and `esp-idf-svc` (reused connections delete the previous request's headers; TLS session tickets). See [vendor/README.md](../firmware/vendor/README.md); [upstream.md](upstream.md) says which patches are on their way upstream and when each can go.

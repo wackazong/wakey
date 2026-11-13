@@ -1,0 +1,7 @@
+{
+  "rust-analyzer.linkedProjects": [
+    "firmware/Cargo.toml",
+    "wakey-core/Cargo.toml",
+    "tools/ui-preview/Cargo.toml"
+  ]
+}
