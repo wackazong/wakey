@@ -5174,6 +5174,8 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

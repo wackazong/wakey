@@ -1,15 +1,17 @@
 //! What a sync changes on the SD card. The playlist is kept as
 //! `tidal/playlist.json` (the tracks, in order: shown offline), each track
 //! as `tidal/<id>.flac`, each cover as `tidal/covers/<cover id>.rgb`
-//! (160 × 160 RGB565, decoded once).
+//! ([`COVER_PX`] square, RGB888, decoded once: [`super::cover`]).
 
 use super::api::Track;
 use std::collections::BTreeSet;
 
 pub const DIR: &str = "tidal";
 pub const PLAYLIST_FILE: &str = "tidal/playlist.json";
-/// Cover edge in pixels, as downloaded and stored.
-pub const COVER_PX: u32 = 160;
+/// Cover edge in pixels, as stored and shown in the list (a row is 112 px
+/// high). Stored at the size shown: Slint takes RGB888, and 160 px for
+/// every track would not fit the heap.
+pub const COVER_PX: u32 = 88;
 
 /// Below the SD card root.
 pub fn track_path(id: u64) -> String {

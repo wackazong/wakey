@@ -19,6 +19,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod cover;
 pub mod flac_mp4;
 pub mod manifest;
 pub mod sync;
