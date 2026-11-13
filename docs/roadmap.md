@@ -10,9 +10,9 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 
 ## Next steps
 
+- make the first sync after opening the tab faster (Wi-Fi up when the alarm page opens, one connection for the requests, no playlist search once known)
 - move the tidal track list to the list layer
 - open: each C6 session leaks ~2.3 KiB internal RAM (`docs/pitfalls.md`).
-- make the first sync after opening the tab faster (Wi-Fi up when the alarm page opens, one connection for the requests, no playlist search once known)
 
 ## Development tools (idea)
 
