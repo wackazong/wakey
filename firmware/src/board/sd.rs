@@ -85,10 +85,60 @@ pub fn mount(slot: SDMMC0<'static>, p: SdPins) -> Result<SdCard, EspError> {
     // MB while the player reads; a card without it stays at its default.
     let mut cfg = SdCardConfiguration::new();
     cfg.speed_khz = 40_000;
-    let card = SdCardDriver::new_mmc(host, &cfg)?;
-    let fs = MountedFatfs::mount(Fatfs::new_sdcard(0, card)?, MOUNT_POINT, 4)?;
-    Ok(SdCard {
-        _fs: fs,
-        _pin_supply: pin_supply,
-    })
+    let mounted = SdCardDriver::new_mmc(host, &cfg)
+        .and_then(|card| MountedFatfs::mount(Fatfs::new_sdcard(0, card)?, MOUNT_POINT, 4));
+    match mounted {
+        Ok(fs) => Ok(SdCard {
+            _fs: fs,
+            _pin_supply: pin_supply,
+        }),
+        Err(e) => {
+            restore_sdio_host();
+            Err(e)
+        }
+    }
+}
+
+/// Puts the SDMMC host back for the C6 after a failed mount. The card and
+/// the C6 share the one SDMMC controller (slot 0 and slot 1); esp_hosted
+/// initialises it in a C constructor, before `main`. When the card fails
+/// (none inserted), esp-idf-hal drops the `SdMmcHostDriver`, and as the
+/// only driver it knows it calls `sdmmc_host_deinit`, which tears the whole
+/// controller down, slot 1 and the transaction mutex included. esp_hosted's
+/// transport task then asserts in its first command to the C6
+/// (`xQueueSemaphoreTake queue.c (( pxQueue ))` from `hosted_sdio_card_init`)
+/// and the device reboots every few seconds. Re-initialising the host and
+/// esp_hosted's slot, from the same sdkconfig values it uses, lets that
+/// command succeed.
+fn restore_sdio_host() {
+    let nc = sys::gpio_num_t_GPIO_NUM_NC;
+    let pin = |p: u32| p as sys::gpio_num_t;
+    let slot_config = sys::sdmmc_slot_config_t {
+        clk: pin(sys::CONFIG_ESP_HOSTED_SDIO_PIN_CLK),
+        cmd: pin(sys::CONFIG_ESP_HOSTED_SDIO_PIN_CMD),
+        d0: pin(sys::CONFIG_ESP_HOSTED_SDIO_PIN_D0),
+        d1: pin(sys::CONFIG_ESP_HOSTED_SDIO_PIN_D1),
+        d2: pin(sys::CONFIG_ESP_HOSTED_SDIO_PIN_D2),
+        d3: pin(sys::CONFIG_ESP_HOSTED_SDIO_PIN_D3),
+        d4: nc,
+        d5: nc,
+        d6: nc,
+        d7: nc,
+        __bindgen_anon_1: sys::sdmmc_slot_config_t__bindgen_ty_1 { cd: nc },
+        __bindgen_anon_2: sys::sdmmc_slot_config_t__bindgen_ty_2 { wp: nc },
+        width: 4,
+        flags: 0,
+    };
+    // SAFETY: plain driver calls; the slot configuration is esp_hosted's own.
+    let (host, slot) = unsafe {
+        (
+            sys::sdmmc_host_init(),
+            sys::sdmmc_host_init_slot(sys::CONFIG_ESP_HOSTED_SDIO_SLOT as i32, &slot_config),
+        )
+    };
+    if host != 0 || slot != 0 {
+        log::error!("sd: SDMMC host for the C6 not restored (init {host}, slot {slot}): Wi-Fi will fail");
+    } else {
+        log::info!("sd: SDMMC host restored for the C6 (slot {})", sys::CONFIG_ESP_HOSTED_SDIO_SLOT);
+    }
 }
