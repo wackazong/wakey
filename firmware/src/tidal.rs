@@ -185,8 +185,12 @@ pub fn track_title(id: u64) -> Option<(String, String)> {
         .map(|t| (t.title, t.artist))
 }
 
-/// Writes a file on its own thread, in whole 128 KiB blocks from cache-line
+/// Writes a file on its own thread, in whole 32 KiB blocks from cache-line
 /// aligned buffers, so the network and the card work at the same time.
+///
+/// 32 KiB: the card and the C6 share the SDMMC controller, one transfer at
+/// a time; a 128 KiB write held the C6 off long enough to slow the download
+/// (1250 against 1420 KiB/s; 16 KiB: as 32).
 ///
 /// Aligned: FatFs hands such a block to the SD driver as is, and the driver
 /// sends it by DMA straight from PSRAM; from an unaligned `Vec` it copied
@@ -209,8 +213,8 @@ struct CardWriter {
     region: *mut u8,
 }
 
-const BLOCK: usize = 128 * 1024;
-const BLOCKS: usize = 4;
+const BLOCK: usize = 32 * 1024;
+const BLOCKS: usize = 16;
 
 impl CardWriter {
     fn create(path: &std::path::Path) -> std::io::Result<Self> {
@@ -646,6 +650,7 @@ impl Tidal {
                 log::warn!("bench: no network: {e}");
                 return;
             }
+            crate::netbench::run();
             let Some(track) = this.lock().playlist.first().cloned() else {
                 log::warn!("bench: no playlist");
                 return;

@@ -305,10 +305,16 @@ fn session(
     }
 }
 
+/// The C6 firmware this firmware expects: esp_hosted slave, the version of
+/// the host component (`Cargo.toml`) and of the image in `firmware/c6/`.
+/// The factory firmware (M5Stack's 1.4.1) works, but with warnings at start
+/// and a known RX stall; feature `c6-update` installs this one.
+pub const C6_FIRMWARE: [u32; 3] = [2, 13, 1];
+
 /// Logs the C6 firmware's version once per boot (`GetCoprocessorFwVersion`
 /// RPC, slave ≥ 1.0.0; the startup event of the factory firmware carries
-/// none and shows as 0.0.0). Returns it (major, minor, patch) the first
-/// time.
+/// none and shows as 0.0.0) and warns if it is not [`C6_FIRMWARE`]. Returns
+/// it (major, minor, patch) the first time.
 fn log_c6_version() -> Option<[u32; 3]> {
     static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -327,10 +333,36 @@ fn log_c6_version() -> Option<[u32; 3]> {
             v.prerelease,
             v.build
         );
-        Some([v.major1, v.minor1, v.patch1])
+        let version = [v.major1, v.minor1, v.patch1];
+        if version != C6_FIRMWARE {
+            log::warn!(
+                "wifi: the C6 runs {version:?}, expected {C6_FIRMWARE:?}: update it \
+                 (feature c6-update, firmware/c6/README.md)"
+            );
+        }
+        Some(version)
     } else {
         log::warn!("wifi: C6 firmware version not available: {err}");
         None
+    }
+}
+
+/// 802.11b/g/n, not ax: with 802.11ax (HE20) downloads through the C6
+/// were ~25 % slower (1160 against 1553 KiB/s, same router and place).
+/// Feature `download-bench` with `WAKEY_BENCH_WIFI=ax` at build time keeps
+/// ax for comparison.
+fn wifi_mode() {
+    use esp_idf_svc::sys;
+    #[cfg(feature = "download-bench")]
+    if option_env!("WAKEY_BENCH_WIFI") == Some("ax") {
+        log::warn!("wifi: bench: 802.11ax left on");
+        return;
+    }
+    let bgn = (sys::WIFI_PROTOCOL_11B | sys::WIFI_PROTOCOL_11G | sys::WIFI_PROTOCOL_11N) as u8;
+    // SAFETY: a plain driver call after `start`, before `connect`.
+    let err = unsafe { sys::esp_wifi_set_protocol(sys::wifi_interface_t_WIFI_IF_STA, bgn) };
+    if err != 0 {
+        log::warn!("wifi: 802.11b/g/n only: {err}");
     }
 }
 
@@ -391,6 +423,7 @@ fn sync_clock(
         ..Default::default()
     }))?;
     wifi.start()?;
+    wifi_mode();
     let ssid = cfg.ssid.clone();
     let mut attempt = 0;
     loop {

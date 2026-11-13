@@ -68,14 +68,28 @@ pub fn download(
     sink: &mut dyn FnMut(&[u8]) -> anyhow::Result<()>,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> anyhow::Result<u64> {
+    download_range(url, None, sink, progress)
+}
+
+/// [`download`], of a byte range if `range` is given (`Range: bytes=…`,
+/// e.g. `0-1023`; then only 206 counts).
+pub fn download_range(
+    url: &str,
+    range: Option<&str>,
+    sink: &mut dyn FnMut(&[u8]) -> anyhow::Result<()>,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> anyhow::Result<u64> {
     // A larger receive buffer for bulk data (4 KiB gave ~186 KiB/s).
     let mut conn = connection(Duration::from_secs(60), 16 * 1024)?;
-    conn.initiate_request(EspMethod::Get, url, &[])
+    let range = range.map(|r| format!("bytes={r}"));
+    let headers: Vec<(&str, &str)> = range.iter().map(|r| ("Range", r.as_str())).collect();
+    conn.initiate_request(EspMethod::Get, url, &headers)
         .map_err(|e| anyhow::anyhow!("download request: {e}"))?;
     conn.initiate_response()
         .map_err(|e| anyhow::anyhow!("download answer: {e}"))?;
     let status = conn.status();
-    anyhow::ensure!(status == 200, "download: HTTP {status}");
+    let ok = if range.is_some() { 206 } else { 200 };
+    anyhow::ensure!(status == ok, "download: HTTP {status}");
     let expected: Option<u64> = conn.header("Content-Length").and_then(|v| v.parse().ok());
     let mut buf = vec![0u8; 16 * 1024];
     let mut total = 0u64;

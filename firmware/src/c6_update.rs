@@ -24,6 +24,14 @@ pub fn run(running: [u32; 3]) {
         log::error!("c6-update: the image is not an ESP app image; nothing done");
         return;
     };
+    if image != crate::net::C6_FIRMWARE {
+        log::error!(
+            "c6-update: the image is {image:?}, the firmware expects {:?} \
+             (net::C6_FIRMWARE); nothing done",
+            crate::net::C6_FIRMWARE
+        );
+        return;
+    }
     if running == image {
         log::info!("c6-update: C6 runs {image:?}, as the image; nothing to do");
         return;

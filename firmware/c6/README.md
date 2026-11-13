@@ -6,6 +6,8 @@ The Tab5 ships with M5Stack's slave 1.4.1. It works with the host, but logs warn
 
 ## Updating a Tab5's C6
 
+The firmware checks the C6's version at the first Wi-Fi session after boot and warns in the log if it is not the expected one (`net::C6_FIRMWARE`): `wifi: the C6 runs [1, 4, 1], expected [2, 13, 1]: update it`.
+
 No cable: the P4 sends the image over SDIO (esp_hosted's slave OTA, `src/c6_update.rs`).
 
 1. Flash a build with the feature: `cargo run --release --features c6-update` (or `espflash flash --monitor` on the built ELF). A `config.json` with Wi-Fi is not needed; the update runs in the first Wi-Fi session after the driver is up.
@@ -28,4 +30,4 @@ python $IDF_PATH/tools/idf.py set-target esp32c6
 python $IDF_PATH/tools/idf.py build    # build/network_adapter.bin
 ```
 
-Keep DIO flash mode (the default): QIO images of slaves 2.1–2.8 refuse later OTAs. When the host component is updated, build the matching image, replace the file here and the name in `src/c6_update.rs`.
+Keep DIO flash mode (the default): QIO images of slaves 2.1–2.8 refuse later OTAs. When the host component is updated, build the matching image, replace the file here, the name in `src/c6_update.rs` and `net::C6_FIRMWARE`; `c6-update` refuses an image whose version differs from `net::C6_FIRMWARE`. A test image with another version (e.g. esp_hosted's RawTP test) needs `C6_FIRMWARE` changed for that build.
