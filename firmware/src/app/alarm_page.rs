@@ -23,6 +23,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
         cfg.weekdays.map(|d| d != 0).to_vec(),
     )));
     editor.set_error("".into());
+    *ctx.original.borrow_mut() = (cfg.id != 0).then(|| cfg.clone());
     *ctx.draft.borrow_mut() = cfg;
     fill(window, ctx);
     show_page(window, PAGE_ALARM);
@@ -34,10 +35,48 @@ pub fn fill(window: &AppWindow, ctx: &Ctx) {
     let cfg = ctx.draft.borrow();
     editor.set_name(cfg.name.as_str().into());
     editor.set_any_day(cfg.any_day());
+    editor.set_changed(changed(ctx));
     editor.set_sound(sounds::title(&cfg.sound).into());
     editor.set_volume_bars((i32::from(cfg.volume) + 19) / 20);
     editor.set_fade(fade_text(cfg.fade_in_s).into());
     editor.set_relative(relative(&ctx.alarm.borrow(), &cfg).into());
+}
+
+/// The draft differs from the alarm as saved (a new alarm always does);
+/// switched on or off does not count (the list's switch does that).
+pub fn changed(ctx: &Ctx) -> bool {
+    let draft = ctx.draft.borrow();
+    match &*ctx.original.borrow() {
+        Some(saved) => AlarmConfig { enabled: saved.enabled, ..draft.clone() } != *saved,
+        None => true,
+    }
+}
+
+/// Sichern (alarm and sound page): saves the draft, switched on, and shows
+/// the list; an error stays on the alarm page.
+pub fn save(window: &AppWindow, ctx: &Ctx) {
+    // Saving a changed alarm means it should ring: switched on.
+    let cfg = AlarmConfig {
+        enabled: true,
+        ..ctx.draft.borrow().clone()
+    };
+    let result = ctx.alarm.borrow_mut().save(cfg);
+    // The saved alarms decide which TIDAL tracks stay on the card.
+    sound_page::select_tidal(ctx);
+    match result {
+        Ok(()) => {
+            alarm_list::refresh(window, &ctx.alarm.borrow());
+            show_page(window, PAGE_LIST);
+        }
+        Err(e) => {
+            log::error!("alarm page: saving: {e}");
+            fill(window, ctx);
+            window
+                .global::<AlarmEditor>()
+                .set_error("Speichern fehlgeschlagen – SD-Karte prüfen".into());
+            show_page(window, PAGE_ALARM);
+        }
+    }
 }
 
 /// Connects the page's callbacks.
@@ -66,28 +105,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     editor.on_edit_name(ctx.with(name_page::open));
     editor.on_open_sound(ctx.with(sound_page::open));
     editor.on_cancel(ctx.with(|window, _| show_page(window, PAGE_LIST)));
-    editor.on_save(ctx.with(|window, ctx| {
-        // Saving a changed alarm means it should ring: switched on.
-        let cfg = AlarmConfig {
-            enabled: true,
-            ..ctx.draft.borrow().clone()
-        };
-        let result = ctx.alarm.borrow_mut().save(cfg);
-        // The saved alarms decide which TIDAL tracks stay on the card.
-        sound_page::select_tidal(ctx);
-        match result {
-            Ok(()) => {
-                alarm_list::refresh(window, &ctx.alarm.borrow());
-                show_page(window, PAGE_LIST);
-            }
-            Err(e) => {
-                log::error!("alarm page: saving: {e}");
-                window
-                    .global::<AlarmEditor>()
-                    .set_error("Speichern fehlgeschlagen – SD-Karte prüfen".into());
-            }
-        }
-    }));
+    editor.on_save(ctx.with(save));
 }
 
 pub fn fade_text(fade_in_s: u16) -> String {

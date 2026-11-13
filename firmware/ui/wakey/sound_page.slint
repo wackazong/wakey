@@ -31,11 +31,17 @@ export struct SoundRow {
 
 // Set from Rust (`app/sound_page.rs`).
 export global SoundPicker {
-    // 0 Datei, 1 TIDAL.
+    // 0 Datei, 1 TIDAL: the tab bar's choice.
     in property <int> tab;
+    // The list shown: follows `tab` once the tab bar's highlight has
+    // arrived (the list's repaint does not stall the slide).
+    in property <int> shown-tab;
+    // Both lists, filled when the page opens.
     in property <[SoundRow]> rows;
-    // A note below the rows (no TIDAL yet, no sound files), or empty.
+    in property <[SoundRow]> tidal-rows;
+    // A note below the rows (no sound files; no TIDAL yet), or empty.
     in property <string> empty;
+    in property <string> tidal-empty;
     in-out property <int> volume;
     // Index into 0, 10, 30, 60 s.
     in-out property <int> fade;
@@ -46,6 +52,10 @@ export global SoundPicker {
     in property <string> tidal-code;
 
     callback back();
+    // Saves the whole alarm and shows the list (as on the alarm page).
+    callback save();
+    // Sichern possible: a change, at least one day (set from Rust).
+    in property <bool> can-save;
     callback select-tab(int);
     callback select(int);
     callback volume-changed(int);
@@ -69,17 +79,44 @@ component Segment inherits Rectangle {
     // active item).
     background: ta.pressed ? Theme.surface-pressed : Theme.surface;
     property <length> item-width: root.width / Math.max(1, root.items.length);
+    // The highlight follows a finger that moved more than 12 px; released,
+    // it snaps to the nearer item. A tap picks the item under it.
+    property <bool> dragging;
+    property <length> drag-x: Math.clamp(
+        root.selected * root.item-width + ta.mouse-x - ta.pressed-x,
+        0px,
+        root.width - root.item-width);
+    function choose(i: int) {
+        if (i != root.selected) {
+            root.chosen(i);
+        }
+    }
     ta := TouchArea {
-        clicked => {
-            root.chosen(Math.clamp(Math.floor(self.mouse-x / root.item-width), 0, root.items.length - 1));
+        moved => {
+            if (Math.abs(self.mouse-x - self.pressed-x) > 12px) {
+                root.dragging = true;
+            }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up) {
+                if (root.dragging) {
+                    root.dragging = false;
+                    root.choose(Math.round(root.drag-x / root.item-width));
+                } else {
+                    root.choose(Math.clamp(Math.floor(self.mouse-x / root.item-width), 0, root.items.length - 1));
+                }
+            } else if (e.kind == PointerEventKind.cancel) {
+                root.dragging = false;
+            }
         }
     }
     Rectangle {
-        x: root.selected * root.item-width;
+        x: root.dragging ? root.drag-x : root.selected * root.item-width;
         width: root.item-width;
         border-radius: 44px;
         background: Theme.accent-dark;
-        animate x { duration: 180ms; easing: ease-out; }
+        // Straight under the finger while dragged.
+        animate x { duration: root.dragging ? 0ms : 180ms; easing: ease-out; }
     }
     for item[i] in root.items: Text {
         x: i * root.item-width;
@@ -89,6 +126,117 @@ component Segment inherits Rectangle {
         color: i == root.selected ? Theme.text : Theme.text-dim;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+}
+
+// One tab's list: rows, and a note below them.
+component SoundList inherits Rectangle {
+    in property <[SoundRow]> rows;
+    in property <string> empty;
+    // 1: TIDAL („Zufällig“'s icon in the covers' column).
+    in property <int> tab;
+    callback select(int);
+    // Below the rows, in the space left.
+    if root.empty != "": Text {
+        x: 40px;
+        y: root.rows.length * 112px;
+        width: parent.width - 80px;
+        height: parent.height - self.y;
+        text: root.empty;
+        font-size: 30px;
+        color: Theme.text-faint;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Flickable {
+        content-height: root.rows.length * 112px;
+        for row[i] in root.rows: Rectangle {
+            y: i * 112px;
+            height: 112px;
+            background: ta.pressed && !row.failed ? Theme.surface : row.selected ? Theme.selected : transparent;
+            if row.progress >= 0: Rectangle {
+                x: 0;
+                width: parent.width * clamp(row.progress, 0, 1);
+                height: parent.height;
+                background: Theme.accent-dark;
+            }
+            // On the TIDAL tab „Zufällig“'s icon sits in the covers'
+            // column, so the texts line up.
+            if row.kind == 1: Icon {
+                kind: 5;
+                x: root.tab == 1 ? 46px : 32px;
+                y: 34px;
+                width: 44px;
+                height: 44px;
+                color: Theme.accent;
+            }
+            if row.kind == 3: Rectangle {
+                x: 24px;
+                y: 12px;
+                width: 88px;
+                height: 88px;
+                background: Theme.surface;
+                opacity: row.failed ? 0.4 : 1;
+                Image {
+                    width: 88px;
+                    height: 88px;
+                    source: row.cover;
+                }
+            }
+            Text {
+                x: row.kind == 3 || (row.kind == 1 && root.tab == 1) ? 132px : row.kind == 1 ? 96px : 32px;
+                y: row.sub != "" ? 10px : 0;
+                height: row.sub != "" ? 54px : 112px;
+                width: parent.width - self.x - 96px;
+                text: row.title;
+                font-size: 40px;
+                color: row.failed ? Theme.text-faint : Theme.text;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
+            if row.sub != "": Marquee {
+                x: row.kind == 3 || (row.kind == 1 && root.tab == 1) ? 132px : row.kind == 1 ? 96px : 32px;
+                y: 62px;
+                height: 40px;
+                width: parent.width - self.x - 96px;
+                text: row.sub;
+                font-size: 30px;
+                text-color: row.failed ? Theme.text-faint : Theme.text-dim;
+                // Not while this list is hidden (the other tab).
+                running: root.visible;
+            }
+            if row.selected && !row.failed: Icon {
+                kind: 2;
+                x: parent.width - 90px;
+                y: 24px;
+                width: 64px;
+                height: 64px;
+                weight: 4.5px;
+                color: Theme.accent;
+            }
+            // Failed: a white cross on a red circle.
+            if row.failed: Rectangle {
+                x: parent.width - 80px;
+                y: 34px;
+                width: 44px;
+                height: 44px;
+                border-radius: 22px;
+                background: Theme.error;
+                Icon {
+                    kind: 13;
+                    x: 7px;
+                    y: 7px;
+                    width: 30px;
+                    height: 30px;
+                    color: Theme.text;
+                }
+            }
+            ta := TouchArea {
+                clicked => { root.select(i); }
+            }
+        }
     }
 }
 
@@ -105,6 +253,16 @@ export component SoundPage inherits Rectangle {
         width: 240px;
         text: "Alarm";
         clicked => { SoundPicker.back(); }
+    }
+    Button {
+        x: parent.width - 264px;
+        y: 20px;
+        width: 240px;
+        kind: 1;
+        text: "Sichern";
+        on-press: true;
+        enabled: SoundPicker.can-save;
+        clicked => { SoundPicker.save(); }
     }
 
     // The list takes what the settings card leaves: the card is as wide as
@@ -131,21 +289,22 @@ export component SoundPage inherits Rectangle {
         clip: true;
         background: Theme.card;
 
-        // Below the rows, in the space left.
-        if SoundPicker.empty != "": Text {
-            x: 40px;
-            y: SoundPicker.rows.length * 112px;
-            width: parent.width - 80px;
-            height: parent.height - self.y;
-            text: SoundPicker.empty;
-            font-size: 30px;
-            color: Theme.text-faint;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        SoundList {
+            visible: SoundPicker.shown-tab == 0;
+            rows: SoundPicker.rows;
+            empty: SoundPicker.empty;
+            tab: 0;
+            select(i) => { SoundPicker.select(i); }
+        }
+        SoundList {
+            visible: SoundPicker.shown-tab == 1 && SoundPicker.tidal-view == 0;
+            rows: SoundPicker.tidal-rows;
+            empty: SoundPicker.tidal-empty;
+            tab: 1;
+            select(i) => { SoundPicker.select(i); }
         }
         // The login: QR code of the link, and the code.
-        if SoundPicker.tab == 1 && SoundPicker.tidal-view == 1: Rectangle {
+        if SoundPicker.shown-tab == 1 && SoundPicker.tidal-view == 1: Rectangle {
             Rectangle {
                 x: 32px;
                 y: (parent.height - self.height) / 2;
@@ -175,93 +334,6 @@ export component SoundPage inherits Rectangle {
                 text: "Code: " + SoundPicker.tidal-code;
                 font-size: 40px;
                 color: Theme.text-dim;
-            }
-        }
-        Flickable {
-            content-height: SoundPicker.rows.length * 112px;
-            for row[i] in SoundPicker.rows: Rectangle {
-                y: i * 112px;
-                height: 112px;
-                background: ta.pressed && !row.failed ? Theme.surface : row.selected ? Theme.selected : transparent;
-                if row.progress >= 0: Rectangle {
-                    x: 0;
-                    width: parent.width * clamp(row.progress, 0, 1);
-                    height: parent.height;
-                    background: Theme.accent-dark;
-                }
-                // On the TIDAL tab „Zufällig“'s icon sits in the covers'
-                // column, so the texts line up.
-                if row.kind == 1: Icon {
-                    kind: 5;
-                    x: SoundPicker.tab == 1 ? 46px : 32px;
-                    y: 34px;
-                    width: 44px;
-                    height: 44px;
-                    color: Theme.accent;
-                }
-                if row.kind == 3: Rectangle {
-                    x: 24px;
-                    y: 12px;
-                    width: 88px;
-                    height: 88px;
-                    background: Theme.surface;
-                    opacity: row.failed ? 0.4 : 1;
-                    Image {
-                        width: 88px;
-                        height: 88px;
-                        source: row.cover;
-                    }
-                }
-                Text {
-                    x: row.kind == 3 || (row.kind == 1 && SoundPicker.tab == 1) ? 132px : row.kind == 1 ? 96px : 32px;
-                    y: row.sub != "" ? 10px : 0;
-                    height: row.sub != "" ? 54px : 112px;
-                    width: parent.width - self.x - 96px;
-                    text: row.title;
-                    font-size: 40px;
-                    color: row.failed ? Theme.text-faint : Theme.text;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
-                // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
-                if row.sub != "": Marquee {
-                    x: row.kind == 3 || (row.kind == 1 && SoundPicker.tab == 1) ? 132px : row.kind == 1 ? 96px : 32px;
-                    y: 62px;
-                    height: 40px;
-                    width: parent.width - self.x - 96px;
-                    text: row.sub;
-                    font-size: 30px;
-                    text-color: row.failed ? Theme.text-faint : Theme.text-dim;
-                }
-                if row.selected && !row.failed: Icon {
-                    kind: 2;
-                    x: parent.width - 90px;
-                    y: 24px;
-                    width: 64px;
-                    height: 64px;
-                    weight: 4.5px;
-                    color: Theme.accent;
-                }
-                // Failed: a white cross on a red circle.
-                if row.failed: Rectangle {
-                    x: parent.width - 80px;
-                    y: 34px;
-                    width: 44px;
-                    height: 44px;
-                    border-radius: 22px;
-                    background: Theme.error;
-                    Icon {
-                        kind: 13;
-                        x: 7px;
-                        y: 7px;
-                        width: 30px;
-                        height: 30px;
-                        color: Theme.text;
-                    }
-                }
-                ta := TouchArea {
-                    clicked => { SoundPicker.select(i); }
-                }
             }
         }
     }

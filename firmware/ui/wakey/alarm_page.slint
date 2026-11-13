@@ -26,6 +26,8 @@ export global AlarmEditor {
     in property <[bool]> days: [false, false, false, false, false, false, false];
     // At least one day selected (set from Rust).
     in property <bool> any-day;
+    // The draft differs from the saved alarm (set from Rust): Sichern.
+    in property <bool> changed;
     // "Klingelt in 9 Std. 14 Min.", set from Rust after every change.
     in property <string> relative;
     in property <string> sound;
@@ -103,7 +105,7 @@ export component AlarmPage inherits Rectangle {
         kind: 1;
         text: "Sichern";
         on-press: true;
-        enabled: AlarmEditor.any-day;
+        enabled: AlarmEditor.any-day && AlarmEditor.changed;
         clicked => { AlarmEditor.save(); }
     }
 

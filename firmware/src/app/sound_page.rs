@@ -36,6 +36,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
         (tab, cfg.volume, fade)
     };
     picker.set_tab(tab);
+    picker.set_shown_tab(tab);
     picker.set_volume(volume.into());
     picker.set_fade(fade);
     picker.set_previewing(false);
@@ -113,7 +114,7 @@ fn show_tidal(window: &AppWindow, ctx: &Ctx) {
 /// link changes).
 fn show_state(window: &AppWindow, state: &State) {
     let picker = window.global::<SoundPicker>();
-    let has_rows = picker.get_rows().row_count() > 0;
+    let has_rows = picker.get_tidal_rows().row_count() > 0;
     let note = match state {
         State::NoCredentials => {
             "TIDAL ist nicht eingerichtet: die Zugangsdaten fehlen in config.json."
@@ -127,7 +128,7 @@ fn show_state(window: &AppWindow, state: &State) {
                 picker.set_tidal_code(code.as_str().into());
             }
             picker.set_tidal_view(1);
-            picker.set_empty("".into());
+            picker.set_tidal_empty("".into());
             return;
         }
         State::Syncing if has_rows => "",
@@ -136,13 +137,13 @@ fn show_state(window: &AppWindow, state: &State) {
         State::LoggedIn => "Die Playlist ist leer.",
         State::Failed(e) => {
             picker.set_tidal_view(0);
-            picker.set_empty(format!("{e} Zum Wiederholen den Tab erneut öffnen.").into());
+            picker.set_tidal_empty(format!("{e} Zum Wiederholen den Tab erneut öffnen.").into());
             return;
         }
     };
     picker.set_tidal_view(0);
     picker.set_tidal_code("".into());
-    picker.set_empty(note.into());
+    picker.set_tidal_empty(note.into());
 }
 
 /// A QR code of `text`, black on white with a quiet zone, about 300 px.
@@ -180,7 +181,23 @@ fn cover_image(ctx: &Ctx, id: &str) -> Image {
     image
 }
 
+/// Sichern: only after a change, and with at least one day.
+fn update_can_save(window: &AppWindow, ctx: &Ctx) {
+    let any_day = ctx.draft.borrow().any_day();
+    window
+        .global::<SoundPicker>()
+        .set_can_save(any_day && alarm_page::changed(ctx));
+}
+
+/// Fills both tabs' lists (both ready when the tab changes).
 fn fill_rows(window: &AppWindow, ctx: &Ctx) {
+    update_can_save(window, ctx);
+    fill_list(window, ctx, TAB_FILES);
+    fill_list(window, ctx, TAB_TIDAL);
+}
+
+/// Fills one tab's list.
+fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
     let picker = window.global::<SoundPicker>();
     let selected = ctx.draft.borrow().sound.clone();
     let progress = ctx.tidal.progress();
@@ -197,7 +214,7 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         cover: Image::default(),
     };
     // Each row and the sound it stands for.
-    let choices: Vec<(SoundRow, Sound)> = if picker.get_tab() == TAB_FILES {
+    let choices: Vec<(SoundRow, Sound)> = if tab == TAB_FILES {
         let files = ctx.sound_files.borrow();
         let mut choices = vec![(
             row("Eingebauter Ton", "Piepen", &Sound::Beep, 0),
@@ -254,8 +271,23 @@ fn fill_rows(window: &AppWindow, ctx: &Ctx) {
         choices
     };
     let (rows, sounds): (Vec<SoundRow>, Vec<Sound>) = choices.into_iter().unzip();
-    *ctx.sound_choices.borrow_mut() = sounds;
-    picker.set_rows(ModelRc::new(VecModel::from(rows)));
+    let rows = ModelRc::new(VecModel::from(rows));
+    if tab == TAB_FILES {
+        *ctx.sound_choices.borrow_mut() = sounds;
+        picker.set_rows(rows);
+    } else {
+        *ctx.tidal_choices.borrow_mut() = sounds;
+        picker.set_tidal_rows(rows);
+    }
+}
+
+/// The sounds behind the rows of the list shown.
+fn choices<'a>(window: &AppWindow, ctx: &'a Ctx) -> std::cell::Ref<'a, Vec<Sound>> {
+    if window.global::<SoundPicker>().get_shown_tab() == TAB_TIDAL {
+        ctx.tidal_choices.borrow()
+    } else {
+        ctx.sound_choices.borrow()
+    }
 }
 
 /// Connects the page's callbacks.
@@ -269,12 +301,22 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         show_page(window, PAGE_ALARM);
     }));
     picker.on_select_tab(ctx.with_arg(|window, ctx, tab: i32| {
+        // The highlight slides now; the list changes when it has arrived
+        // (its repaint would stall the slide). Both lists are filled.
         window.global::<SoundPicker>().set_tab(tab);
-        fill_rows(window, ctx);
         tidal_tab(window, ctx, tab == TAB_TIDAL);
+        let weak = window.as_weak();
+        slint::Timer::single_shot(Duration::from_millis(200), move || {
+            if let Some(window) = weak.upgrade() {
+                let picker = window.global::<SoundPicker>();
+                if picker.get_tab() == tab {
+                    picker.set_shown_tab(tab);
+                }
+            }
+        });
     }));
     picker.on_select(ctx.with_arg(|window, ctx, i: i32| {
-        let Some(sound) = ctx.sound_choices.borrow().get(i as usize).cloned() else {
+        let Some(sound) = choices(window, ctx).get(i as usize).cloned() else {
             return;
         };
         // A failed download cannot be the alarm's sound.
@@ -301,7 +343,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     }));
     picker.on_refresh(ctx.with(|window, ctx| {
         if window.global::<SoundPicker>().get_tab() == TAB_TIDAL {
-            fill_rows(window, ctx);
+            fill_list(window, ctx, TAB_TIDAL);
             show_tidal(window, ctx);
         }
     }));
@@ -309,10 +351,10 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         // Only the downloading row's bar, in place (no list rebuild).
         let Some((id, fraction)) = ctx.tidal.progress() else { return };
         let want = Sound::TidalTrack(id.to_string());
-        let Some(i) = ctx.sound_choices.borrow().iter().position(|s| *s == want) else {
+        let Some(i) = ctx.tidal_choices.borrow().iter().position(|s| *s == want) else {
             return;
         };
-        let rows = window.global::<SoundPicker>().get_rows();
+        let rows = window.global::<SoundPicker>().get_tidal_rows();
         if let Some(mut row) = rows.row_data(i)
             && (row.progress - fraction).abs() >= 0.005
         {
@@ -320,15 +362,22 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
             rows.set_row_data(i, row);
         }
     }));
-    picker.on_volume_changed(ctx.with_arg(|_, ctx, v: i32| {
+    picker.on_volume_changed(ctx.with_arg(|window, ctx, v: i32| {
         let v = v.clamp(0, 100) as u8;
         ctx.draft.borrow_mut().volume = v;
         ctx.alarm.borrow_mut().preview_volume(v);
+        update_can_save(window, ctx);
     }));
-    picker.on_fade_changed(ctx.with_arg(|_, ctx, i: i32| {
+    picker.on_fade_changed(ctx.with_arg(|window, ctx, i: i32| {
         if let Some(&f) = FADES.get(i as usize) {
             ctx.draft.borrow_mut().fade_in_s = f;
         }
+        update_can_save(window, ctx);
+    }));
+    picker.on_save(ctx.with(|window, ctx| {
+        tidal_tab(window, ctx, false);
+        ctx.alarm.borrow_mut().stop_preview();
+        alarm_page::save(window, ctx);
     }));
     picker.on_preview(ctx.with(|window, ctx| {
         let previewing = ctx.alarm.borrow().is_previewing();

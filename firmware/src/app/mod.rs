@@ -120,10 +120,15 @@ pub struct Ctx {
     alarm: Rc<RefCell<AlarmClock>>,
     /// The alarm being edited (alarm, sound and name pages).
     draft: RefCell<AlarmConfig>,
+    /// The alarm as saved when its page opened (`None`: a new alarm);
+    /// Sichern only after a change.
+    original: RefCell<Option<AlarmConfig>>,
     /// `sounds/` as listed when the sound page opened.
     sound_files: RefCell<Vec<SoundFile>>,
     /// The sound each row of the sound page stands for.
     sound_choices: RefCell<Vec<wakey_core::alarm::Sound>>,
+    /// The same for the TIDAL tab's rows.
+    tidal_choices: RefCell<Vec<wakey_core::alarm::Sound>>,
     /// The name being typed.
     name: RefCell<String>,
     /// The built-in speaker, for the wheel click.
@@ -230,8 +235,10 @@ async fn app(spawner: embassy_executor::Spawner) {
         window: ui.as_weak(),
         alarm: alarm.clone(),
         draft: RefCell::new(AlarmConfig::default()),
+        original: RefCell::new(None),
         sound_files: RefCell::new(Vec::new()),
         sound_choices: RefCell::new(Vec::new()),
+        tidal_choices: RefCell::new(Vec::new()),
         name: RefCell::new(String::new()),
         click: builtin,
         tidal: crate::tidal::Tidal::new(config.tidal.clone(), wifi.clone()),

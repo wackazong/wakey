@@ -562,12 +562,21 @@ fn main() {
         sound("Meeresrauschen", "", false, 2),
     ])));
     sp.set_volume(60);
+    sp.set_can_save(true);
     sp.set_fade(1);
     ui.set_page(3);
     p.shot("3-sound");
     sp.set_previewing(true);
     p.shot("3-sound-previewing");
     sp.set_previewing(false);
+    // The tab bar's highlight dragged from „Datei“ towards „TIDAL“.
+    p.press(205.0, 176.0);
+    p.move_to(290.0, 176.0);
+    p.move_to(380.0, 176.0);
+    p.shot("3-sound-tab-dragging");
+    p.release(380.0, 176.0);
+    // Back to „Datei“ (nothing here switches the tab), animation done.
+    std::thread::sleep(Duration::from_millis(300));
     // No sound files: the built-in tone and a note, no "Zufällig".
     sp.set_rows(ModelRc::new(VecModel::from(vec![sound(
         "Eingebauter Ton",
@@ -578,8 +587,9 @@ fn main() {
     sp.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());
     p.shot("3-sound-no-files");
     sp.set_tab(1);
-    sp.set_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
-    sp.set_empty("TIDAL ist noch nicht eingerichtet.".into());
+    sp.set_shown_tab(1);
+    sp.set_tidal_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
+    sp.set_tidal_empty("TIDAL ist noch nicht eingerichtet.".into());
     p.shot("3-sound-tidal");
     // TIDAL tracks: one selected, one downloading, one selected and
     // downloading (the selection must show next to the progress bar).
@@ -589,8 +599,8 @@ fn main() {
     both.progress = 0.7;
     let mut failed_row = track("Morning Song", "Nicht mehr in der Playlist · The Lumineers", false, [120, 90, 60], [30, 50, 40]);
     failed_row.failed = true;
-    sp.set_empty("".into());
-    sp.set_rows(ModelRc::new(VecModel::from(vec![
+    sp.set_tidal_empty("".into());
+    sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
         sound("Zufällig", "wechselt jeden Tag", false, 1),
         track("Here Comes the Sun", "The Beatles", true, [240, 200, 80], [200, 90, 40]),
         failed_row,
@@ -603,7 +613,7 @@ fn main() {
     // the built-in tone), shown failed.
     let mut picked_failed = track("Morning Song", "The Lumineers", true, [120, 90, 60], [30, 50, 40]);
     picked_failed.failed = true;
-    sp.set_rows(ModelRc::new(VecModel::from(vec![
+    sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
         sound("Zufällig", "wechselt jeden Tag", false, 1),
         track("Here Comes the Sun", "The Beatles", false, [240, 200, 80], [200, 90, 40]),
         picked_failed,
