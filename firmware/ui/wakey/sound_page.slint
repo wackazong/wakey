@@ -298,11 +298,11 @@ export component SoundPage inherits Rectangle {
     background: Theme.background;
 
     TouchArea { }
-    // The scrolling texts' clock: a timer, as the render loop draws
-    // frames for timers (not for `animation-tick()` alone). It runs only
-    // while the page shows the texts and adds the time since the last tick;
-    // after a pause (the list layer moved the list) one step, so the texts
-    // go on from where they stood.
+    // The scrolling texts' clock: a timer that adds the time since its last
+    // tick. A binding on `animation-tick()` would animate as well (the render
+    // loop draws for it); the timer can be paused while the list layer moves
+    // the list (`running`), and after such a pause it adds one step, so the
+    // texts go on from where they stood.
     property <float> marquee-last;
     property <float> marquee-dt;
     Timer {

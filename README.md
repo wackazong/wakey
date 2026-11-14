@@ -14,6 +14,7 @@ Working today: clock screen with the RTC time (Europe/Zurich), several alarms (e
 | [`docs/hardware.md`](docs/hardware.md) | Tab5 pins, I2C devices, expanders, power, the speaker |
 | [`docs/pitfalls.md`](docs/pitfalls.md) | traps already hit and their fixes — read before changing an area |
 | [`docs/roadmap.md`](docs/roadmap.md) | what comes next and the decisions for it |
+| [`docs/upgrades.md`](docs/upgrades.md) | what can go, or must be re-checked, when a dependency is updated |
 | [`docs/schematics/`](docs/schematics) | Tab5 schematic pages |
 | [`tools/ui-preview/`](tools/ui-preview/src/main.rs) | host tool: renders the firmware's pages to PNG with sample data |
 | [`spikes/tidal-download/`](spikes/tidal-download/README.md) | host tool: download a track from your TIDAL account (V2 groundwork) |

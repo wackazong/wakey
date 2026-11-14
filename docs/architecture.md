@@ -1,6 +1,6 @@
 # Architecture
 
-Wakey is a bedside alarm clock on the M5Stack Tab5: a 1280×720 touch clock that plays a sound file from the microSD card on a USB speaker (Creative Pebble V3) at alarm time. This document describes the software as it is. Hardware facts are in [hardware.md](hardware.md), traps already hit in [pitfalls.md](pitfalls.md), what comes next in [roadmap.md](roadmap.md).
+Wakey is a bedside alarm clock on the M5Stack Tab5: a 1280×720 touch clock that plays a sound file from the microSD card on a USB speaker (Creative Pebble V3) at alarm time. This document describes the software as it is. Hardware facts are in [hardware.md](hardware.md), traps already hit in [pitfalls.md](pitfalls.md), what comes next in [roadmap.md](roadmap.md), what can go with a dependency update in [upgrades.md](upgrades.md).
 
 ## Platform
 
