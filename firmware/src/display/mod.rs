@@ -31,7 +31,7 @@ pub mod ppa;
 use core::ffi::c_void;
 use core::ops::Range;
 use core::ptr;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::interrupt::{self, asynch::HalIsrNotification};
 use esp_idf_svc::hal::lcd::DSI;
@@ -121,6 +121,58 @@ impl PanelVariant {
     }
 }
 
+// ── Frame buffers, kept for good ────────────────────────────────────────────
+
+/// The two frame buffers, allocated by the first stream and handed to every
+/// later one (`vendor/esp-idf-components/esp_lcd`: the DPI driver allocates
+/// and frees them through these functions). A link rebuild (display sleep's
+/// 33 Hz) freed and allocated them anew; PSRAM is tight in the app (~2 MB
+/// free) and the freed 3.7 MB came back too fragmented for new ones (the
+/// largest block 8 KB short): no frame buffer, a crash on waking.
+static FB_POOL: [AtomicPtr<c_void>; 2] = [const { AtomicPtr::new(ptr::null_mut()) }; 2];
+/// Which of [`FB_POOL`] a panel has now.
+static FB_IN_USE: [AtomicBool; 2] = [const { AtomicBool::new(false) }; 2];
+
+#[unsafe(no_mangle)]
+extern "C" fn esp_lcd_dpi_panel_alloc_fb(size: usize) -> *mut c_void {
+    if size != PIXELS * 2 {
+        // Not ours (another size): as the driver would.
+        return unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) };
+    }
+    for (slot, in_use) in FB_POOL.iter().zip(&FB_IN_USE) {
+        if in_use.swap(true, Ordering::AcqRel) {
+            continue;
+        }
+        let mut fb = slot.load(Ordering::Acquire);
+        if fb.is_null() {
+            fb = unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) };
+            if fb.is_null() {
+                in_use.store(false, Ordering::Release);
+                return fb;
+            }
+            slot.store(fb, Ordering::Release);
+        } else {
+            // As from calloc: the new stream starts black.
+            // SAFETY: the buffer is `size` bytes and no panel has it.
+            unsafe { ptr::write_bytes(fb.cast::<u8>(), 0, size) };
+        }
+        return fb;
+    }
+    // More than two at once (never: one panel at a time).
+    unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn esp_lcd_dpi_panel_free_fb(fb: *mut c_void) {
+    for (slot, in_use) in FB_POOL.iter().zip(&FB_IN_USE) {
+        if slot.load(Ordering::Acquire) == fb && !fb.is_null() {
+            in_use.store(false, Ordering::Release);
+            return;
+        }
+    }
+    unsafe { sys::heap_caps_free(fb) };
+}
+
 // ── Frame-complete ISR → async ──────────────────────────────────────────────
 
 /// The DPI driver's allocation of a frame buffer (`esp_lcd_panel_dpi.c`).
@@ -160,9 +212,6 @@ pub struct Display {
     pending_flip: Option<u32>,
     /// Pixel clock override, else the panel's own.
     pixel_clock_mhz: Option<f32>,
-    /// While the stream is suspended: the freed frame buffers' memory, held
-    /// for the next stream (see [`Display::suspend_stream`]).
-    held: [*mut c_void; 2],
 }
 
 impl Display {
@@ -178,7 +227,6 @@ impl Display {
             front: 0,
             pending_flip: None,
             pixel_clock_mhz: None,
-            held: [ptr::null_mut(); 2],
         };
 
         unsafe {
@@ -237,11 +285,6 @@ impl Display {
     /// Creates the DPI panel and starts streaming fb0 (video mode).
     fn start_stream(&mut self) -> Result<(), EspError> {
         let timing = self.variant.timing();
-        // The held memory goes to the new frame buffers.
-        for h in &mut self.held {
-            unsafe { sys::heap_caps_free(*h) };
-            *h = ptr::null_mut();
-        }
         unsafe {
             // Video mode (DPI): two frame buffers in PSRAM, allocated by the driver.
             let mut dpi_cfg: sys::esp_lcd_dpi_panel_config_t = core::mem::zeroed();
@@ -452,14 +495,6 @@ impl Display {
         esp!(unsafe { sys::esp_lcd_panel_del(self.panel) })?;
         self.panel = ptr::null_mut();
         self.fbs = [ptr::null_mut(); 2];
-        // PSRAM is tight in the app (~6.5 MB free, the largest block often
-        // just short of one frame buffer): if anything took a piece of the
-        // freed buffers before the next stream allocates its own, that
-        // failed (ESP_ERR_NO_MEM, seen on the fourth sleep). Hold the
-        // memory with the driver's own allocation until then.
-        for h in &mut self.held {
-            *h = unsafe { sys::heap_caps_calloc(1, PIXELS * 2, FB_CAPS) };
-        }
         Ok(())
     }
 

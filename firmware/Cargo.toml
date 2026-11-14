@@ -103,6 +103,12 @@ debug = 2
 [[package.metadata.esp-idf-sys.extra_components]]
 bindings_header = "bindings/extra.h"
 
+# ESP-IDF's esp_lcd with the DPI panel's frame buffers through replaceable
+# functions (src/display/mod.rs keeps two for good); it takes the place of
+# ESP-IDF's own component (vendor/README.md).
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["vendor/esp-idf-components"]
+
 # Wi-Fi through the on-board ESP32-C6 (SDIO): Espressif's esp_hosted
 # transport and the esp_wifi_remote API shim, so esp_wifi (and EspWifi)
 # work on the radio-less P4. Host 2.x talks to the Tab5's factory C6
