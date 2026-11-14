@@ -14,9 +14,6 @@ use std::time::Duration;
 
 static IMAGE: &[u8] = include_bytes!("../c6/esp_hosted_slave-2.13.1-esp32c6.bin");
 
-/// Bytes per write RPC (esp_hosted's example uses 1400–1500).
-const CHUNK: usize = 1400;
-
 /// Compares the C6's `running` version with the image's and updates the
 /// C6 if they differ; restarts the P4 after an update.
 pub fn run(running: [u32; 3]) {
@@ -71,29 +68,9 @@ fn image_version() -> Option<[u32; 3]> {
 
 fn update() -> anyhow::Result<()> {
     use esp_idf_svc::sys;
-    // SAFETY: plain RPCs; the transport is up during a Wi-Fi session.
-    let err = unsafe { sys::esp_hosted_slave_ota_begin() };
-    anyhow::ensure!(err == 0, "ota_begin: {err}");
-    log::info!("c6-update: begin ok");
-    let mut buf = vec![0u8; CHUNK];
-    let mut sent = 0usize;
-    let mut next_report = 0usize;
-    for chunk in IMAGE.chunks(CHUNK) {
-        buf[..chunk.len()].copy_from_slice(chunk);
-        // SAFETY: `buf` holds `chunk.len()` valid bytes for the call.
-        let err = unsafe { sys::esp_hosted_slave_ota_write(buf.as_mut_ptr(), chunk.len() as u32) };
-        anyhow::ensure!(err == 0, "ota_write at {sent}: {err}");
-        sent += chunk.len();
-        if sent * 10 / IMAGE.len() >= next_report {
-            log::info!("c6-update: {} %", sent * 100 / IMAGE.len());
-            next_report = sent * 10 / IMAGE.len() + 1;
-        }
-    }
-    // SAFETY: as above.
-    let err = unsafe { sys::esp_hosted_slave_ota_end() };
-    anyhow::ensure!(err == 0, "ota_end: {err}");
+    crate::c6_ota::write(IMAGE, |percent| log::info!("c6-update: {percent} %"))?;
     log::info!("c6-update: end ok (image checked by the C6)");
-    // SAFETY: as above.
+    // SAFETY: plain RPC; the transport is up.
     let err = unsafe { sys::esp_hosted_slave_ota_activate() };
     if err == 0 {
         log::info!("c6-update: activate ok");

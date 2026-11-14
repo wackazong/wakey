@@ -17,7 +17,9 @@ export struct SoundRow {
     // Second line (artist, "Piepen"), or empty.
     sub: string,
     selected: bool,
-    // 0 built-in tone, 1 random, 2 file, 3 TIDAL track (with `cover`).
+    // 0 built-in tone, 1 random, 2 file, 3 TIDAL track (with `cover`),
+    // 4 a note at the end of the list (AirDrop; not a choice), 5 a file
+    // arriving by AirDrop (with `progress`; not a choice).
     kind: int,
     // A TIDAL track's album cover (88 × 88); empty while not on the card.
     cover: image,
@@ -81,6 +83,8 @@ export global SoundPicker {
     callback refresh();
     // Twice a second while the TIDAL tab is open: the progress bar.
     callback tick();
+    // Four times a second while the Files tab is open: AirDrop's state.
+    callback airdrop-tick();
 }
 
 // As high as a Button (88 px): smaller targets were missed. The active
@@ -172,9 +176,22 @@ export component SoundRowItem inherits Rectangle {
     callback clicked();
     width: SoundListLayout.width;
     height: SoundListLayout.pitch;
-    background: ta.pressed && !root.item.failed ? Theme.surface
+    background: ta.pressed && !root.item.failed && root.item.kind < 4 ? Theme.surface
         : root.item.selected ? Theme.selected
         : root.opaque ? Theme.card : transparent;
+
+    // The AirDrop note: centred, faint, as the list's other notes.
+    if root.item.kind == 4: Text {
+        x: 40px;
+        width: parent.width - 80px;
+        height: parent.height;
+        text: root.item.title;
+        font-size: 30px;
+        color: Theme.text-faint;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
 
     if root.item.progress >= 0: Rectangle {
         x: 0;
@@ -182,30 +199,7 @@ export component SoundRowItem inherits Rectangle {
         height: parent.height;
         background: Theme.accent-dark;
     }
-    // On the TIDAL tab „Zufällig“'s icon sits in the covers'
-    // column, so the texts line up.
-    if root.item.kind == 1: Icon {
-        kind: 5;
-        x: root.tab == 1 ? 46px : 32px;
-        y: 34px;
-        width: 44px;
-        height: 44px;
-        color: Theme.accent;
-    }
-    if root.item.kind == 3: Rectangle {
-        x: 24px;
-        y: 12px;
-        width: 88px;
-        height: 88px;
-        background: Theme.surface;
-        opacity: root.item.failed ? 0.4 : 1;
-        Image {
-            width: 88px;
-            height: 88px;
-            source: root.item.cover;
-        }
-    }
-    Text {
+    if root.item.kind != 4: Text {
         x: root.item.kind == 3 || (root.item.kind == 1 && root.tab == 1) ? 132px : root.item.kind == 1 ? 96px : 32px;
         y: root.item.sub != "" ? 10px : 0;
         height: root.item.sub != "" ? 54px : 112px;
@@ -217,7 +211,7 @@ export component SoundRowItem inherits Rectangle {
         vertical-alignment: center;
     }
     // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
-    if root.item.sub != "": Marquee {
+    if root.item.sub != "" && root.item.kind != 4: Marquee {
         x: root.item.kind == 3 || (root.item.kind == 1 && root.tab == 1) ? 132px : root.item.kind == 1 ? 96px : 32px;
         y: 62px;
         height: 40px;
@@ -254,6 +248,7 @@ export component SoundRowItem inherits Rectangle {
         }
     }
     ta := TouchArea {
+        enabled: root.item.kind < 4;
         clicked => { root.clicked(); }
     }
 }

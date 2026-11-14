@@ -1,10 +1,12 @@
-# AirDrop on the C6 (spike)
+# The C6's AirDrop receiver
 
-Can the Tab5 receive sound files by AirDrop from an iPhone, with nothing installed on the phone? **Yes.** The P4 has no radio; the ESP32-C6 normally runs esp_hosted as the P4's Wi-Fi. This spike runs [ESP32Drop](https://github.com/s-iwaki-d/ESP32Drop) (0BSD; an independent re-implementation of AWDL and the AirDrop receiver, written for the ESP32-S3) on the C6 instead, with ten patches and a streaming receive path that needs no PSRAM.
+The image the clock boots on its ESP32-C6 while the sound page's Files tab is shown: [ESP32Drop](https://github.com/s-iwaki-d/ESP32Drop) (0BSD; an independent re-implementation of AWDL and the AirDrop receiver, written for the ESP32-S3) with ten patches, a streaming receive path that needs no PSRAM, and a link that sends each received file to the P4 as frames over IO2 (`main/link.h`). How the clock switches the C6 and stores the files: [`docs/architecture.md`](../../../docs/architecture.md#airdrop); building and installing the image: [`../README.md`](../README.md#airdrop-the-c6s-other-two-images).
 
 **Unofficial interoperability.** AirDrop and AWDL are Apple's undocumented protocols; ESP32Drop is reverse-engineered and not affiliated with Apple. An iOS update can break it. The receiver is visible only to senders while the iPhone's AirDrop is set to receive from "Everyone" (ESP32Drop cannot do "Contacts Only").
 
-## Result (2026-11-13, iPhone → Tab5)
+This started as a spike (`spikes/airdrop-c6`, removed 2026-11-14; in the history up to commit 14f4b33). Its findings follow.
+
+## Measured (2026-11-13/14, iPhone → Tab5, in the spike)
 
 - "Wakey" appears in the iPhone's AirDrop list (and in a Mac's Finder AirDrop window).
 - `Tintenfischsong.m4a`, 416,029 bytes, arrived complete seven times: twice with CRC32 `a5e16179`, then five times (three sessions, three TX rates) with `9fe9bfd1`, same size (not checked against the phone's copy: a re-saved file or a changed metadata atom would do it; each record's adler32 passed), plus iOS's AppleDouble sidecar `._Tintenfischsong.m4a` (528 bytes, to be skipped).
@@ -44,7 +46,7 @@ The C6 has 2.4 GHz only, so AWDL runs on channel 6 alone. Every AWDL device has 
 
 ESP32Drop builds for the C6 with ESP-IDF 5.5.5 nearly as is (it uses only `millis()` from Arduino; the C6's ROM has the same miniz). What did not work, in the order found:
 
-1. **No console on IO2.** The bootloader routes the console's pins; the app only sets the baud rate. The C6 keeps esp_hosted's bootloader (default pins, the J1 header), so `main.cpp` calls `uart_set_pin` itself.
+1. **No console on IO2.** The bootloader routes the console's pins; the app only sets the baud rate. The C6 keeps esp_hosted's bootloader (default pins, the J1 header). The receiver has no console now: `main/link.c` drives UART1 on IO2 itself and sends the log as frames.
 2. **Single core.** ESP32Drop pins its tasks to core 1, which asserts on the C6 (patch 0003).
 3. **No PSRAM.** ESP32Drop holds the whole archive (and starts with a 320 KiB receive buffer). The streaming decoder (`components/esp32drop/stream`) holds the 32 KiB inflate window and a 4 KiB read buffer, whatever the file size (patches 0001, 0002).
 4. **The sender's frames were not ACKed.** On the soft-AP interface the C6's MAC does not ACK AWDL's unicast data frames (no ToDS/FromDS, the shared AWDL BSSID); the S3's does. 85 % of the frames for us arrived as 802.11 retries and every TLS handshake was reset by the sender. AWDL now runs on the unassociated station interface, where the C6 ACKs them (patch 0005). The receive BSSID check (`hal_rx_disable_bssid_check`) was off already; not the cause.
@@ -56,13 +58,13 @@ ESP32Drop builds for the C6 with ESP-IDF 5.5.5 nearly as is (it uses only `milli
 ```
 iPhone ──AWDL ch 6──▶ C6: ESP32Drop (AWDL, IPv6, mDNS, TLS, HTTP /Discover /Ask /Upload)
                           └─ /Upload body ─▶ ad_stream: DvZip records ─▶ tinfl ─▶ cpio ─▶ sink
-                                                                         (spike: CRC + count;
-                                                                          clock: to the P4)
+                                                                                     │
+P4: wakey_core::airdrop ◀── frames, UART 3 Mbaud, IO2 → GPIO14 (main/link.c) ◀───────┘
 ```
 
-- `components/esp32drop/stream/ad_stream.{h,c}`: plain C, no platform calls. DvZip records (4-byte header, bit 31 = stored) → per-record zlib through the ROM's `tinfl_decompress` with a wrapping 32 KiB window → an incremental cpio (odc, newc) parser → `begin(name, size)` / `data` / `end(complete)` per regular file. Every length from the sender is bounded (records ≤ 1 MiB, names ≤ 255 bytes). A file's `end(true)` means its bytes were delivered, not verified (a record's adler32 comes at its end): files stay provisional until the transfer's verdict.
-- With `AD_RX_STREAM`, `/Upload` goes to `rx_upload_stream()`: the chunked body is read in 4 KiB pieces into the decoder; it ends on an end record, the last chunk, the archive trailer at a record boundary, or a record boundary + 3 s silence; the status is decided before the response (200 only for a whole, intact archive; 400 broken; 507 the sink refused), then `done(ok, why)`. API: `ad_on_stream(sink, done)`, callbacks on ESP32Drop's TLS task.
-- `main/main.cpp`: the C6 app. Routes the console to IO2, points the boot slot back at esp_hosted (if the other slot holds `network_adapter`), measures the handshake's crypto, starts AWDL and the listener as "Wakey", sets the raw TX rate (11g 24 Mbit/s), logs each file (size, CRC32, time), each transfer (rate), and once a second the link, the AirDrop funnel (mDNS → TCP → TLS → /Discover → /Ask → /Upload), the IPv6 link's counters, the peers' channel-6 slots and the heap.
+- `components/esp32drop/stream/ad_stream.{h,c}`: plain C, no platform calls. DvZip records (4-byte header, bit 31 = stored) → per-record zlib through the ROM's `tinfl_decompress` with a wrapping 32 KiB window → an incremental cpio (odc, newc) parser → `begin(name, size)` / `data` / `end(complete)` per regular file. Every length from the sender is bounded (records ≤ 1 MiB, names ≤ 255 bytes). A file's `end(true)` means its bytes were delivered, not verified (a record's adler32 comes at its end): files stay provisional until the transfer's verdict, which the P4 waits for before it renames the part files.
+- With `AD_RX_STREAM`, `/Upload` goes to `rx_upload_stream()`: the chunked body is read in 4 KiB pieces into the decoder; it ends on an end record, the last chunk, the archive trailer at a record boundary, or a record boundary + 3 s silence; the status is decided before the response (200 only for a whole, intact archive; 400 broken; 507 the sink refused), then `done(ok, why)`. API: `ad_on_stream(sink, done)`, callbacks on ESP32Drop's TLS task, which a full UART buffer blocks (back-pressure through TCP).
+- `main/main.cpp`: points the boot slot back at esp_hosted first (if the other slot holds `network_adapter`), starts AWDL and the listener as "Wakey" (raw TX 11g 24 Mbit/s, "2.4 GHz only"), sends each file and a status once a second.
 
 ## Patches to ESP32Drop
 
@@ -73,11 +75,11 @@ Applied by `fetch.sh` in order; 0001–0003, 0005–0007 and 0010 keep ESP32Drop
 | `0001-bulk-heap-configurable` | PSRAM allocations and the 384 KiB reserve as `AD_BULK_CAPS`, `AD_RX_HEADROOM` |
 | `0002-streaming-receive` | `AD_RX_STREAM`: `rx_upload_stream()`, `ad_on_stream()` |
 | `0003-single-core` | tasks on core 0 when there is only one |
-| `0004-spike-diagnostics` | counters for the spike's log: transmitted IPv6 by kind and TCP flags, unicast frames for us and how many as retries, the raw TX rate |
+| `0004-spike-diagnostics` | counters for the spike's log (unused by `main.cpp` now): transmitted IPv6 by kind and TCP flags, unicast frames for us and how many as retries, the raw TX rate |
 | `0005-station-interface` | `AWDL_WIFI_IF` (default the soft-AP; the C6 build: the station) |
 | `0006-release-multicast-tx-slots` | multicast completions release their in-flight slot; the reaper |
 | `0007-stream-ends-on-trailer` | the upload ends on the archive trailer |
-| `0008-rx-format-and-peers` | more counters: frames for us by PHY format, each peer's channel-6 slots, the master and the sender |
+| `0008-rx-format-and-peers` | more counters (unused by `main.cpp` now): frames for us by PHY format, each peer's channel-6 slots, the master and the sender |
 | `0009-ack-to-a-sender-just-heard` | frames for a peer heard in the last 8 ms leave outside the master's window (`AWDL_FOLLOW_US`) |
 | `0010-settable-capabilities` | `awdl_set_caps()`: the data_path_state flags and HT capabilities our frames announce |
 
@@ -87,36 +89,28 @@ Applied by `fetch.sh` in order; 0001–0003, 0005–0007 and 0010 keep ESP32Drop
 ./fetch.sh                 # ESP32Drop and miniz at pinned commits into vendor/, patches applied
 ./test/run.sh              # host test of the streaming decoder (ASan, UBSan)
 . ./env.sh                 # the firmware's ESP-IDF (firmware/.embuild, from its first build)
-idf.py set-target esp32c6  # once
-idf.py build               # build/wakey_airdrop_c6.bin
+python "$IDF_PATH/tools/idf.py" set-target esp32c6   # once
+python "$IDF_PATH/tools/idf.py" build                # build/wakey_airdrop_c6.bin
 ```
 
-`env.sh` defines `idf.py` as an alias; in a non-interactive shell call `python "$IDF_PATH/tools/idf.py"`. After a change to `sdkconfig.defaults`, delete `sdkconfig` (an existing one wins).
+After a change to `sdkconfig.defaults`, delete `sdkconfig` (an existing one wins). Then copy the image to `../wakey_airdrop_c6-<version>.bin` (`PROJECT_VER` in `CMakeLists.txt`), and update `../pack.py`.
 
-## Run on the Tab5
+## Recovery
 
-No cable. The P4 installs the image through esp_hosted's slave OTA and prints the C6's log, which comes back on IO2 → P4 GPIO14 (`RF_C6_IO2`) at 921600 baud.
+The receiver's first action is to make esp_hosted the next boot, so a crash after that point is harmless. An image that crashes before that switch has finished keeps booting itself: seen 2026-11-13, when a bigger `app_main` frame overflowed the main task's 3,584-byte stack inside `esp_ota_set_boot_partition()` (it verifies the esp_hosted image), hundreds of boots in a row. Since then the main task has 8 KiB and `boot_hosted_next()` is not inlined into `app_main`.
 
-1. Build the image (above), then `cd firmware && cargo run --release --bin airdrop_probe --features airdrop-probe` (`firmware/src/bin/airdrop_probe.rs`; the image is built into the probe). The C6 must run esp_hosted, as after any power cycle.
-2. The log shows the install (~14 s), then `c6 | …` lines: "ready: 'Wakey' …", the link ("master locked"), status once a second.
-3. On the iPhone: AirDrop receiving "Everyone for 10 Minutes", share a file, pick "Wakey". A Mac's Finder AirDrop window also browses (discovery and `/Discover` only).
-4. Back to normal: flash the normal firmware. Booting it powers the C6 off and on, and the C6 starts esp_hosted again.
-
-**Recovery.** The spike's first action is to make esp_hosted the next boot, so a crash after that point is harmless (seen: the first build's core-1 assert rebooted into esp_hosted). An image that crashes before that switch has finished keeps booting itself: seen 2026-11-13, when a bigger `app_main` frame overflowed the main task's 3,584-byte stack inside `esp_ota_set_boot_partition()` (it verifies the esp_hosted image), hundreds of boots in a row. Since then the main task has 8 KiB and `boot_hosted_next()` is not inlined into `app_main`.
-
-The way back without a USB-UART adapter is `rescue/`, a P4 firmware (C, ESP-IDF, Espressif's esp-serial-flasher): it powers the C6, resets it (GPIO15) into its ROM loader and talks to that over SDIO, reads the C6's partition table, writes `firmware/c6/esp_hosted_slave-2.13.1-esp32c6.bin` into the slot the bootloader starts with blank otadata (factory, else `ota_0`, MD5-verified), and erases otadata. The P4 cannot drive the C6's boot strap IO9: bridge the pads G9 and GND next to the C6 module (header J1 "C6_ISP": 3V3, TXD, RXD, RST, G9, GND; under the back cover) while the tool resets the C6 (every 3 s, until "connected"). Used on 2026-11-13: connected, 1.2 MB written in 5 s, and the clock's next boot reported "C6 firmware 2.13.1".
+The way back without a USB-UART adapter is [`../rescue`](../rescue/main/rescue.c), a P4 firmware (C, ESP-IDF, Espressif's esp-serial-flasher): it powers the C6, resets it (GPIO15) into its ROM loader and talks to that over SDIO, reads the C6's partition table, writes `../esp_hosted_slave-2.13.1-esp32c6.bin` into the slot the bootloader starts with blank otadata (factory, else `ota_0`, MD5-verified), and erases otadata. The P4 cannot drive the C6's boot strap IO9: bridge the pads G9 and GND next to the C6 module (header J1 "C6_ISP": 3V3, TXD, RXD, RST, G9, GND; under the back cover) while the tool resets the C6 (every 3 s, until "connected"). Used on 2026-11-13: connected, 1.2 MB written in 5 s, and the clock's next boot reported "C6 firmware 2.13.1" (the clock then installs its own esp_hosted and the receiver again).
 
 ```sh
-. ./env.sh && cd rescue
+cd ../rescue && ./fetch.sh && . ../airdrop/env.sh
 python "$IDF_PATH/tools/idf.py" set-target esp32p4   # once
 python "$IDF_PATH/tools/idf.py" build
 cd build && python -m esptool --chip esp32p4 -p <port> write_flash "@flash_args"
 ```
 
-It uses `firmware/partitions.csv`, so the clock's NVS stays where it is. Afterwards flash the clock firmware again.
+It uses the clock's `partitions.csv`, so the clock's NVS and the `c6` partition stay. Afterwards flash the clock firmware again.
 
-## Next
+## Open
 
-- More transfers: several files at once, a Mac as sender, the iPhone off its 5 GHz network (more channel-6 slots?).
-- For the clock (`docs/roadmap.md`): one C6 firmware with both roles (esp_hosted for Wi-Fi, AirDrop while a "Receive" screen is open; they cannot run at once), the files streamed to the P4 over esp_hosted's custom-data channel (`esp_hosted_send_custom_data`) into `.part` files on the card, AAC/ALAC/MP3 decoding (`symphonia`), the receive screen.
-- The C6 part is C (ESP32Drop, like esp_hosted itself): an exception to the project's Rust-only rule, to be decided.
+- Several files at once, a Mac as sender, the iPhone off its 5 GHz network (more channel-6 slots?).
+- Block Ack for the iPhone's aggregated frames (Speed, above).

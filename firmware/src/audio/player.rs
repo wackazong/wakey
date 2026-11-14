@@ -14,7 +14,7 @@
 
 use super::uac::{self, Source};
 use esp_idf_svc::hal::cpu::Core;
-use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
+use esp_idf_svc::hal::task::thread::{MallocCap, ThreadSpawnConfiguration};
 use std::collections::VecDeque;
 use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
@@ -184,11 +184,14 @@ impl Player {
         ring.playing.store(true, Ordering::Release);
         // On core 1, away from the UI (core 0): decoding and resampling can
         // take a good part of a core, and the decoder's priority (5) is
-        // above the UI task's (1).
+        // above the UI task's (1). 64 KiB of stack in PSRAM: symphonia's
+        // MP4 reader and AAC decoder overflowed 8 KiB (stack protection
+        // fault in `MediaSourceStream::refill_buffer`).
         let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
         let pinned = ThreadSpawnConfiguration {
             name: Some(c"decoder"),
             pin_to_core: Some(Core::Core1),
+            stack_alloc_caps: MallocCap::Spiram | MallocCap::Cap8bit,
             ..ThreadSpawnConfiguration::default()
         };
         if let Err(e) = pinned.set() {
@@ -196,7 +199,7 @@ impl Player {
         }
         std::thread::Builder::new()
             .name("decoder".into())
-            .stack_size(8192)
+            .stack_size(64 * 1024)
             .spawn(crate::taskstats::named("decoder", move || {
                 produce(&ring);
                 // Let the ring drain before reporting the end; the tail
@@ -239,7 +242,7 @@ fn decode(path: &std::path::Path, ring: &Ring, repeat: bool) -> std::io::Result<
 }
 
 /// [`decode`] from an opened file (`name` for the log).
-fn decode_from<R: Read + Seek>(
+fn decode_from<R: Read + Seek + Send + 'static>(
     name: &str,
     mut file: AudioFile<R>,
     ring: &Ring,

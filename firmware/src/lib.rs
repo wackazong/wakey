@@ -17,10 +17,12 @@
 //! scroll physics) is in the `wakey_core` crate and tested on the host.
 //! Binaries in `src/bin/` are thin: the product (`wakey`) and two benches.
 
+pub mod airdrop;
 pub mod ambient;
 pub mod app;
 pub mod audio;
 pub mod board;
+pub mod c6_ota;
 #[cfg(feature = "c6-update")]
 pub mod c6_update;
 pub mod clock;

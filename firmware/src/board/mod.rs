@@ -44,6 +44,8 @@ pub struct Board {
     pub sd: Option<sd::SdCard>,
     /// Wi-Fi through the ESP32-C6, for [`crate::net::start`].
     pub modem: Modem<'static>,
+    /// The C6's IO2 → GPIO14, read by UART1: the AirDrop receiver's frames.
+    pub c6_link: crate::airdrop::Link,
     /// I2S to the ES8388 codec (built-in speaker).
     pub codec: codec::CodecPins,
 }
@@ -112,6 +114,10 @@ impl Board {
             backlight,
             sd,
             modem: p.modem,
+            c6_link: crate::airdrop::Link {
+                uart: p.uart1,
+                rx: p.pins.gpio14,
+            },
             codec: codec::CodecPins {
                 i2s: p.i2s0,
                 mclk: p.pins.gpio30.degrade_input_output(),

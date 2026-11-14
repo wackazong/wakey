@@ -17,6 +17,11 @@
 //! [`Wifi::run`] asks for a session now, for a job that needs the network
 //! (TIDAL): it runs on the `wifi` thread once connected, before the clock
 //! sync, and learns why if no connection came about.
+//!
+//! While AirDrop is wanted ([`crate::airdrop::set_wanted`], the sound
+//! page's Files tab), the thread gives the C6 to it instead: a session
+//! under way ends early (an interrupted clock sync is done after AirDrop),
+//! and jobs wait.
 
 use crate::board::ioexp::Switch;
 use crate::config::WifiConfig;
@@ -147,6 +152,7 @@ impl Wifi {
 /// sync; `interval` is the time between sessions.
 pub fn start(
     mut modem: Modem<'static>,
+    mut link: crate::airdrop::Link,
     power: Switch,
     nvs: EspDefaultNvsPartition,
     cfg: Option<WifiConfig>,
@@ -193,60 +199,92 @@ pub fn start(
             let ssid = cfg.as_ref().map_or("WLAN".into(), |c| c.ssid.clone());
             let mut retry = RETRY_FIRST;
             let mut job: Option<Job> = None;
+            // A session is due: the clock sync at boot, after the interval,
+            // or one AirDrop interrupted.
+            let mut due = true;
+            let mut next = Instant::now();
             loop {
-                set(Status::Starting);
-                active.store(true, Ordering::Relaxed);
-                let t = Instant::now();
-                let result = session(
-                    &mut modem,
-                    &power,
-                    &sysloop,
-                    nvs.clone(),
-                    cfg.as_ref(),
-                    &set,
-                    JobGuard(job.take()),
-                    &job_rx,
-                );
-                end_session(&power);
-                active.store(false, Ordering::Relaxed);
-                let wait = match result {
-                    Ok(synced) => {
-                        if synced {
+                if crate::airdrop::wanted() {
+                    active.store(true, Ordering::Relaxed);
+                    crate::airdrop::run(&mut link, &power, &stop_transport);
+                    active.store(false, Ordering::Relaxed);
+                }
+                if due || job.is_some() {
+                    set(Status::Starting);
+                    active.store(true, Ordering::Relaxed);
+                    let t = Instant::now();
+                    let result = session(
+                        &mut modem,
+                        &power,
+                        &sysloop,
+                        nvs.clone(),
+                        cfg.as_ref(),
+                        &set,
+                        JobGuard(job.take()),
+                        &job_rx,
+                    );
+                    end_session(&power);
+                    // AirDrop's images on the C6, if the session found them
+                    // missing (once; in the background).
+                    crate::airdrop::setup(&power, &stop_transport);
+                    active.store(false, Ordering::Relaxed);
+                    let wait = match result {
+                        Ok(Outcome::Synced) => {
                             on_time_synced();
                             set(Status::Off);
+                            retry = RETRY_FIRST;
+                            due = false;
+                            interval
                         }
-                        retry = RETRY_FIRST;
-                        interval
-                    }
-                    Err(e) => {
-                        log::warn!("wifi: session failed: {e:?}");
-                        if !matches!(
-                            *status.lock().unwrap_or_else(|e| e.into_inner()),
-                            Status::Failed { .. }
-                        ) {
-                            set(Status::Failed {
-                                ssid: ssid.clone(),
-                                error: Failure::Driver,
-                            });
+                        Ok(Outcome::Scanned) => {
+                            due = false;
+                            interval
                         }
-                        let w = retry;
-                        retry = (retry * 2).min(interval);
-                        w
+                        Ok(Outcome::Interrupted) => {
+                            set(Status::Off);
+                            Duration::ZERO
+                        }
+                        Err(e) => {
+                            log::warn!("wifi: session failed: {e:?}");
+                            if !matches!(
+                                *status.lock().unwrap_or_else(|e| e.into_inner()),
+                                Status::Failed { .. }
+                            ) {
+                                set(Status::Failed {
+                                    ssid: ssid.clone(),
+                                    error: Failure::Driver,
+                                });
+                            }
+                            due = false;
+                            let w = retry;
+                            retry = (retry * 2).min(interval);
+                            w
+                        }
+                    };
+                    next = Instant::now() + wait;
+                    let free = |caps| unsafe { esp_idf_svc::sys::heap_caps_get_free_size(caps) } / 1024;
+                    log::info!(
+                        "wifi: session took {} s, C6 off; next in {} min (free: internal {} KiB, PSRAM {} KiB)",
+                        t.elapsed().as_secs(),
+                        wait.as_secs() / 60,
+                        free(esp_idf_svc::sys::MALLOC_CAP_INTERNAL),
+                        free(esp_idf_svc::sys::MALLOC_CAP_SPIRAM)
+                    );
+                }
+                // Until AirDrop is wanted, a job comes, or the next session
+                // is due (not while the display sleeps: it waits for it).
+                loop {
+                    if crate::airdrop::wanted() {
+                        break;
                     }
-                };
-                let free = |caps| unsafe { esp_idf_svc::sys::heap_caps_get_free_size(caps) } / 1024;
-                log::info!(
-                    "wifi: session took {} s, C6 off; next in {} min (free: internal {} KiB, PSRAM {} KiB)",
-                    t.elapsed().as_secs(),
-                    wait.as_secs() / 60,
-                    free(esp_idf_svc::sys::MALLOC_CAP_INTERNAL),
-                    free(esp_idf_svc::sys::MALLOC_CAP_SPIRAM)
-                );
-                // The next scheduled session, or a job sooner.
-                job = job_rx.recv_timeout(wait).ok();
-                // Not while the display sleeps: the next session waits for it.
-                while job.is_none() && crate::ui::power::asleep() {
-                    job = job_rx.recv_timeout(Duration::from_secs(10)).ok();
+                    if Instant::now() >= next && !crate::ui::power::asleep() {
+                        due = true;
+                        break;
+                    }
+                    if let Ok(j) = job_rx.recv_timeout(Duration::from_millis(250)) {
+                        job = Some(j);
+                        break;
+                    }
                 }
             }
         }))
@@ -372,13 +410,19 @@ fn leak_test(
 /// session. Their buffers are taken before the deinit and freed once the
 /// tasks are gone.
 fn end_session(power: &Switch) {
+    stop_transport();
+    let _ = power(false);
+}
+
+/// esp_hosted's transport down, its tasks' buffers freed ([`end_session`]
+/// without the power: AirDrop restarts the C6 into its receiver).
+fn stop_transport() {
     let leftovers = hosted_task_buffers();
     let err = unsafe { esp_idf_svc::sys::esp_hosted_deinit() };
     if err != 0 {
         log::warn!("wifi: esp_hosted_deinit: {err}");
     }
     free_task_buffers(leftovers);
-    let _ = power(false);
 }
 
 /// esp_hosted's tasks (SDIO transport and RPC; `hosted_thread_create`).
@@ -441,9 +485,17 @@ fn free_task_buffers(buffers: Vec<(&'static core::ffi::CStr, *mut u8, *mut u8)>)
     log::info!("wifi: freed the buffers of {freed} esp_hosted tasks");
 }
 
+/// How a session ended.
+enum Outcome {
+    Synced,
+    /// No credentials: one scan.
+    Scanned,
+    /// Ended early for AirDrop, the clock not synced.
+    Interrupted,
+}
+
 /// One session: C6 on, driver up, connect and sync the clock (or scan once
-/// without credentials), driver down. True if the clock was synced. The
-/// caller switches the C6 off.
+/// without credentials), driver down. The caller switches the C6 off.
 #[allow(clippy::too_many_arguments)]
 fn session(
     modem: &mut Modem<'static>,
@@ -454,7 +506,7 @@ fn session(
     set: &dyn Fn(Status),
     job: JobGuard,
     more: &mpsc::Receiver<Job>,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Outcome> {
     power(true)?;
     std::thread::sleep(Duration::from_millis(500));
     // The transport to the C6 (SDIO, RPC): set up at boot by esp_hosted
@@ -475,12 +527,15 @@ fn session(
         #[cfg(feature = "c6-update")]
         crate::c6_update::run(_version);
     }
+    // Once per boot: is the C6 set up for AirDrop (installed after the
+    // session if not).
+    crate::airdrop::check();
     // The driver goes down when `wifi` is dropped (`esp_wifi_deinit`).
     match cfg {
         Some(cfg) => sync_clock(wifi, cfg, set, job, more),
         None => {
             job.run(Err("Kein WLAN eingerichtet (config.json)".into()));
-            scan_once(wifi, set).map(|()| false)
+            scan_once(wifi, set).map(|()| Outcome::Scanned)
         }
     }
 }
@@ -579,14 +634,14 @@ fn scan_once(mut wifi: BlockingWifi<EspWifi<'_>>, set: &dyn Fn(Status)) -> anyho
 /// Connects (up to [`ATTEMPTS`] tries), runs `job` and waits for SNTP. Jobs
 /// that come in (`more`) while connected run in this session too: a TIDAL
 /// tab opened during a slow NTP sync does not wait for the next session.
-/// True if the clock was synced.
+/// Ends early when AirDrop is wanted.
 fn sync_clock(
     mut wifi: BlockingWifi<EspWifi<'_>>,
     cfg: &WifiConfig,
     set: &dyn Fn(Status),
     job: JobGuard,
     more: &mpsc::Receiver<Job>,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Outcome> {
     let too_long = |what| anyhow::anyhow!("Wi-Fi {what} too long");
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: cfg.ssid.as_str().try_into().map_err(|_| too_long("SSID"))?,
@@ -607,6 +662,10 @@ fn sync_clock(
     let ssid = cfg.ssid.clone();
     let mut attempt = 0;
     loop {
+        if crate::airdrop::wanted() {
+            let _ = wifi.stop();
+            return Ok(Outcome::Interrupted);
+        }
         attempt += 1;
         set(Status::Connecting { ssid: ssid.clone() });
         log::info!("wifi: connecting to \"{ssid}\" (attempt {attempt})");
@@ -642,8 +701,12 @@ fn sync_clock(
     });
     // The job first: the clock (from the RTC) is good enough for TLS.
     job.run(Ok(()));
+    // Jobs that come in meanwhile; not once AirDrop is wanted (they wait
+    // for the session after it).
     let run_more = || {
-        while let Ok(job) = more.try_recv() {
+        while !crate::airdrop::wanted()
+            && let Ok(job) = more.try_recv()
+        {
             job(Ok(()));
         }
     };
@@ -652,13 +715,16 @@ fn sync_clock(
     let t = Instant::now();
     let synced = loop {
         run_more();
+        if crate::airdrop::wanted() {
+            break None;
+        }
         if sntp.get_sync_status() == SyncStatus::Completed {
             log::info!("wifi: NTP sync done after {} ms", t.elapsed().as_millis());
-            break true;
+            break Some(true);
         }
         if t.elapsed() > NTP_TIMEOUT {
             log::warn!("wifi: no NTP answer within {} s", NTP_TIMEOUT.as_secs());
-            break false;
+            break Some(false);
         }
         std::thread::sleep(Duration::from_millis(250));
     };
@@ -668,12 +734,18 @@ fn sync_clock(
     crate::http::close_all();
     let _ = wifi.disconnect();
     let _ = wifi.stop();
-    if !synced {
-        set(Status::Failed {
-            ssid,
-            error: Failure::Timeout,
-        });
-        anyhow::bail!("no NTP sync");
+    match synced {
+        None => {
+            log::info!("wifi: session ended for AirDrop");
+            Ok(Outcome::Interrupted)
+        }
+        Some(true) => Ok(Outcome::Synced),
+        Some(false) => {
+            set(Status::Failed {
+                ssid,
+                error: Failure::Timeout,
+            });
+            anyhow::bail!("no NTP sync")
+        }
     }
-    Ok(true)
 }

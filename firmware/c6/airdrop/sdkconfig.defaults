@@ -1,0 +1,24 @@
+CONFIG_IDF_TARGET="esp32c6"
+
+# As esp_hosted's image on the Tab5's C6 (../): 4 MB, DIO. Only the app is
+# installed (by esp_hosted's OTA, from the P4); the C6 keeps its bootloader
+# and partition table, which have two OTA slots like this one.
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+
+# No console: everything, the log included, leaves as frames on UART1, TX on
+# IO2 to the P4's GPIO14 (link.c).
+CONFIG_ESP_CONSOLE_NONE=y
+
+CONFIG_FREERTOS_HZ=1000
+# app_main's first act, esp_ota_set_boot_partition(), hashes the esp_hosted
+# image deep in the stack; 3584 bytes overflowed there once (spike README).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# TCP receive window 64 KiB, the most without window scaling (spike README:
+# 14 kB/s with the default 5760).
+CONFIG_LWIP_TCP_WND_DEFAULT=65534
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64

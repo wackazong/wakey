@@ -26,7 +26,6 @@ wakey-core/          pure logic, host-tested (own Cargo workspace)
 firmware/            the firmware (own Cargo workspace, ESP target)
 tools/ui-preview/    host tool: renders the firmware's pages to PNG with sample data
 spikes/tidal-download/  host tool: download a track from TIDAL (V2 groundwork)
-spikes/airdrop-c6/   C6 firmware (ESP-IDF, C): AirDrop receiver, not in the clock yet
 ```
 
 ## Crates and layers
@@ -140,7 +139,7 @@ Measured (ST7123, 360 MHz): clock screen tick 110 panel rows, ~1 ms; `ui_bench` 
 
 ```mermaid
 flowchart LR
-    SD["WAV/AIFF/FLAC on SD"] --> DEC["decoder thread: AudioFile → Converter (→ 48 kHz)"]
+    SD["WAV/AIFF/FLAC/M4A/MP3 on SD"] --> DEC["decoder thread: AudioFile → Converter (→ 48 kHz)"]
     DEC --> RING["1 s ring (PSRAM)"]
     RING --> SRC["Player::source()"]
     SRC --> OUT{"Output: USB speaker connected?"}
@@ -184,6 +183,10 @@ flowchart LR
 
 The C6 behaves as the normal `esp_wifi` driver through `esp_wifi_remote`, so `EspWifi`/`BlockingWifi` work unchanged. `net::start` runs the `wifi` thread: C6 power (expander WLAN_PWR_EN), driver up (~2.8 s including the C6 reset), connect with back-off (5 s doubling to 5 min), SNTP while connected, status for the UI (`net::Status`: starting, not configured with networks in range, connecting, connected with IP/RSSI/NTP, failed). Without credentials it scans once and switches the radio off.
 
+## AirDrop
+
+While the sound page's Files tab is shown (`airdrop::set_wanted`, from `app::sound_page`; any other page ends it), the C6 is the AirDrop receiver "Wakey" instead of esp_hosted. The C6 has two app slots: esp_hosted with Wakey's addition (`firmware/c6/hosted`: peer-data messages "what is in the other slot" and "boot it") and the receiver (`firmware/c6/airdrop`: ESP32Drop with the spike's patches, C). On the `wifi` thread (`airdrop::run`): a Wi-Fi session under way ends early (TIDAL's jobs and downloads step aside and resume after; an interrupted clock sync is done after AirDrop), esp_hosted up (`esp_hosted_init` + `esp_hosted_connect_to_slave`, no Wi-Fi driver), the receiver booted; it makes esp_hosted the next boot again first thing, so powering the C6 off ends AirDrop. Its frames (`wakey_core::airdrop`: file begin, data, end, verdict, status, log; CRC-32 each) come one way over the C6's IO2 → GPIO14 at 3 Mbaud (UART1, 64 KiB receive buffer); `sounds/<name>.part` files are renamed once the C6 reports the transfer whole and no frame was missing. Names: NFC (iOS sends decomposed umlauts), FAT-safe, " 2" on a clash; AppleDouble `._` files and other types are dropped. The C6's images are installed by esp_hosted's OTA: after the first Wi-Fi session of a boot, if that session's question found them missing or outdated (`airdrop::check`/`setup`, ~35 s once). They are in the flash partition `c6` (`partitions.csv`, written by `scripts/flash.sh` from `firmware/c6/pack.py`), not in the app (see Memory). The sound page's list ends with a note ("AirDrop bereit für neue Klänge", "AirDrop startet …", or the error) and shows a file arriving as a row with a progress bar; the page returns to the clock only after 5 minutes without a touch (60 s elsewhere), not while a file arrives. Measured: the switch from the Files tab to "ready" ~6 s; 20–136 kB/s (2.4 GHz channel 6 only: [`firmware/c6/airdrop`](../firmware/c6/airdrop/README.md#speed)).
+
 ## Memory
 
 | | Internal RAM | PSRAM |
@@ -195,6 +198,8 @@ The C6 behaves as the normal `esp_wifi` driver through `esp_wifi_remote`, so `Es
 | Player ring | – | 192 KiB |
 | esp_hosted pools, task stacks | – | yes |
 | Free while running `wakey` | ~110 KiB (~70 KiB of it DMA-capable) | ~23 MB |
+
+The app's code and constants are copied into PSRAM at boot (`CONFIG_SPIRAM_XIP_FROM_PSRAM`): every byte of `include_bytes!` costs PSRAM for good. The C6's images (2.2 MB) are therefore in a flash partition of their own and read piece by piece when installed.
 
 `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0`: `malloc` takes PSRAM first; internal RAM is left to what asks for it (DMA buffers, FreeRTOS objects, stacks). Small allocations kept internal (the default) let Slint fill internal RAM, after which drivers and `std` failed (see pitfalls). Cached PSRAM loads take as long as internal ones. The per-second stats line shows free internal and DMA memory. Lints `large_stack_frames` and `mem_forget` are denied.
 

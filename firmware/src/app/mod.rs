@@ -70,6 +70,10 @@ fn show_page(window: &screens::AppWindow, page: i32) {
     use transition::Direction;
     // A Wi-Fi session for TIDAL stays up while an alarm is edited.
     crate::tidal::set_editing(matches!(page, PAGE_ALARM | PAGE_SOUND | PAGE_NAME));
+    // AirDrop only on the sound page (its Files tab, `sound_page`).
+    if page != PAGE_SOUND {
+        crate::airdrop::set_wanted(false);
+    }
     let from = window.get_page();
     if from == page {
         return;
@@ -117,6 +121,8 @@ fn repaint_when_dimmed(ui: &screens::AppWindow) -> slint::Timer {
 
 /// Settings pages go back to the clock after this long without a touch.
 const IDLE_CLOSE: Duration = Duration::from_secs(60);
+/// On the sound page: TIDAL downloads and AirDrop take their time.
+const IDLE_CLOSE_SOUND: Duration = Duration::from_secs(5 * 60);
 
 /// What the settings pages share.
 pub struct Ctx {
@@ -198,6 +204,7 @@ async fn app(spawner: embassy_executor::Spawner) {
         ioexp,
         rtc,
         modem,
+        c6_link,
         sd: _sd, // stays mounted
         codec,
         ..
@@ -211,6 +218,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     let nvs = EspDefaultNvsPartition::take().expect("NVS");
     let wifi = net::start(
         modem,
+        c6_link,
         ioexp.switch(Pin::WlanPwrEn),
         nvs.clone(),
         config.wifi.clone(),
@@ -313,16 +321,16 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
                 return;
             }
             // Not while a preview plays, nor while a TIDAL login waits for
-            // the user (the QR code on the sound page).
-            if input::idle().as_millis() >= IDLE_CLOSE.as_millis() as u64
+            // the user (the QR code on the sound page), nor while a file
+            // arrives by AirDrop.
+            let limit = if page == PAGE_SOUND { IDLE_CLOSE_SOUND } else { IDLE_CLOSE };
+            if input::idle().as_millis() >= limit.as_millis() as u64
                 && !ctx.alarm.borrow().is_previewing()
                 && !ctx.tidal.logging_in()
+                && !matches!(crate::airdrop::state(), crate::airdrop::State::Receiving(_))
             {
                 ctx.tidal.close();
-                log::info!(
-                    "ui: back to the clock after {} s without a touch",
-                    IDLE_CLOSE.as_secs()
-                );
+                log::info!("ui: back to the clock after {} s without a touch", limit.as_secs());
                 show_page(window, PAGE_CLOCK);
             } else if page == PAGE_ALARM {
                 alarm_page::fill(window, ctx);

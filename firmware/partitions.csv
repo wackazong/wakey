@@ -4,3 +4,7 @@
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 12M,
+# The C6's images for AirDrop (esp_hosted with Wakey's addition, the
+# receiver), written by scripts/flash.sh (c6/pack.py). Not in the app: its
+# code and constants are copied into PSRAM at boot (XIP from PSRAM).
+c6,       data, undefined, 0xC10000, 0x3F0000,

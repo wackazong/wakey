@@ -18,7 +18,6 @@ Working today: clock screen with the RTC time (Europe/Zurich), several alarms (e
 | [`docs/schematics/`](docs/schematics) | Tab5 schematic pages |
 | [`tools/ui-preview/`](tools/ui-preview/src/main.rs) | host tool: renders the firmware's pages to PNG with sample data |
 | [`spikes/tidal-download/`](spikes/tidal-download/README.md) | host tool: download a track from your TIDAL account (V2 groundwork) |
-| [`spikes/airdrop-c6/`](spikes/airdrop-c6/README.md) | C6 firmware: receive files by AirDrop from an iPhone (works; not in the clock yet) |
 
 ## Quick start
 

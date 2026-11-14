@@ -890,7 +890,9 @@ impl Tidal {
     fn keep_up(&self) {
         let mut last_sync = Instant::now();
         loop {
-            if self.lock().state != State::LoggedIn {
+            // AirDrop takes the C6: the session ends; the next one, after
+            // it, starts again where this stopped.
+            if self.lock().state != State::LoggedIn || crate::airdrop::wanted() {
                 return;
             }
             let wanted = self.lock().wanted;
@@ -971,8 +973,11 @@ impl Tidal {
     }
 
     /// The download of `id` is to stop: another track was picked and is
-    /// still missing.
+    /// still missing, or AirDrop wants the C6 (the download resumes later).
     fn deferred(&self, id: u64) -> bool {
+        if crate::airdrop::wanted() {
+            return true;
+        }
         let inner = self.lock();
         inner.prefer.is_some_and(|p| p != id && inner.lacks(p))
     }

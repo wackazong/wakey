@@ -15,7 +15,7 @@ No cable: the P4 sends the image over SDIO (esp_hosted's slave OTA, `src/c6_upda
 3. After the restart: `wifi: C6 firmware 2.13.1` and `c6-update: … nothing to do`; the "Version mismatch" and "transport size" warnings are gone.
 4. Flash the normal firmware again (without the feature).
 
-If the C6 runs the image's version already, the feature does nothing. A failure before `end ok` leaves the old firmware. The C6 has no rollback: if it does not answer after an update, reflash it by cable through header J1 "C6_ISP" (`docs/hardware.md`): 3.3 V USB-UART adapter, IO9 to GND during reset, then `esptool --chip esp32c6 write_flash 0x10000 <image>` (or M5Stack's factory image through M5Burner). Without an adapter: bridge only G9 to GND there and let the P4 reflash the C6 over SDIO with [`spikes/airdrop-c6/rescue`](../../spikes/airdrop-c6/README.md#run-on-the-tab5) (used once, 2026-11-13).
+If the C6 runs the image's version already, the feature does nothing. A failure before `end ok` leaves the old firmware. The C6 has no rollback: if it does not answer after an update, reflash it by cable through header J1 "C6_ISP" (`docs/hardware.md`): 3.3 V USB-UART adapter, IO9 to GND during reset, then `esptool --chip esp32c6 write_flash 0x10000 <image>` (or M5Stack's factory image through M5Burner). Without an adapter: bridge only G9 to GND there and let the P4 reflash the C6 over SDIO with [`rescue/`](airdrop/README.md#recovery) (used once, 2026-11-13).
 
 ## Building the image
 
@@ -31,3 +31,13 @@ python $IDF_PATH/tools/idf.py build    # build/network_adapter.bin
 ```
 
 Keep DIO flash mode (the default): QIO images of slaves 2.1–2.8 refuse later OTAs. When the host component is updated, build the matching image, replace the file here, the name in `src/c6_update.rs` and `net::C6_FIRMWARE`; `c6-update` refuses an image whose version differs from `net::C6_FIRMWARE`. A test image with another version (e.g. esp_hosted's RawTP test) needs `C6_FIRMWARE` changed for that build.
+
+## AirDrop: the C6's other two images
+
+For AirDrop the C6 holds two images in its two app slots (how it switches: [architecture.md](../../docs/architecture.md#airdrop)). Both go into the P4's flash partition `c6` (`pack.py`, written by `scripts/flash.sh`); the firmware installs them on the C6 by esp_hosted's OTA when they are missing, in the background after the first Wi-Fi session of a boot.
+
+- `esp_hosted_slave-2.13.1-wakey1-esp32c6.bin`: esp_hosted 2.13.1 with Wakey's addition ([`hosted/wakey_switch.c`](hosted/wakey_switch.c), [`hosted/wakey.patch`](hosted/wakey.patch)): two peer-data messages, what the other slot holds and boot it. Version string "2.13.1-wakey1"; its RPC version is 2.13.1, as the stock image. Build: `hosted/build.sh` (copies the slave's sources from the firmware's managed components, patches, builds). SHA-256 `3cf3f49609e0fe41728396e2f0a9d607b6489c5ff817188384993ae6e5d3ed1f`.
+- `wakey_airdrop_c6-1.0.0.bin`: the AirDrop receiver ([`airdrop/`](airdrop/main/main.cpp): ESP32Drop with the spike's ten patches and its streaming decoder, frames to the P4 on IO2, `airdrop/main/link.h`). Build: in `airdrop/`, `./fetch.sh`, `./test/run.sh`, `. ./env.sh`, `python "$IDF_PATH/tools/idf.py" set-target esp32c6`, `python "$IDF_PATH/tools/idf.py" build`, then copy `build/wakey_airdrop_c6.bin` here with its version in the name (`src/airdrop.rs` installs the receiver again when the version in the partition differs from the C6's). SHA-256 `e44d08b2f72ba0d5057ce36ce2dd7e5c69c6ff5a41c12a17820c86e1cc0b5f65`.
+
+After a change: `pack.py` and `scripts/flash.sh` need the new file names. Recovery if a receiver crashes before it makes esp_hosted the next boot: [`rescue/`](airdrop/README.md#recovery) (G9 bridged to GND, no adapter).
+

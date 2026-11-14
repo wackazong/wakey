@@ -4,6 +4,7 @@
 //! directory); the firmware links it for the ESP32-P4. Nothing here knows
 //! about ESP-IDF, chips or threads.
 //!
+//! - [`airdrop`]: files received by AirDrop (the C6's frames, names, parts).
 //! - [`alarm`]: alarm settings and the ringing state machine.
 //! - [`datetime`]: calendar dates ↔ Unix time, German date strings.
 //! - [`audio_file`]: WAV and AIFF/AIFC readers (PCM → stereo i16).
@@ -16,6 +17,7 @@
 //! - [`scroll`]: touch scrolling physics (drag, fling, rubber band, spring).
 //! - [`sky`]: the sun's elevation and the clock face's sky gradient.
 
+pub mod airdrop;
 pub mod alarm;
 pub mod audio_file;
 pub mod config;

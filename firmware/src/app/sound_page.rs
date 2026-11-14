@@ -1,7 +1,9 @@
 //! The sound page's view model (`SoundPage` in `ui/wakey/sound_page.slint`):
 //! sound, volume and fade-in of the alarm being edited (the draft), and a
 //! preview on the speaker. The TIDAL tab logs in (QR code of the device
-//! code link, [`crate::tidal`]); its songs follow.
+//! code link, [`crate::tidal`]); its songs follow. While the Files tab
+//! shows, AirDrop receives new sound files ([`crate::airdrop`]): its note
+//! ends the list, a file arriving is a row above it.
 
 use super::screens::{AppWindow, SoundListLayout, SoundPicker, SoundRow, Theme};
 use super::{Ctx, PAGE_ALARM, PAGE_SOUND, PAGE_SOUND_ROW, alarm_page, show_page};
@@ -9,8 +11,10 @@ use crate::ui::list_layer::{Buffers, Layout, ListLayer, ListSource, SwipeEnd, Sw
 use crate::ui::platform;
 use slint::Weak;
 use std::hash::{Hash, Hasher};
+use crate::airdrop;
 use crate::sounds;
 use crate::tidal::{State, TrackStatus};
+use std::cell::RefCell;
 use slint::{ComponentHandle, Image, Model, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use std::rc::Rc;
 use std::time::Duration;
@@ -50,7 +54,101 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     select_tidal(ctx);
     fill_rows(window, ctx);
     tidal_tab(window, ctx, tab == TAB_TIDAL);
+    files_tab(window, tab == TAB_FILES);
     show_page(window, PAGE_SOUND);
+}
+
+thread_local! {
+    /// Polls AirDrop's state while the Files tab is open.
+    static AIRDROP_TIMER: slint::Timer = slint::Timer::default();
+    /// What the Files tab shows of AirDrop: the state and the files' version.
+    // Clippy flags this block although both are as `const` as they can be
+    // (`Timer::default` is not a const fn).
+    #[allow(clippy::missing_const_for_thread_local)]
+    static AIRDROP_SHOWN: RefCell<Option<(airdrop::State, u32)>> = const { RefCell::new(None) };
+}
+
+/// The Files tab opened or closed: AirDrop on or off, and followed.
+fn files_tab(window: &AppWindow, open: bool) {
+    airdrop::set_wanted(open);
+    AIRDROP_TIMER.with(|t| {
+        if !open {
+            t.stop();
+            return;
+        }
+        let weak = window.as_weak();
+        t.start(slint::TimerMode::Repeated, Duration::from_millis(250), move || {
+            if let Some(window) = weak.upgrade() {
+                window.global::<SoundPicker>().invoke_airdrop_tick();
+            }
+        });
+    });
+}
+
+/// The Files tab's last rows for AirDrop: a file arriving, then the note.
+fn airdrop_rows(state: &airdrop::State) -> Vec<SoundRow> {
+    let row = |title: String, sub: String, kind, progress| SoundRow {
+        title: title.into(),
+        sub: sub.into(),
+        selected: false,
+        kind,
+        cover: Image::default(),
+        progress,
+        failed: false,
+    };
+    let note = match state {
+        airdrop::State::Off | airdrop::State::Starting => "AirDrop startet …".to_string(),
+        airdrop::State::Ready | airdrop::State::Receiving(_) => "AirDrop bereit für neue Klänge".to_string(),
+        airdrop::State::Failed(e) => format!("AirDrop nicht verfügbar: {e}"),
+    };
+    let mut rows = Vec::new();
+    if let airdrop::State::Receiving(p) = state {
+        rows.push(row(p.name.clone(), "wird empfangen …".into(), 5, fraction(p)));
+    }
+    rows.push(row(note, String::new(), 4, -1.0));
+    rows
+}
+
+fn fraction(p: &wakey_core::airdrop::Progress) -> f32 {
+    if p.size == 0 { 0.0 } else { (f64::from(p.got) / f64::from(p.size)) as f32 }
+}
+
+/// Follows AirDrop on the Files tab: the list again when files arrived or
+/// the state changed, else only the arriving file's row.
+fn airdrop_tick(window: &AppWindow, ctx: &Ctx) {
+    let state = airdrop::state();
+    let files = airdrop::files_version();
+    let shown = AIRDROP_SHOWN.with(|s| s.borrow().clone());
+    let same_kind = |a: &airdrop::State, b: &airdrop::State| match (a, b) {
+        (airdrop::State::Receiving(x), airdrop::State::Receiving(y)) => x.name == y.name,
+        (a, b) => a == b,
+    };
+    match shown {
+        Some((s, f)) if f == files && same_kind(&s, &state) => {
+            if s == state {
+                return;
+            }
+            // The same file further on: its row in place.
+            if let airdrop::State::Receiving(p) = &state {
+                let rows = window.global::<SoundPicker>().get_rows();
+                let i = rows.row_count().saturating_sub(2);
+                // As TIDAL's bar: only a visible step repaints the row.
+                if let Some(mut row) = rows.row_data(i)
+                    && row.kind == 5
+                    && (row.progress - fraction(p)).abs() >= 0.005
+                {
+                    row.progress = fraction(p);
+                    rows.set_row_data(i, row);
+                }
+            }
+        }
+        Some((_, f)) if f != files => {
+            *ctx.sound_files.borrow_mut() = sounds::list();
+            fill_list(window, ctx, TAB_FILES);
+        }
+        _ => fill_list(window, ctx, TAB_FILES),
+    }
+    AIRDROP_SHOWN.with(|s| *s.borrow_mut() = Some((state, files)));
 }
 
 /// Tells TIDAL which tracks to have on the card: those of the saved
@@ -226,11 +324,10 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
         // played), never a choice of its own.
         let files = ctx.sound_files.borrow();
         let mut choices = Vec::new();
-        if files.is_empty() {
-            // "Zufällig" would only play the built-in tone.
-            picker.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());
-        } else {
-            picker.set_empty("".into());
+        // No note below the rows: AirDrop's ends the list (`airdrop_rows`).
+        picker.set_empty("".into());
+        if !files.is_empty() {
+            // Without files "Zufällig" would only play the built-in tone.
             choices.push((
                 row("Zufällig", "wechselt jeden Tag", &Sound::RandomFile, 1),
                 Sound::RandomFile,
@@ -276,7 +373,13 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
         }));
         choices
     };
-    let (rows, sounds): (Vec<SoundRow>, Vec<Sound>) = choices.into_iter().unzip();
+    let (mut rows, sounds): (Vec<SoundRow>, Vec<Sound>) = choices.into_iter().unzip();
+    // After the choices, so a row's index still finds its sound.
+    if tab == TAB_FILES {
+        let state = airdrop::state();
+        rows.extend(airdrop_rows(&state));
+        AIRDROP_SHOWN.with(|s| *s.borrow_mut() = Some((state, airdrop::files_version())));
+    }
     // A shorter list may leave the view past its end.
     let layout = window.global::<SoundListLayout>();
     let max = (rows.len() as f32 * layout.get_pitch() - layout.get_height()).max(0.0);
@@ -311,6 +414,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
 
     picker.on_back(ctx.with(|window, ctx| {
         tidal_tab(window, ctx, false);
+        files_tab(window, false);
         ctx.alarm.borrow_mut().stop_preview();
         alarm_page::fill(window, ctx);
         show_page(window, PAGE_ALARM);
@@ -320,6 +424,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         // (its repaint would stall the slide). Both lists are filled.
         window.global::<SoundPicker>().set_tab(tab);
         tidal_tab(window, ctx, tab == TAB_TIDAL);
+        files_tab(window, tab == TAB_FILES);
         let weak = window.as_weak();
         slint::Timer::single_shot(Duration::from_millis(200), move || {
             if let Some(window) = weak.upgrade() {
@@ -377,6 +482,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
             rows.set_row_data(i, row);
         }
     }));
+    picker.on_airdrop_tick(ctx.with(airdrop_tick));
     picker.on_volume_changed(ctx.with_arg(|window, ctx, v: i32| {
         let v = v.clamp(0, 100) as u8;
         ctx.draft.borrow_mut().volume = v;
@@ -391,6 +497,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     }));
     picker.on_save(ctx.with(|window, ctx| {
         tidal_tab(window, ctx, false);
+        files_tab(window, false);
         ctx.alarm.borrow_mut().stop_preview();
         alarm_page::save(window, ctx);
     }));

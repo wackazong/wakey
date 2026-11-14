@@ -1,0 +1,6 @@
+/build/
+/vendor/
+/sdkconfig
+/sdkconfig.old
+/dependencies.lock
+/managed_components/

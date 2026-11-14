@@ -12,7 +12,14 @@ description = "Hardware-independent logic of the Tab5 alarm clock, tested on the
 
 [dependencies]
 base64 = "0.22"
+# Received file names to NFC (iOS sends "o" + combining diaeresis for "ö").
+unicode-normalization = "0.1.24"
 claxon = "0.4"
+# AAC and ALAC in MP4/M4A (what iPhones send), and MP3. Pure Rust.
+# 0.6: its FFT tables are on the heap; 0.5 kept them inline in statics
+# (256 KB for one), more than the P4's internal RAM for statics. No
+# default features: they add SIMD through rustfft.
+symphonia = { version = "0.6.1", default-features = false, features = ["isomp4", "aac", "alac", "mp3"] }
 roxmltree = "0.20"
 # Sample-rate conversion (FFT based, exact for fixed ratios like 44.1 → 48 kHz).
 rubato = "0.16"

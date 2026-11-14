@@ -4,7 +4,7 @@
 # firmware needs), so the environment is set by hand, as in
 # firmware/c6/README.md.
 
-E="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../../firmware/.embuild/espressif" && pwd)"
+E="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../../.embuild/espressif" && pwd)"
 export IDF_PATH="$E/esp-idf/v5.5.5"
 export IDF_TOOLS_PATH="$E"
 export ESP_IDF_VERSION=5.5

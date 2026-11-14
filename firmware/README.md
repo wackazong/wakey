@@ -11,7 +11,6 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5. Des
 | `chip_sleep` | Spike: touch wake from chip light sleep (Smart Wake Up, gesture bits, display link rebuild); results in its module docs |
 | `power_probe` | Spike: power per component in display sleep, read off a USB meter (steps announced on screen) |
 | `link_probe` | Spike: rebuilds the display link 30 times with the camera running; logs PSRAM |
-| `airdrop_probe` | Spike (feature `airdrop-probe`): installs [`spikes/airdrop-c6`](../spikes/airdrop-c6/README.md)'s AirDrop receiver on the C6 and prints the C6's log |
 | `audio_test` | USB speaker test: plays every WAV/AIFF in the SD card root and `sounds/` in a loop (writes a 44.1 kHz test tone first), or a 440 Hz sine without a card; logs packets and underruns; survives re-plugging |
 
 ## Build and flash
@@ -25,7 +24,7 @@ ESPFLASH_ARGS="--port /dev/cu.usbmodem2101" cargo run --release --bin ui_bench
 cargo build --release --bins             # build only
 ```
 
-`cargo run` uses [`scripts/flash.sh`](scripts/flash.sh): ESP-IDF's bootloader (built for P4 rev < v3) and [`partitions.csv`](partitions.csv) (12 MB app, NVS). Extra espflash options go into `ESPFLASH_ARGS`.
+`cargo run` uses [`scripts/flash.sh`](scripts/flash.sh): ESP-IDF's bootloader (built for P4 rev < v3) and [`partitions.csv`](partitions.csv) (12 MB app, NVS, and `c6`: the C6's images for AirDrop, written from [`c6/pack.py`](c6/pack.py) when the flash holds something else, ~25 s). Extra espflash options go into `ESPFLASH_ARGS`.
 
 Host tests of the pure logic: `cd ../wakey-core && cargo test`.
 

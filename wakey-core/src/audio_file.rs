@@ -1,5 +1,6 @@
-//! Audio files: WAV (RIFF/WAVE) and AIFF/AIFC, uncompressed, and FLAC
-//! (decoded with `claxon`; TIDAL's lossless format).
+//! Audio files: WAV (RIFF/WAVE) and AIFF/AIFC, uncompressed, FLAC
+//! (decoded with `claxon`; TIDAL's lossless format), and AAC or ALAC in
+//! MP4/M4A (what iPhones send) and MP3, decoded with `symphonia`.
 //!
 //! [`AudioFile::open`] reads the header; [`AudioFile::read`] returns
 //! interleaved **stereo i16** frames at the file's own sample rate: mono is
@@ -9,12 +10,25 @@
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Mutex;
+use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
+use symphonia::core::io::{MediaSource, MediaSourceStream};
+use symphonia::core::meta::MetadataOptions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Container {
     Wav,
     Aiff,
     Flac,
+    /// MP4/M4A: AAC or ALAC.
+    Mp4,
+    Mp3,
+    /// AAC without a container (ADTS).
+    Adts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +64,33 @@ pub struct AudioFile<R: Read = BufReader<File>> {
     body: Body<R>,
 }
 
+/// symphonia reads from a source that is `Sync`; a reader the player
+/// passes need not be (a download still being written): it goes behind a
+/// mutex, which is never contended (`&mut self` on every call). The length,
+/// if known, lets MP4 seek (rewind).
+struct Locked<R>(Mutex<R>, Option<u64>);
+
+impl<R: Read> Read for Locked<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.get_mut().unwrap_or_else(|e| e.into_inner()).read(buf)
+    }
+}
+
+impl<R: Seek> Seek for Locked<R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.0.get_mut().unwrap_or_else(|e| e.into_inner()).seek(pos)
+    }
+}
+
+impl<R: Read + Seek + Send> MediaSource for Locked<R> {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+    fn byte_len(&self) -> Option<u64> {
+        self.1
+    }
+}
+
 enum Body<R: Read> {
     Pcm {
         reader: R,
@@ -66,11 +107,30 @@ enum Body<R: Read> {
         len: usize,
         pos: usize,
     },
+    /// MP4, MP3, ADTS through symphonia (which owns the reader).
+    Codec {
+        /// `None` only while rewinding.
+        reader: Option<Box<dyn FormatReader>>,
+        /// The probe's hint, for opening the stream again.
+        extension: &'static str,
+        decoder: Box<dyn AudioDecoder>,
+        track: u32,
+        /// The last decoded packet as stereo frames, and the next one in it.
+        pcm: Vec<i16>,
+        pos: usize,
+    },
 }
 
 fn flac_error(e: claxon::Error) -> io::Error {
     match e {
         claxon::Error::IoError(e) => e,
+        e => io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
+    }
+}
+
+fn codec_error(e: SymphoniaError) -> io::Error {
+    match e {
+        SymphoniaError::IoError(e) => e,
         e => io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
     }
 }
@@ -108,7 +168,7 @@ impl AudioFile {
     }
 }
 
-impl<R: Read + Seek> AudioFile<R> {
+impl<R: Read + Seek + Send + 'static> AudioFile<R> {
     pub fn from_reader(mut reader: R) -> io::Result<Self> {
         let mut head = [0u8; 12];
         reader.read_exact(&mut head)?;
@@ -116,11 +176,25 @@ impl<R: Read + Seek> AudioFile<R> {
             reader.seek(SeekFrom::Start(0))?;
             return Self::open_flac(reader);
         }
+        let codec = if &head[4..8] == b"ftyp" {
+            Some((Container::Mp4, "m4a"))
+        } else if &head[0..3] == b"ID3" || (head[0] == 0xFF && head[1] & 0xE6 == 0xE2) {
+            // An ID3 tag, or an MPEG audio frame (layer bits not 00).
+            Some((Container::Mp3, "mp3"))
+        } else if head[0] == 0xFF && head[1] & 0xF6 == 0xF0 {
+            Some((Container::Adts, "aac"))
+        } else {
+            None
+        };
+        if let Some((container, extension)) = codec {
+            reader.seek(SeekFrom::Start(0))?;
+            return Self::open_codec(reader, container, extension);
+        }
         let format = match (&head[0..4], &head[8..12]) {
             (b"RIFF", b"WAVE") => Self::parse_wav(&mut reader)?,
             (b"FORM", b"AIFF") => Self::parse_aiff(&mut reader, false)?,
             (b"FORM", b"AIFC") => Self::parse_aiff(&mut reader, true)?,
-            _ => return Err(bad("not a WAV, AIFF or FLAC file")),
+            _ => return Err(bad("not a WAV, AIFF, FLAC, M4A or MP3 file")),
         };
         if format.channels == 0 || format.channels > 2 || !(8..=32).contains(&format.bits) {
             return Err(bad("unsupported channels or bit depth"));
@@ -157,6 +231,48 @@ impl<R: Read + Seek> AudioFile<R> {
                 reader: Some(flac),
                 block: Vec::new(),
                 len: 0,
+                pos: 0,
+            },
+        })
+    }
+
+    fn open_codec(mut reader: R, container: Container, extension: &'static str) -> io::Result<Self> {
+        // Unknown for a file still being written (its end moves).
+        let len = reader.seek(SeekFrom::End(0)).ok();
+        reader.seek(SeekFrom::Start(0))?;
+        let source = MediaSourceStream::new(Box::new(Locked(Mutex::new(reader), len)), Default::default());
+        let reader = probe(source, extension)?;
+        let track = reader
+            .first_track_known_codec(TrackType::Audio)
+            .ok_or_else(|| bad("no audio track"))?;
+        let Some(CodecParameters::Audio(params)) = &track.codec_params else {
+            return Err(bad("no audio track"));
+        };
+        let decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(params, &AudioDecoderOptions::default())
+            .map_err(codec_error)?;
+        let channels = params.channels.as_ref().map_or(2, |c| c.count()) as u16;
+        if channels == 0 {
+            return Err(bad("no channels"));
+        }
+        let format = Format {
+            container,
+            sample_rate: params.sample_rate.ok_or_else(|| bad("no sample rate"))?,
+            channels,
+            bits: 16,
+            frames: track.num_frames.unwrap_or(0),
+            big_endian: false,
+            unsigned8: false,
+        };
+        let track = track.id;
+        Ok(Self {
+            format,
+            body: Body::Codec {
+                track,
+                reader: Some(reader),
+                extension,
+                decoder,
+                pcm: Vec::new(),
                 pos: 0,
             },
         })
@@ -344,6 +460,29 @@ impl<R: Read + Seek> AudioFile<R> {
                 }
                 Ok(done)
             }
+            Body::Codec {
+                reader,
+                decoder,
+                track,
+                pcm,
+                pos,
+                ..
+            } => {
+                let Some(reader) = reader.as_mut() else { return Ok(0) };
+                let mut done = 0;
+                for dst in out.as_chunks_mut::<2>().0 {
+                    while *pos == pcm.len() {
+                        if !next_packet(reader.as_mut(), decoder.as_mut(), *track, pcm)? {
+                            return Ok(done);
+                        }
+                        *pos = 0;
+                    }
+                    *dst = [pcm[*pos], pcm[*pos + 1]];
+                    *pos += 2;
+                    done += 1;
+                }
+                Ok(done)
+            }
         }
     }
 
@@ -368,8 +507,81 @@ impl<R: Read + Seek> AudioFile<R> {
                 *reader = Some(claxon::FlacReader::new(inner).map_err(flac_error)?);
                 (*len, *pos) = (0, 0);
             }
+            Body::Codec {
+                reader,
+                extension,
+                decoder,
+                pcm,
+                pos,
+                ..
+            } => {
+                // Opened afresh: symphonia 0.6.1's MP4 reader, sought back
+                // to 0 after its end, fails the next read ("no atom
+                // pending read").
+                let mut source = reader.take().ok_or_else(|| bad("reader lost"))?.into_inner();
+                source.seek(SeekFrom::Start(0))?;
+                *reader = Some(probe(source, extension)?);
+                decoder.reset();
+                pcm.clear();
+                *pos = 0;
+            }
         }
         Ok(())
+    }
+}
+
+/// The container in `source` (`extension` as the hint).
+fn probe(source: MediaSourceStream<'static>, extension: &str) -> io::Result<Box<dyn FormatReader>> {
+    let mut hint = Hint::new();
+    hint.with_extension(extension);
+    symphonia::default::get_probe()
+        .probe(&hint, source, FormatOptions::default(), MetadataOptions::default())
+        .map_err(codec_error)
+}
+
+/// Decodes the next packet of `track` into `pcm` as stereo i16 (mono
+/// doubled, channels beyond two dropped). False at the end. A damaged
+/// packet is skipped.
+fn next_packet(
+    reader: &mut dyn FormatReader,
+    decoder: &mut dyn AudioDecoder,
+    track: u32,
+    pcm: &mut Vec<i16>,
+) -> io::Result<bool> {
+    loop {
+        let packet = match reader.next_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => return Ok(false),
+            Err(SymphoniaError::IoError(e)) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(e) => return Err(codec_error(e)),
+        };
+        if packet.track_id != track {
+            continue;
+        }
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(e) => return Err(codec_error(e)),
+        };
+        let channels = decoded.spec().channels().count();
+        if decoded.frames() == 0 || channels == 0 {
+            continue;
+        }
+        let mut samples: Vec<i16> = Vec::new();
+        decoded.copy_to_vec_interleaved(&mut samples);
+        pcm.clear();
+        for frame in samples.chunks_exact(channels) {
+            let l = frame[0];
+            let r = if channels >= 2 { frame[1] } else { l };
+            pcm.extend_from_slice(&[l, r]);
+        }
+        if !pcm.is_empty() {
+            return Ok(true);
+        }
     }
 }
 
@@ -527,6 +739,51 @@ mod tests {
             assert_eq!(fs.len() as u64, 2 * ff.frames);
             assert_eq!(fs, ws);
         }
+    }
+
+    #[test]
+    fn alac_decodes_like_its_wav() {
+        // Made with macOS's `afconvert -f m4af -d alac` from stereo16.wav.
+        let (af, samples) = decode_all(include_bytes!("../testdata/stereo16-alac.m4a"));
+        let (wf, wav) = decode_all(include_bytes!("../testdata/stereo16.wav"));
+        assert_eq!(af.container, Container::Mp4);
+        assert_eq!((af.sample_rate, af.channels), (wf.sample_rate, wf.channels));
+        assert_eq!(samples, wav, "lossless");
+    }
+
+    #[test]
+    fn aac_decodes_close_to_its_wav() {
+        // `afconvert -f m4af -d aac@44100 -b 128000` from stereo16.wav.
+        let (f, samples) = decode_all(include_bytes!("../testdata/stereo16-aac.m4a"));
+        let (wf, wav) = decode_all(include_bytes!("../testdata/stereo16.wav"));
+        assert_eq!(f.container, Container::Mp4);
+        assert_eq!(f.sample_rate, wf.sample_rate);
+        // symphonia 0.6 keeps the encoder's priming (2112 frames, Apple's
+        // AAC encoder) and the last packet's padding: whole packets of
+        // 1024 frames, ~50 ms of silence at each end. Harmless for an
+        // alarm sound.
+        const PRIMING: usize = 2112;
+        let frames = samples.len() / 2;
+        let expected = wav.len() / 2;
+        assert_eq!(frames, (expected + PRIMING).div_ceil(1024) * 1024);
+        // After the priming, close to the original (a misaligned or garbled
+        // decode is far above 10 % of its energy).
+        let n = 2 * expected;
+        let decoded = &samples[2 * PRIMING..2 * PRIMING + n];
+        let energy: f64 = wav.iter().map(|&v| f64::from(v).powi(2)).sum();
+        let error: f64 = decoded.iter().zip(&wav).map(|(&a, &b)| f64::from(a - b).powi(2)).sum();
+        assert!(error < 0.1 * energy, "error {error:.0}, energy {energy:.0}");
+    }
+
+    #[test]
+    fn mp3_decodes() {
+        // `lame -b 128` from stereo16.wav: as long as it, roughly (MP3 has no
+        // gapless info here, so only the length is checked).
+        let (f, samples) = decode_all(include_bytes!("../testdata/stereo16.mp3"));
+        let (_, wav) = decode_all(include_bytes!("../testdata/stereo16.wav"));
+        assert_eq!(f.container, Container::Mp3);
+        assert!((samples.len() / 2).abs_diff(wav.len() / 2) <= 4096);
+        assert!(samples.iter().any(|&s| s.unsigned_abs() > 1000));
     }
 
     #[test]
