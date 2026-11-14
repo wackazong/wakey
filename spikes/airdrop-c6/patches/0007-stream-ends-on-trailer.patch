@@ -1,0 +1,45 @@
+diff --git a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+index e854f08..e8c8fab 100644
+--- a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
++++ b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+@@ -1506,7 +1506,8 @@ void ad_on_stream(const struct AdStreamSink *sink, ad_upload_done_cb_t done) {
+ }
+ 
+ enum { RXS_MORE = -1,  /* rxs_read: all n bytes read and fed */
+-       RXS_END_RECORD, RXS_LAST_CHUNK, RXS_SILENCE, RXS_TRUNCATED, RXS_POISONED, RXS_STREAM };
++       RXS_END_RECORD, RXS_LAST_CHUNK, RXS_SILENCE, RXS_TRAILER, RXS_TRUNCATED, RXS_POISONED,
++       RXS_STREAM };
+ 
+ /* Feeds n body bytes in read-buffer pieces: RXS_MORE, or why it stopped. */
+ static int rxs_read(struct HttpRdr *r, AdStream *st, uint8_t *buf, uint32_t cap, uint32_t n) {
+@@ -1543,6 +1544,10 @@ static int rxs_recv_chunked(struct HttpRdr *r, AdStream *st, uint8_t *buf, uint3
+     if (!hr_crlf(r)) return RXS_POISONED;
+     if (ad_stream_saw_end_record(st)) return RXS_END_RECORD;
+     if (!ad_stream_at_record_boundary(st)) continue;
++    /* The archive's trailer at a record boundary: the body is complete, whatever the
++       sender does next. iOS writes neither an end record nor the last chunk; it waits for
++       the answer, so waiting for its silence only costs the 3 s below. */
++    if (ad_stream_archive_done(st)) return RXS_TRAILER;
+     /* Boundary-aligned: only the sender's silence tells "done" from "flushed a record"
+        (3 s, rx_upload()'s figure for this link's measured 3-4 s stalls). */
+     http_set_timeout(r, 3000);
+@@ -1554,7 +1559,8 @@ static int rxs_recv_chunked(struct HttpRdr *r, AdStream *st, uint8_t *buf, uint3
+ 
+ static void rx_upload_stream(struct HttpRdr *r, bool chunked, int clen) {
+   static const char *const how[] = {"end record", "last chunk", "boundary + 3 s silence",
+-                                    "truncated", "poisoned", "decoder stopped"};
++                                    "archive trailer", "truncated", "poisoned",
++                                    "decoder stopped"};
+   mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)r->ctx;
+   g_rx_active = true; g_rx_bytes = 0;
+   g_rx_touch_ms = (uint32_t)(esp_timer_get_time() / 1000);
+@@ -1578,7 +1584,8 @@ static void rx_upload_stream(struct HttpRdr *r, bool chunked, int clen) {
+     why = ad_stream_error_name(AD_STREAM_E_SINK); status = "507 Insufficient Storage";
+   } else if (ad_stream_error(st) != AD_STREAM_OK) {
+     why = ad_stream_error_name(ad_stream_error(st)); status = "400 Bad Request";
+-  } else if (rc != RXS_END_RECORD && rc != RXS_LAST_CHUNK && rc != RXS_SILENCE) {
++  } else if (rc != RXS_END_RECORD && rc != RXS_LAST_CHUNK && rc != RXS_SILENCE &&
++             rc != RXS_TRAILER) {
+     why = how[rc]; status = "400 Bad Request";
+   } else if (!ad_stream_archive_done(st)) {
+     why = "archive truncated"; status = "400 Bad Request";

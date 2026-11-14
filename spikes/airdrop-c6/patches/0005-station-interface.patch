@@ -1,0 +1,81 @@
+diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+index 950a4bd..631793f 100644
+--- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
++++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+@@ -58,6 +58,15 @@
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/task.h"
+ 
++/* The interface AWDL sends and receives on. The ESP32-S3's MAC ACKs AWDL's unicast
++   data frames (no ToDS/FromDS, the shared AWDL BSSID) on the hidden soft-AP. The
++   ESP32-C6's does not: measured, 85 % of the frames for us arrived as 802.11 retries and
++   the sender dropped every TLS handshake. As an unassociated station it ACKs them
++   (Wakey, ESP32-C6: -DAWDL_WIFI_IF=WIFI_IF_STA). */
++#ifndef AWDL_WIFI_IF
++#define AWDL_WIFI_IF WIFI_IF_AP
++#endif
++
+ /* The core for the library's tasks: 1 beside Wi-Fi on core 0 where there are two
+    (the ESP32-S3), 0 on a single-core part (Wakey: the ESP32-C6). */
+ #define AD_TASK_CORE ((CONFIG_FREERTOS_NUMBER_OF_CORES > 1) ? 1 : 0)
+@@ -1541,7 +1550,7 @@ static void send_mif(const Selection &s) {
+     }
+   }
+ #endif
+-  esp_err_t mtx = esp_wifi_80211_tx(WIFI_IF_AP, buf, n, true);
++  esp_err_t mtx = esp_wifi_80211_tx(AWDL_WIFI_IF, buf, n, true);
+   g_diag.tx_err = mtx;
+   g_diag.tx_count++;
+   g_diag.mif_tx++;
+@@ -1587,7 +1596,7 @@ int awdl_tx_ip6_now(const uint8_t dst[6], uint8_t *buf, size_t len) {
+    * to be enough to push ssl_setup into -0x7f00 (ALLOC_FAILED). Every static byte the
+    * library takes is a byte TLS does not get. */
+   build_awdl_data_at(buf, dst, 0x86dd, (int)len, 0);
+-  esp_err_t e = esp_wifi_80211_tx(WIFI_IF_AP, buf, (int)(AWDL_TX_HEADROOM + len), true);
++  esp_err_t e = esp_wifi_80211_tx(AWDL_WIFI_IF, buf, (int)(AWDL_TX_HEADROOM + len), true);
+   g_diag.tx_count++;
+   /* Its OWN latch. g_diag.tx_err is last-write-wins across every transmitter, and send_mif
+      assigns it unconditionally four times a second, so an error recorded only there is
+@@ -1964,7 +1973,7 @@ static void awdl_netif_flush_tx(int budget, int64_t deadline_us) {
+        it is how a transmit path that never works keeps a counter that says it does.
+        netif_tx_sent counts what the driver ACCEPTED;
+        netif_tx_err counts what it refused, with the last reason. */
+-    esp_err_t te = esp_wifi_80211_tx(WIFI_IF_AP, tf.buf, tf.len, true);
++    esp_err_t te = esp_wifi_80211_tx(AWDL_WIFI_IF, tf.buf, tf.len, true);
+     if (te == ESP_OK) g_diag.netif_tx_sent++;
+     else {
+       netif_inflight_done(seq);          // refused injections receive no completion callback
+@@ -2139,7 +2148,8 @@ static esp_err_t wifi_probe_init(void) {
+   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+   if ((e = esp_wifi_init(&cfg))                    != ESP_OK) return e;
+   if ((e = esp_wifi_set_storage(WIFI_STORAGE_RAM)) != ESP_OK) return e;
+-  if ((e = esp_wifi_set_mode(WIFI_MODE_AP))        != ESP_OK) return e;
++  if ((e = esp_wifi_set_mode(AWDL_WIFI_IF == WIFI_IF_STA ? WIFI_MODE_STA : WIFI_MODE_AP)) != ESP_OK)
++    return e;
+   /* The interface MAC and the addr1/addr2 used by AWDL MUST be the same address.
+    * Merely deriving a locally-administered g_awdl_mac while leaving the radio at its
+    * factory AP MAC makes frames addressed to our AWDL identity invisible to the
+@@ -2147,14 +2157,16 @@ static esp_err_t wifi_probe_init(void) {
+    * which hides the mismatch functionally, but the peer receives no 802.11 ACK and
+    * retries every inbound TCP frame. Set it while the AP interface is still disabled,
+    * as esp_wifi_set_mac requires; wifi_start below enables it. */
+-  if ((e = esp_wifi_get_mac(WIFI_IF_AP, g_awdl_mac)) != ESP_OK) return e;
++  if ((e = esp_wifi_get_mac(AWDL_WIFI_IF, g_awdl_mac)) != ESP_OK) return e;
+   g_awdl_mac[0] = (g_awdl_mac[0] | 0x02) & 0xfe;
+-  if ((e = esp_wifi_set_mac(WIFI_IF_AP, g_awdl_mac)) != ESP_OK) return e;
+-  wifi_config_t ap = {};
+-  strcpy((char *)ap.ap.ssid, "esp32drop-probe");   /* the library is ESP32Drop now */
+-  ap.ap.channel = PROBE_CHANNEL; ap.ap.authmode = WIFI_AUTH_OPEN;
+-  ap.ap.ssid_hidden = 1; ap.ap.max_connection = 0; ap.ap.beacon_interval = 60000;
+-  if ((e = esp_wifi_set_config(WIFI_IF_AP, &ap))   != ESP_OK) return e;
++  if ((e = esp_wifi_set_mac(AWDL_WIFI_IF, g_awdl_mac)) != ESP_OK) return e;
++  if (AWDL_WIFI_IF == WIFI_IF_AP) {
++    wifi_config_t ap = {};
++    strcpy((char *)ap.ap.ssid, "esp32drop-probe");   /* the library is ESP32Drop now */
++    ap.ap.channel = PROBE_CHANNEL; ap.ap.authmode = WIFI_AUTH_OPEN;
++    ap.ap.ssid_hidden = 1; ap.ap.max_connection = 0; ap.ap.beacon_interval = 60000;
++    if ((e = esp_wifi_set_config(WIFI_IF_AP, &ap))   != ESP_OK) return e;
++  }
+   if ((e = esp_wifi_start())                       != ESP_OK) return e;
+   if ((e = esp_wifi_register_80211_tx_cb(raw_tx_done_cb)) != ESP_OK) return e;
+   if ((e = esp_wifi_set_ps(WIFI_PS_NONE))          != ESP_OK) return e;

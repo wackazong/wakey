@@ -1,0 +1,74 @@
+diff --git a/ESP32Drop/src/awdl/core/awdl_frame.h b/ESP32Drop/src/awdl/core/awdl_frame.h
+index 9137616..19e3d5a 100644
+--- a/ESP32Drop/src/awdl/core/awdl_frame.h
++++ b/ESP32Drop/src/awdl/core/awdl_frame.h
+@@ -77,6 +77,10 @@ struct AwdlMifParams {
+   uint32_t rx_now_us;            /* now, in the RX timestamp timebase */
+   uint32_t phase_us;             /* the window phase in that same timebase */
+   uint16_t cur_aw_seq;
++
++  /* Capabilities announced; 0 = the defaults below (0x8f24, 0x11ce). */
++  uint16_t dps_flags;            /* data_path_state flags. 0x0020 = dualband support */
++  uint16_t ht_cap;               /* ht_capabilities. 0x0020 = short GI for 20 MHz */
+ };
+ 
+ static void awdl_put32le(uint8_t *d, uint32_t v) {
+@@ -218,7 +222,8 @@ static size_t awdl_build_mif(uint8_t *b, size_t cap, const struct AwdlMifParams
+   // ---- ht_capabilities (type 7) content=8 ----
+   b[p++]=0x07; b[p++]=0x08; b[p++]=0x00;
+   b[p++]=0x00; b[p++]=0x00;                         // unknown
+-  b[p++]=0xce; b[p++]=0x11;                         // ht_capabilities=0x11ce
++  { uint16_t ht = m->ht_cap ? m->ht_cap : 0x11ce;  // ht_capabilities, default 0x11ce
++    b[p++]=(uint8_t)ht; b[p++]=(uint8_t)(ht >> 8); }
+   b[p++]=0x1b;                                     // ampdu_params
+   b[p++]=0xff;                                     // rx_mcs
+   b[p++]=0x00; b[p++]=0x00;                         // unknown2
+@@ -235,7 +240,8 @@ static size_t awdl_build_mif(uint8_t *b, size_t cap, const struct AwdlMifParams
+ 
+   // ---- data_path_state (type 12) content=15 ----
+   b[p++]=0x0c; b[p++]=0x0f; b[p++]=0x00;
+-  b[p++]=0x24; b[p++]=0x8f;                         // flags=0x8f24
++  { uint16_t f = m->dps_flags ? m->dps_flags : 0x8f24;  // flags, default 0x8f24
++    b[p++]=(uint8_t)f; b[p++]=(uint8_t)(f >> 8); }
+   b[p++]='X'; b[p++]='0'; b[p++]=0x00;             // country_code
+   b[p++]=0x01; b[p++]=0x00;                         // social_channels = ch6 bit
+   memcpy(&b[p], m->src, 6); p+=6;                  // awdl_addr = OUR mac (EUI-64 neighbour)
+diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+index 3f85507..cc320dc 100644
+--- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
++++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+@@ -1526,6 +1526,9 @@ static uint16_t ch6_mask_of(const uint8_t *addr) {
+ // change the emitted value except exactly on a boundary -- and a capture showed
+ // that most real senders leave this field at 0 anyway and that our own phase estimator
+ // does not read it.
++static volatile uint16_t g_caps_dps, g_caps_ht;   // awdl_set_caps(); 0 = defaults
++void awdl_set_caps(uint16_t dps_flags, uint16_t ht_cap) { g_caps_dps = dps_flags; g_caps_ht = ht_cap; }
++
+ static size_t build_mif(uint8_t *b, const uint8_t *src, const uint8_t *master,
+                         const Selection &s) {
+   const int64_t t = esp_timer_get_time();
+@@ -1542,6 +1545,8 @@ static size_t build_mif(uint8_t *b, const uint8_t *src, const uint8_t *master,
+   m.phase_us       = (uint32_t)s.mean;     // s.mean is wrapped into [0, AWC_US) and
+                                            // AWC_US < 2^24, so float -> uint32 is exact
+   m.cur_aw_seq     = s.cur_aw_seq;
++  m.dps_flags      = g_caps_dps;
++  m.ht_cap         = g_caps_ht;
+   return awdl_build_mif(b, AWDL_MIF_MAX, &m);
+ }
+ 
+diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.h b/ESP32Drop/src/awdl/port/awdl_port_esp32.h
+index aebd43b..1286d15 100644
+--- a/ESP32Drop/src/awdl/port/awdl_port_esp32.h
++++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.h
+@@ -68,6 +68,11 @@ esp_err_t awdl_end(void);
+  * rollback build (-DAWDL_CADENCE_TASK=0) and for anyone who would rather drive it. */
+ void awdl_cadence_pass(void);
+ 
++/* The capabilities our frames announce, from the next frame on: the data_path_state
++   flags (0x0020 = dualband support) and ht_capabilities (0x0020 = short GI 20 MHz).
++   0 keeps the default (0x8f24, 0x11ce). */
++void awdl_set_caps(uint16_t dps_flags, uint16_t ht_cap);
++
+ /* --- the RX tap: read every received IPv6 frame, beside the stack and after it ------
+  *
+  * Registered by the layer above -- AirDrop uses it to answer an mDNS query at the instant

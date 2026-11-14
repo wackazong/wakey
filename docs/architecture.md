@@ -26,6 +26,7 @@ wakey-core/          pure logic, host-tested (own Cargo workspace)
 firmware/            the firmware (own Cargo workspace, ESP target)
 tools/ui-preview/    host tool: renders the firmware's pages to PNG with sample data
 spikes/tidal-download/  host tool: download a track from TIDAL (V2 groundwork)
+spikes/airdrop-c6/   C6 firmware (ESP-IDF, C): AirDrop receiver, not in the clock yet
 ```
 
 ## Crates and layers

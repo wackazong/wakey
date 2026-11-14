@@ -1,0 +1,33 @@
+CONFIG_IDF_TARGET="esp32c6"
+
+# Flash as for the esp_hosted image on the Tab5's C6 (firmware/c6/): 4 MB,
+# DIO. Only the app image is installed (OTA from the P4); the C6 keeps its
+# bootloader and partition table, which have two OTA slots like this one.
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+
+# Console on UART0 with TX on IO2, which is wired to the P4's GPIO14
+# (RF_C6_IO2): the P4 prints the log. RX stays on the default pin (J1).
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_TX_GPIO=2
+CONFIG_ESP_CONSOLE_UART_RX_GPIO=17
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# As in the Arduino core ESP32Drop was written on.
+CONFIG_FREERTOS_HZ=1000
+# app_main's first act, esp_ota_set_boot_partition(), verifies the esp_hosted image
+# (SHA-256 over 1 MB) deep in the stack. With the default 3584 bytes, a bigger
+# app_main frame (callees inlined at -O2) overflowed there: a boot loop before the
+# boot slot went back to esp_hosted, recoverable only through header J1.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# TCP receive window 64 KiB, the most without window scaling (default 5760:
+# 14 kB/s; 32 KiB: 31 kB/s, one window per AWDL cycle). The sender may only
+# send a window per visit to channel 6, and the ACK that opens the next one
+# waits for our next slot there. The mailboxes hold what arrives in one visit.
+CONFIG_LWIP_TCP_WND_DEFAULT=65534
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64

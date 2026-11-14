@@ -1,0 +1,175 @@
+diff --git a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+index 738649b..23edf00 100644
+--- a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
++++ b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+@@ -1485,6 +1485,135 @@ done_norsp:
+   g_rx_active = false;
+ }
+ 
++#ifdef AD_RX_STREAM
++/* ---- AD_RX_STREAM: decode the body as it arrives, hand files out as they decode ----
++ *
++ * For a part without PSRAM (Wakey: ESP32-C6). rx_upload() holds the whole archive; this
++ * holds the 32 KiB inflate window and one read buffer (ad_stream.h), and the files go to
++ * the sink while they arrive. The completion rules are rx_upload()'s: an end record, the
++ * HTTP last-chunk, or a record boundary followed by 3 s of silence. The verdict is known
++ * before the response, as there: 200 only for a whole, intact archive. */
++static struct AdStreamSink   g_stream_sink;
++static ad_upload_done_cb_t   g_stream_done = nullptr;
++
++void ad_on_stream(const struct AdStreamSink *sink, ad_upload_done_cb_t done) {
++  g_stream_sink = *sink;
++  g_stream_done = done;
++}
++
++enum { RXS_MORE = -1,  /* rxs_read: all n bytes read and fed */
++       RXS_END_RECORD, RXS_LAST_CHUNK, RXS_SILENCE, RXS_TRUNCATED, RXS_POISONED, RXS_STREAM };
++
++/* Feeds n body bytes in read-buffer pieces: RXS_MORE, or why it stopped. */
++static int rxs_read(struct HttpRdr *r, AdStream *st, uint8_t *buf, uint32_t cap, uint32_t n) {
++  while (n > 0) {
++    int want = (int)(n < cap ? n : cap);
++    int got = hr_read(r, buf, want);
++    if (got > 0) {
++      g_rx_bytes += (uint32_t)got;
++      g_rx_touch_ms = (uint32_t)(esp_timer_get_time() / 1000);
++      if (!ad_stream_feed(st, buf, (size_t)got)) return RXS_STREAM;
++      n -= (uint32_t)got;
++    }
++    if (got < want) return r->poisoned ? RXS_POISONED : RXS_TRUNCATED;
++  }
++  return RXS_MORE;
++}
++
++/* http_recv_chunked() without holding a chunk: the decoder knows the record boundaries. */
++static int rxs_recv_chunked(struct HttpRdr *r, AdStream *st, uint8_t *buf, uint32_t cap) {
++  char ln[40];
++  bool have_hdr = false;
++  for (;;) {
++    if (!have_hdr) {
++      http_set_timeout(r, 10000);
++      if (hr_line(r, ln, sizeof(ln)) < 0) return RXS_TRUNCATED;
++      if (r->poisoned) return RXS_POISONED;
++    }
++    have_hdr = false;
++    uint32_t csz = (uint32_t)strtoul(ln, 0, 16);
++    if (csz == 0) return RXS_LAST_CHUNK;
++    http_set_timeout(r, 10000);
++    int rc = rxs_read(r, st, buf, cap, csz);
++    if (rc != RXS_MORE) return rc;
++    if (!hr_crlf(r)) return RXS_POISONED;
++    if (ad_stream_saw_end_record(st)) return RXS_END_RECORD;
++    if (!ad_stream_at_record_boundary(st)) continue;
++    /* Boundary-aligned: only the sender's silence tells "done" from "flushed a record"
++       (3 s, rx_upload()'s figure for this link's measured 3-4 s stalls). */
++    http_set_timeout(r, 3000);
++    if (hr_line(r, ln, sizeof(ln)) < 0) return RXS_SILENCE;
++    if (r->poisoned) return RXS_POISONED;
++    have_hdr = true;
++  }
++}
++
++static void rx_upload_stream(struct HttpRdr *r, bool chunked, int clen) {
++  static const char *const how[] = {"end record", "last chunk", "boundary + 3 s silence",
++                                    "truncated", "poisoned", "decoder stopped"};
++  mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)r->ctx;
++  g_rx_active = true; g_rx_bytes = 0;
++  g_rx_touch_ms = (uint32_t)(esp_timer_get_time() / 1000);
++  uint32_t t0 = g_rx_touch_ms;
++
++  static uint8_t buf[4096];        /* the TLS task is the only caller */
++  AdStream *st = ad_stream_new(&g_stream_sink);
++  int rc = RXS_TRUNCATED;
++  if (st && chunked) {
++    rc = rxs_recv_chunked(r, st, buf, sizeof buf);
++  } else if (st && clen > 0) {
++    rc = rxs_read(r, st, buf, sizeof buf, (uint32_t)clen);
++    if (rc == RXS_MORE) rc = RXS_LAST_CHUNK;   /* the whole Content-Length arrived */
++  }
++
++  const char *why = nullptr;
++  const char *status = "200 OK";
++  if (!st) {
++    why = "out of memory"; status = "507 Insufficient Storage";
++  } else if (ad_stream_error(st) == AD_STREAM_E_SINK) {
++    why = ad_stream_error_name(AD_STREAM_E_SINK); status = "507 Insufficient Storage";
++  } else if (ad_stream_error(st) != AD_STREAM_OK) {
++    why = ad_stream_error_name(ad_stream_error(st)); status = "400 Bad Request";
++  } else if (rc != RXS_END_RECORD && rc != RXS_LAST_CHUNK && rc != RXS_SILENCE) {
++    why = how[rc]; status = "400 Bad Request";
++  } else if (!ad_stream_archive_done(st)) {
++    why = "archive truncated"; status = "400 Bad Request";
++  }
++
++  char h[128];
++  int hl = snprintf(h, sizeof(h), "HTTP/1.1 %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
++                    status);
++  ssl_write_all(ssl, (const unsigned char *)h, hl);
++  if (why) {
++    /* Not closing on top of the status: a close with unread data is a RST, which drops
++       the status still queued for the next window (rx_upload() explains). */
++    unsigned char scrap[512];
++    uint32_t d0 = (uint32_t)(esp_timer_get_time() / 1000);
++    http_set_timeout(r, 300);
++    while (!r->eof && (uint32_t)(esp_timer_get_time() / 1000) - d0 < 3000) (void)hr_read(r, scrap, sizeof(scrap));
++  }
++
++  struct AdStreamStats s = {};
++  if (st) ad_stream_stats(st, &s);
++  uint32_t ms = (uint32_t)(esp_timer_get_time() / 1000) - t0;
++  AD_LOG("UPLOAD-STREAM: %s via %s; %lu B in, %lu B out, %lu records (%lu stored), "
++         "%lu files, %lu ms\n",
++         why ? why : "ok", how[rc], (unsigned long)s.in_bytes, (unsigned long)s.out_bytes,
++         (unsigned long)s.records, (unsigned long)s.stored, (unsigned long)s.files,
++         (unsigned long)ms);
++  if (why) {
++    strlcpy(g_img_errmsg, why, sizeof(g_img_errmsg));
++    g_img_err++;
++  } else {
++    g_upload_ok++;
++    g_files_ok += s.files;
++  }
++  ad_stream_free(st);              /* an open file ends incomplete */
++  if (g_stream_done) g_stream_done(g_stream_sink.ctx, why == nullptr, why ? why : "ok");
++  g_rx_active = false;
++}
++#endif /* AD_RX_STREAM */
++
+ // HTTP phase: runs AFTER the TLS handshake completes, on the committed connection
+ // (fd set blocking + recv_timeout bio by the caller). Serves /Discover -> tile,
+ // /Ask -> accept, /Upload -> receive. sharingd reuses ONE TLS connection for the
+@@ -1493,7 +1622,11 @@ done_norsp:
+ // the chunked /Ask metadata) are drained through it, so the next request starts
+ // exactly where the last one ended -- no bytes are read-ahead and lost.
+ static void sv_upload(struct HttpServe *s, bool chunked, int clen) {
++#ifdef AD_RX_STREAM
++  rx_upload_stream(s->r, chunked, clen);
++#else
+   rx_upload(s->r, chunked, clen);
++#endif
+ }
+ /* Zero-timeout look at the listening socket: is the upload connection already sitting in
+    the backlog? It is how the /Ask drain knows the sender has read our 200 -- see the note
+diff --git a/ESP32Drop/src/airdrop/port/ad_port_esp32.h b/ESP32Drop/src/airdrop/port/ad_port_esp32.h
+index 447a9e3..411b3e1 100644
+--- a/ESP32Drop/src/airdrop/port/ad_port_esp32.h
++++ b/ESP32Drop/src/airdrop/port/ad_port_esp32.h
+@@ -44,6 +44,18 @@ typedef bool (*ad_file_cb_t)(void *ctx, const struct AdFile *f);
+ 
+ void ad_on_file(ad_file_cb_t cb, void *ctx);
+ 
++#ifdef AD_RX_STREAM
++/* AD_RX_STREAM builds (no PSRAM): an /Upload body is decoded while it arrives and every
++ * regular file goes to `sink` as it decodes (ad_stream.h), instead of to ad_on_file().
++ * The callbacks run on the TLS task: keep them short, and never call back into the
++ * library from them. `done` follows each transfer, `ok` true only if the whole archive
++ * arrived intact and the sender was answered 200; a file is final only then (see
++ * ad_stream.h on end()). `why` names the failure ("ok" otherwise). */
++#include "ad_stream.h"
++typedef void (*ad_upload_done_cb_t)(void *ctx, bool ok, const char *why);
++void ad_on_stream(const struct AdStreamSink *sink, ad_upload_done_cb_t done);
++#endif
++
+ /* Starts the TLS listener. AWDL must already be up: this binds to the link-local address
+  * the AWDL netif owns.
+  *

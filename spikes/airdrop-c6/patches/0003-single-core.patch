@@ -1,0 +1,57 @@
+diff --git a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+index 23edf00..e854f08 100644
+--- a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
++++ b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+@@ -44,6 +44,10 @@
+ #include <errno.h>
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/task.h"
++
++/* The core for the library's tasks: 1 beside Wi-Fi on core 0 where there are two
++   (the ESP32-S3), 0 on a single-core part (Wakey: the ESP32-C6). */
++#define AD_TASK_CORE ((CONFIG_FREERTOS_NUMBER_OF_CORES > 1) ? 1 : 0)
+ #include "lwip/sockets.h"
+ #include "esp_heap_caps.h"    /* heap_caps_malloc(..., AD_BULK_CAPS): decode in PSRAM */
+ 
+@@ -2005,7 +2009,7 @@ int ad_begin(const char *name, uint32_t max_receive) {
+   /* 32 KB: mbedTLS handshake state is on this stack, and CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC
+    * means it cannot be moved to PSRAM. Priority 2 round-robins with the AWDL cadence. */
+   return xTaskCreatePinnedToCore(tcp_listen_task, "tcp_listen", 32768, nullptr, 2,
+-                                 nullptr, 1) == pdPASS ? 0 : -1;
++                                 nullptr, AD_TASK_CORE) == pdPASS ? 0 : -1;
+ }
+ 
+ /* --- telemetry ------------------------------------------------------------ */
+diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+index fc3925d..0d09d81 100644
+--- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
++++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+@@ -57,6 +57,10 @@
+ #include "esp_err.h"
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/task.h"
++
++/* The core for the library's tasks: 1 beside Wi-Fi on core 0 where there are two
++   (the ESP32-S3), 0 on a single-core part (Wakey: the ESP32-C6). */
++#define AD_TASK_CORE ((CONFIG_FREERTOS_NUMBER_OF_CORES > 1) ? 1 : 0)
+ #include "freertos/queue.h"
+ #include "lwip/sockets.h"
+ 
+@@ -2456,7 +2460,7 @@ esp_err_t awdl_begin(void) {
+   awdl_ll_of_mac(g_awdl_mac, g_ll);
+ 
+   /* Frame path on core 1 at priority 3; the WiFi RX callback stays undisturbed on core 0. */
+-  if (xTaskCreatePinnedToCore(proc_task, "awdl_proc", 8192, nullptr, 3, nullptr, 1) != pdPASS)
++  if (xTaskCreatePinnedToCore(proc_task, "awdl_proc", 8192, nullptr, 3, nullptr, AD_TASK_CORE) != pdPASS)
+     return ESP_ERR_NO_MEM;
+ 
+ #if AWDL_CADENCE_TASK
+@@ -2464,7 +2468,7 @@ esp_err_t awdl_begin(void) {
+    * yields immediately, so the first cadence pass runs before this function returns --
+    * which closes the window in which the published state is still its zeroed self. */
+   if (xTaskCreatePinnedToCore(awdl_cadence_task_fn, "awdl_cad", 8192, nullptr, 2,
+-                              &g_cadence_task, 1) != pdPASS)
++                              &g_cadence_task, AD_TASK_CORE) != pdPASS)
+     return ESP_ERR_NO_MEM;
+ #endif
+ 

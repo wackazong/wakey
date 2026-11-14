@@ -15,7 +15,7 @@ No cable: the P4 sends the image over SDIO (esp_hosted's slave OTA, `src/c6_upda
 3. After the restart: `wifi: C6 firmware 2.13.1` and `c6-update: … nothing to do`; the "Version mismatch" and "transport size" warnings are gone.
 4. Flash the normal firmware again (without the feature).
 
-If the C6 runs the image's version already, the feature does nothing. A failure before `end ok` leaves the old firmware. The C6 has no rollback: if it does not answer after an update, reflash it by cable through header J1 "C6_ISP" (`docs/hardware.md`): 3.3 V USB-UART adapter, IO9 to GND during reset, then `esptool --chip esp32c6 write_flash 0x10000 <image>` (or M5Stack's factory image through M5Burner).
+If the C6 runs the image's version already, the feature does nothing. A failure before `end ok` leaves the old firmware. The C6 has no rollback: if it does not answer after an update, reflash it by cable through header J1 "C6_ISP" (`docs/hardware.md`): 3.3 V USB-UART adapter, IO9 to GND during reset, then `esptool --chip esp32c6 write_flash 0x10000 <image>` (or M5Stack's factory image through M5Burner). Without an adapter: bridge only G9 to GND there and let the P4 reflash the C6 over SDIO with [`spikes/airdrop-c6/rescue`](../../spikes/airdrop-c6/README.md#run-on-the-tab5) (used once, 2026-11-13).
 
 ## Building the image
 

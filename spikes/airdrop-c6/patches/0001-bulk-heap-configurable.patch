@@ -1,0 +1,165 @@
+diff --git a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+index e2d574f..738649b 100644
+--- a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
++++ b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
+@@ -45,7 +45,16 @@
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/task.h"
+ #include "lwip/sockets.h"
+-#include "esp_heap_caps.h"    /* heap_caps_malloc(..., MALLOC_CAP_SPIRAM): decode in PSRAM */
++#include "esp_heap_caps.h"    /* heap_caps_malloc(..., AD_BULK_CAPS): decode in PSRAM */
++
++/* Wakey (ESP32-C6, no PSRAM): the heap for bulk buffers and the free space a
++   transfer leaves. The defaults are ESP32Drop's own (PSRAM, 384 KiB). */
++#ifndef AD_BULK_CAPS
++#define AD_BULK_CAPS MALLOC_CAP_SPIRAM
++#endif
++#ifndef AD_RX_HEADROOM
++#define AD_RX_HEADROOM (384u * 1024)
++#endif
+ 
+ #include "mbedtls/ssl.h"
+ #include "mbedtls/entropy.h"
+@@ -860,7 +869,7 @@ static bool     g_ht_full = false;
+ 
+ static void ht_arm(void) {
+   if (g_ht_len > 0) return;           /* a previous capture is still waiting to be read */
+-  if (!g_ht_buf) g_ht_buf = (uint8_t *)heap_caps_malloc(HTTP_TRACE_MAX, MALLOC_CAP_SPIRAM);
++  if (!g_ht_buf) g_ht_buf = (uint8_t *)heap_caps_malloc(HTTP_TRACE_MAX, AD_BULK_CAPS);
+   g_ht_off = 0; g_ht_full = false;
+ }
+ 
+@@ -1037,7 +1046,7 @@ static int rx_body_shape(const uint8_t *b, uint32_t n) {
+  * residue buffer is already allocated when this runs, so this covers only incidental
+  * PSRAM use during the transfer. Ceiling arithmetic, measured base: 7,864,308 B
+  * largest free block - 320 KiB residue - this headroom ~= 7.1 MB of decoded archive. */
+-static const uint32_t RX_OUT_HEADROOM = 384u * 1024;
++static const uint32_t RX_OUT_HEADROOM = AD_RX_HEADROOM;
+ 
+ static bool rx_pump_open(struct RxPump *p) {
+   /* TAKE WHAT THE SKETCH ALLOWED, NOT WHAT PSRAM HAPPENS TO HAVE.
+@@ -1046,17 +1055,17 @@ static bool rx_pump_open(struct RxPump *p) {
+      for a sketch with its own buffers -- and the failure it produces is the sketch's
+      allocation returning NULL, which is a worse place for it to land than here. So the
+      ceiling is g_rx_max, and PSRAM only lowers it. */
+-  uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
++  uint32_t largest = heap_caps_get_largest_free_block(AD_BULK_CAPS);
+   uint32_t avail = (largest > RX_OUT_HEADROOM) ? largest - RX_OUT_HEADROOM : 0;
+   uint32_t want = (g_rx_max < avail) ? g_rx_max : avail;
+   p->psram_limited = avail < g_rx_max;
+   g_rx_max_eff = want;
+-  p->out = want ? (uint8_t *)heap_caps_malloc(want, MALLOC_CAP_SPIRAM) : nullptr;
++  p->out = want ? (uint8_t *)heap_caps_malloc(want, AD_BULK_CAPS) : nullptr;
+   if (!p->out) {
+     AD_LOG("RX-OOM: decode block of %lu B refused, %lu free / %lu largest in PSRAM\n",
+            (unsigned long)want,
+-           (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+-           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
++           (unsigned long)heap_caps_get_free_size(AD_BULK_CAPS),
++           (unsigned long)heap_caps_get_largest_free_block(AD_BULK_CAPS));
+     p->fail = RXF_OOM;
+     return false;
+   }
+@@ -1121,7 +1130,7 @@ static void rx_sink_progress(struct HttpSink *sk) {
+ static bool rx_sink_grow(struct HttpSink *sk, uint32_t need) {
+   uint32_t nc = sk->cap ? sk->cap : (512u * 1024);
+   while (nc < need) nc <<= 1;
+-  uint8_t *np = (uint8_t *)heap_caps_realloc(sk->buf, nc, MALLOC_CAP_SPIRAM);
++  uint8_t *np = (uint8_t *)heap_caps_realloc(sk->buf, nc, AD_BULK_CAPS);
+   if (!np) {
+     /* SAY WHICH FAILURE THIS IS. A failed grow returns false, http_recv_chunked turns that
+        into HTTP_RECV_OVERFLOW, and the caller reports "file too large" -- which names a
+@@ -1131,8 +1140,8 @@ static bool rx_sink_grow(struct HttpSink *sk, uint32_t need) {
+     g_rx_grow_failed = true;
+     AD_LOG("RX-OOM: grow %lu -> %lu B failed (need %lu), %lu free / %lu largest in PSRAM\n",
+            (unsigned long)sk->cap, (unsigned long)nc, (unsigned long)need,
+-           (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+-           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
++           (unsigned long)heap_caps_get_free_size(AD_BULK_CAPS),
++           (unsigned long)heap_caps_get_largest_free_block(AD_BULK_CAPS));
+     return false;
+   }
+   sk->buf = np; sk->cap = nc; return true;
+@@ -1164,7 +1173,7 @@ static void rx_upload(struct HttpRdr *r, bool chunked, int clen) {
+      accumulates whole and grows on demand exactly as before. */
+   uint32_t cap = 320u * 1024, len = 0;
+   uint32_t body_total = 0;
+-  uint8_t *gz = (uint8_t *)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
++  uint8_t *gz = (uint8_t *)heap_caps_malloc(cap, AD_BULK_CAPS);
+   bool overflow = false, clean_end = false;
+   if (!gz) { strlcpy(g_img_errmsg, "out of PSRAM", sizeof(g_img_errmsg)); g_img_err++; goto done_norsp; }
+ 
+@@ -1209,7 +1218,7 @@ static void rx_upload(struct HttpRdr *r, bool chunked, int clen) {
+     if ((uint32_t)clen > g_rx_max) overflow = true;
+     else {
+       if ((uint32_t)clen > cap) {
+-        uint8_t *np = (uint8_t *)heap_caps_realloc(gz, clen, MALLOC_CAP_SPIRAM);
++        uint8_t *np = (uint8_t *)heap_caps_realloc(gz, clen, AD_BULK_CAPS);
+         if (np) { gz = np; cap = clen; } else overflow = true;
+       }
+       if (!overflow) { len = hr_read(r, gz, clen); body_total = len; g_rx_bytes = len; clean_end = (len == (uint32_t)clen); }
+@@ -1352,7 +1361,7 @@ static void rx_upload(struct HttpRdr *r, bool chunked, int clen) {
+       // tail in place.
+       heap_caps_free(gz); gz = nullptr;                      // the residue served its purpose
+       if (pump.out_len) {
+-        uint8_t *shr = (uint8_t *)heap_caps_realloc(pump.out, pump.out_len, MALLOC_CAP_SPIRAM);
++        uint8_t *shr = (uint8_t *)heap_caps_realloc(pump.out, pump.out_len, AD_BULK_CAPS);
+         if (shr) pump.out = shr;
+       }
+       outbuf = pump.out; pump.out = nullptr;                 // ownership moves to the handoff
+@@ -1381,7 +1390,7 @@ static void rx_upload(struct HttpRdr *r, bool chunked, int clen) {
+       if (off + 8 > len || isize == 0 || isize > g_rx_max) {
+         strlcpy(g_img_errmsg, "bad gzip", sizeof(g_img_errmsg)); g_img_err++; goto done;
+       }
+-      outbuf = (uint8_t *)heap_caps_malloc(isize, MALLOC_CAP_SPIRAM);
++      outbuf = (uint8_t *)heap_caps_malloc(isize, AD_BULK_CAPS);
+       if (!outbuf) { strlcpy(g_img_errmsg, "out of PSRAM", sizeof(g_img_errmsg)); g_img_err++; goto done; }
+       size_t out = tinfl_decompress_mem_to_mem(outbuf, isize, gz + off, len - off, 0);
+       if (out == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
+@@ -1404,7 +1413,7 @@ static void rx_upload(struct HttpRdr *r, bool chunked, int clen) {
+          may sit in a block nearly twice its size while the pump below is about to ask
+          for the output ceiling out of an 8 MiB part. Shrinking to the actual length
+          costs one realloc that almost always stays in place. */
+-      { uint8_t *shr = (uint8_t *)heap_caps_realloc(gz, len ? len : 1, MALLOC_CAP_SPIRAM);
++      { uint8_t *shr = (uint8_t *)heap_caps_realloc(gz, len ? len : 1, AD_BULK_CAPS);
+         if (shr) gz = shr; }
+       if (dvzip && rx_pump_open(&pump)) {
+         int dvend = AD_DVZIP_END_RUNNING;
+@@ -1420,7 +1429,7 @@ static void rx_upload(struct HttpRdr *r, bool chunked, int clen) {
+           g_img_err++; goto done;
+         }
+         if (pump.out_len) {
+-          uint8_t *shr2 = (uint8_t *)heap_caps_realloc(pump.out, pump.out_len, MALLOC_CAP_SPIRAM);
++          uint8_t *shr2 = (uint8_t *)heap_caps_realloc(pump.out, pump.out_len, AD_BULK_CAPS);
+           if (shr2) pump.out = shr2;
+         }
+         outbuf = pump.out; pump.out = nullptr;
+diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+index 16c1662..fc3925d 100644
+--- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
++++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+@@ -40,6 +40,15 @@
+ #include "esp_mac.h"
+ #include "esp_timer.h"
+ #include "esp_heap_caps.h"
++
++/* Wakey (ESP32-C6, no PSRAM): the heap for bulk buffers and the free space a
++   transfer leaves. The defaults are ESP32Drop's own (PSRAM, 384 KiB). */
++#ifndef AD_BULK_CAPS
++#define AD_BULK_CAPS MALLOC_CAP_SPIRAM
++#endif
++#ifndef AD_RX_HEADROOM
++#define AD_RX_HEADROOM (384u * 1024)
++#endif
+ #include "nvs_flash.h"
+ #include "esp_netif.h"
+ #include "../core/awdl_peertab.h"
+@@ -1971,7 +1980,7 @@ static esp_err_t awdl_netif_init(void) {
+      memory. Prefer PSRAM so the extra reliability does not take another frame-sized bite
+      out of the contiguous internal arena mbedTLS needs; fall back for ESP32 boards with
+      no PSRAM. The queue operation copies it before the callback returns. */
+-  g_retry_frame = (NetifTxFrame *)heap_caps_malloc(sizeof(NetifTxFrame), MALLOC_CAP_SPIRAM);
++  g_retry_frame = (NetifTxFrame *)heap_caps_malloc(sizeof(NetifTxFrame), AD_BULK_CAPS);
+   if (!g_retry_frame) g_retry_frame = (NetifTxFrame *)malloc(sizeof(NetifTxFrame));
+   memset((void *)g_retry_seq, 0, sizeof g_retry_seq);
+   memset((void *)g_retry_n, 0, sizeof g_retry_n);

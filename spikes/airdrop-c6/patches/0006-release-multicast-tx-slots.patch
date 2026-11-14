@@ -1,0 +1,71 @@
+diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+index 631793f..64f3b54 100644
+--- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
++++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
+@@ -1717,10 +1717,31 @@ static portMUX_TYPE g_netif_tx_mux = portMUX_INITIALIZER_UNLOCKED;
+ static volatile uint8_t  g_netif_inflight = 0;
+ static volatile uint16_t g_netif_inflight_seq[NETIF_TX_RETRY_SLOTS];
+ static volatile uint8_t  g_netif_inflight_used[NETIF_TX_RETRY_SLOTS];
++static volatile int64_t  g_netif_inflight_us[NETIF_TX_RETRY_SLOTS];
++
++/* A slot whose completion has not come after this long is released: a driver that drops
++   a completion must cost one slot for a while, not the link for the rest of the session.
++   Two AWDL cycles; a frame that has not left by then has missed its windows anyway. */
++#ifndef AWDL_NETIF_INFLIGHT_REAP_US
++#define AWDL_NETIF_INFLIGHT_REAP_US (2 * 1048576)
++#endif
++static volatile uint32_t g_netif_inflight_reaped = 0;
++extern "C" uint32_t awdl_netif_inflight_reaped(void) { return g_netif_inflight_reaped; }
+ 
+ static bool netif_inflight_room(void) {
+   bool room;
++  const int64_t now = esp_timer_get_time();
+   portENTER_CRITICAL(&g_netif_tx_mux);
++  if (g_netif_inflight >= AWDL_NETIF_INFLIGHT_MAX) {
++    for (int i = 0; i < NETIF_TX_RETRY_SLOTS; i++) {
++      if (g_netif_inflight_used[i] && now - g_netif_inflight_us[i] > AWDL_NETIF_INFLIGHT_REAP_US) {
++        g_netif_inflight_used[i] = 0;
++        if (g_netif_inflight) g_netif_inflight--;
++        g_netif_inflight_reaped++;
++      }
++    }
++    g_diag.netif_inflight = g_netif_inflight;
++  }
+   room = g_netif_inflight < AWDL_NETIF_INFLIGHT_MAX;
+   portEXIT_CRITICAL(&g_netif_tx_mux);
+   return room;
+@@ -1733,6 +1754,7 @@ static bool netif_inflight_begin(uint16_t seq) {
+   if (g_netif_inflight < AWDL_NETIF_INFLIGHT_MAX && !g_netif_inflight_used[slot]) {
+     g_netif_inflight_used[slot] = 1;
+     g_netif_inflight_seq[slot] = seq;
++    g_netif_inflight_us[slot] = esp_timer_get_time();
+     g_netif_inflight++;
+     g_diag.netif_inflight = g_netif_inflight;
+     if (g_netif_inflight > g_diag.netif_inflight_max)
+@@ -1786,10 +1808,10 @@ static void raw_tx_done_cb(const esp_80211_tx_info_t *ti) {
+     const bool mcast = (f[4] & 0x01) != 0;
+     if (mcast) {
+       if (ok) g_diag.txdone_mcast_ok++; else g_diag.txdone_mcast_fail++;
+-      return;                         // multicast has no link-layer ACK to recover
++    } else {
++      if (ok) g_diag.txdone_ucast_ok++; else g_diag.txdone_ucast_fail++;
++      g_tx_last_rate = (int)ti->rate;
+     }
+-    if (ok) g_diag.txdone_ucast_ok++; else g_diag.txdone_ucast_fail++;
+-    g_tx_last_rate = (int)ti->rate;
+ 
+     /* Only our AWDL/IPv6 netif shape. This excludes hidden-AP traffic and makes every
+        offset below guarded: LLC ends at 31, AWDL seq is 34..35, IPv6 starts at 40. */
+@@ -1799,7 +1821,11 @@ static void raw_tx_done_cb(const esp_80211_tx_info_t *ti) {
+        admitted by the queued netif. Do not let it release the gate or enter retry. */
+     if (!netif_inflight_done(seq)) return;
+     if (g_cadence_task) xTaskNotifyGive(g_cadence_task);
+-    if (ok) return;
++    /* Multicast has no link-layer ACK to recover, but its slot is released above: the
++       ESP32-C6's driver (as a station) transmits multicast data frames that the S3's
++       refuses, and returning before the release leaked one slot per frame until the gate
++       stopped all transmission. */
++    if (ok || mcast) return;
+     const uint8_t slot = (uint8_t)(seq & (NETIF_TX_RETRY_SLOTS - 1));
+     if (g_retry_seq[slot] != seq || g_retry_n[slot] >= NETIF_TX_RETRY_MAX) {
+       g_diag.netif_retry_exhausted++;

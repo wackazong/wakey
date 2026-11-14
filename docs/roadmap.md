@@ -10,7 +10,7 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 
 ## Next steps
 
-Nothing open.
+**Sound files by AirDrop (spike works, not decided).** An iPhone sends a sound file to "Wakey" from its share sheet, with nothing installed and no shared Wi-Fi. [`spikes/airdrop-c6`](../spikes/airdrop-c6/README.md) runs ESP32Drop (an independent re-implementation of AWDL and the AirDrop receiver, 0BSD) on the C6 instead of esp_hosted: a 416 KB .m4a and a 4 MB file arrived intact at 20–136 kB/s (2.4 GHz channel 6 only, and the iPhone decides how much of its time it spends there; a 3 MB song takes 25 s to 2.5 minutes). For the clock: one C6 firmware with both roles (esp_hosted for Wi-Fi, AirDrop while a "Receive" screen is open, never both), the files streamed to the P4 over esp_hosted's custom-data channel into `.part` files, AAC/MP3 decoding (iPhones send .m4a). Open: the C6 part is C (an exception to "Rust only", like esp_hosted itself), and it relies on reverse-engineered Apple protocols that an iOS update can break. A QR code to a web page on the clock was the alternative considered (works for any phone and laptop).
 
 ## Development tools (idea)
 
