@@ -53,6 +53,12 @@ pub fn idle() -> Duration {
     ))
 }
 
+/// Starts [`idle`] from now, as a touch would: the display woke by itself
+/// (daylight, an alarm), and its sleep timer counts from then.
+pub fn restart_idle() {
+    touched();
+}
+
 fn touched() {
     LAST_EVENT_MS.store(
         Instant::now().as_millis() as u32,

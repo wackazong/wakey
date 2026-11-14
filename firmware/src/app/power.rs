@@ -112,6 +112,9 @@ pub fn start(
                     crate::ambient::last_light()
                 );
                 power::wake();
+                // The sleep timer counts from the wake, not from the last
+                // touch (else the next dark sleeps at once).
+                input::restart_idle();
             }
         } else if allowed
             && !ringing
