@@ -1,8 +1,8 @@
 # Wakey
 
-A bedside alarm clock on the M5Stack Tab5 (ESP32-P4, 5" 1280×720 touch panel) that plays sound files from its microSD card on a Creative Pebble V3 USB speaker. Written in Rust (std) on ESP-IDF with the Embassy executor. **Rust only:** no project-authored C/C++ and no C board support packages.
+A bedside alarm clock on the M5Stack Tab5 (ESP32-P4, 5" 1280×720 touch panel) that plays sound files from its microSD card on a Creative Pebble V3 USB speaker. Written in Rust (std) on ESP-IDF with the Embassy executor. **Rust only on the P4:** no project-authored C/C++ and no C board support packages; the only C of our own runs on the ESP32-C6 (esp_hosted's addition and the AirDrop receiver, [`firmware/c6/`](firmware/c6/README.md)).
 
-Working today: clock screen with the RTC time (Europe/Zurich), several alarms (each with time, weekdays, name, sound or a random one, volume and fade-in, set on the touch screen with clicking time wheels) ringing on the speaker with snooze, Wi-Fi and NTP through the on-board ESP32-C6, touch, and a list layer that scrolls at the panel's 66 fps. Next: the built-in speaker as fallback and power states ([roadmap](docs/roadmap.md)).
+Working today: clock screen with the RTC time (Europe/Zurich) and a sky that follows the sun, several alarms (each with time, weekdays, name, sound or a random one, volume and fade-in, set on the touch screen with clicking time wheels) ringing on the USB speaker or the built-in one with snooze, sounds from the card, from a TIDAL playlist or sent by AirDrop from an iPhone, Wi-Fi and NTP through the on-board ESP32-C6, brightness from the room's light, and a display that sleeps in the dark. What is planned: [roadmap](docs/roadmap.md).
 
 ## Repository
 
@@ -64,7 +64,7 @@ The clock reads `config.json` from the root of the microSD card (FAT) at boot. A
 
 On the card next to `config.json`:
 
-- `sounds/`: sound files for the alarms (WAV, AIFF/AIFC or FLAC; PCM 8–32 bit, mono or stereo, any sample rate), listed by file name (`_` shown as a space).
+- `sounds/`: sound files for the alarms (WAV, AIFF/AIFC, FLAC, M4A with AAC or ALAC, MP3, AAC; mono or stereo, any sample rate), listed by file name (`_` shown as a space). Files can also be sent from an iPhone by AirDrop to "Wakey" while the sound page's Datei tab is open.
 - `tidal/`: written by the clock: the playlist and the downloaded tracks.
 
 For development, the build can set Wi-Fi credentials and a test alarm instead of the file's (see [firmware/README.md](firmware/README.md#sd-card)).

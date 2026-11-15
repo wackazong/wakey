@@ -6,7 +6,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5. Des
 
 | Binary | What it is |
 | --- | --- |
-| `wakey` | The alarm clock: clock page (RTC time, Europe/Zurich, date, next alarm, symbols for a missing speaker or network), alarm list, alarm, sound and name pages (tap the alarm line), the alarms ringing on the USB speaker (snooze, stop), wheel clicks on the built-in speaker, Wi-Fi + NTP, touch |
+| `wakey` | The alarm clock: clock page (RTC time, Europe/Zurich, date, sky, next alarm, symbols for a missing speaker or network), alarm list, alarm, sound and name pages (tap the alarm line), the alarms ringing on the USB or the built-in speaker (snooze, stop), wheel clicks, TIDAL playlist and downloads, AirDrop, Wi-Fi + NTP, backlight from the camera, display sleep, touch |
 | `ui_bench` | Slint and list-layer bench: clock digits, an animation and a 300-row list to drag and fling; frame statistics on screen and in the log (target 66 fps) |
 | `chip_sleep` | Spike: touch wake from chip light sleep (Smart Wake Up, gesture bits, display link rebuild); results in its module docs |
 | `power_probe` | Spike: power per component in display sleep, read off a USB meter (steps announced on screen) |
@@ -49,13 +49,17 @@ src/
 │  ├─ alarm_page.rs    alarm page view model (the draft being edited)
 │  ├─ sound_page.rs    sound page view model (sound, volume, fade-in, preview)
 │  ├─ name_page.rs     name keyboard view model
-│  ├─ clock_screen.rs  clock page view model (time, date, alarm, missing speaker/network)
+│  ├─ clock_screen.rs  clock page view model (time, date, sky, alarm, missing speaker/network)
+│  ├─ power.rs         when the display sleeps and wakes, USB-A power
 │  └─ bench.rs         scripted gestures for measuring (feature ui-bench)
 ├─ ui/
 │  ├─ platform.rs      Slint platform, windows, rendering through the PPA
 │  ├─ render_loop.rs   frame loop, FrameHook, touch routing
 │  ├─ list_layer.rs    list scrolled by 2D-DMA from a row ring, Slint when still
 │  ├─ input.rs         touch task → landscape pointer events
+│  ├─ transition.rs    page slides by 2D-DMA
+│  ├─ power.rs         display sleep request to the render loop
+│  ├─ dim.rs           night dimming of the pixels
 │  ├─ stats.rs         frame statistics, free heap
 │  └─ trace.rs         per-frame log (feature ui-bench)
 ├─ audio/
@@ -63,7 +67,13 @@ src/
 │  ├─ player.rs        file / tone playback: decoder thread → ring → stream
 │  ├─ builtin.rs       built-in speaker: mixer thread (sound, clicks), amplifier
 │  └─ output.rs        player → USB speaker, or the built-in one without it
-├─ net.rs              Wi-Fi via the C6, reconnect, NTP
+├─ net.rs              Wi-Fi sessions via the C6, NTP, TIDAL jobs, AirDrop mode
+├─ http.rs             HTTPS client with a connection pool
+├─ tidal.rs            TIDAL login, playlist sync, downloads, covers
+├─ airdrop.rs          C6 as AirDrop receiver: switching, installing, receiving files
+├─ c6_ota.rs           esp_hosted's OTA to the C6 (used by airdrop.rs)
+├─ c6_update.rs        feature c6-update: the stock esp_hosted image to the C6
+├─ ambient.rs          camera as light meter, backlight
 ├─ clock.rs            system time from the RTC, local time, RTC sync
 ├─ config.rs           config.json from the SD card
 ├─ sounds.rs           sounds/ on the SD card, choosing today's random file
@@ -73,6 +83,8 @@ src/
 │  ├─ rtc.rs           RX8130CE
 │  ├─ touch.rs         ST7123 touch controller
 │  ├─ codec.rs         ES8388 codec (built-in speaker), its I2S pins
+│  ├─ camera.rs        SC202CS camera sensor (light meter)
+│  ├─ ina226.rs        INA226 battery current
 │  ├─ sd.rs            microSD (SDMMC slot 0, LDO 4)
 │  └─ backlight.rs     LEDC PWM on GPIO22
 ├─ display/            DSI panel, frame buffers, flips
@@ -83,9 +95,12 @@ src/
 │  └─ cache.rs         cache write-back / invalidate for DMA buffers
 ├─ runtime.rs          Embassy executor on its own 64 KiB task
 ├─ profiler.rs         sampling profiler (core 0)
-└─ bin/                wakey, ui_bench, audio_test
+├─ taskstats.rs        CPU time per task (feature task-stats)
+├─ netbench.rs         download measurements (feature download-bench)
+└─ bin/                wakey, ui_bench, audio_test, spikes (chip_sleep, power_probe, link_probe)
 ui/                    wakey.slint (window) + wakey/ (pages, theme, wheel), ui_bench.slint, fonts (Inter, OFL)
-vendor/                patched Slint and esp-idf-svc (see vendor/README.md)
+vendor/                patched Slint, esp-idf-svc and ESP-IDF's esp_lcd (see vendor/README.md)
+c6/                    the C6's images and their sources (see c6/README.md)
 scripts/               flash.sh (cargo runner), profile.sh
 sdkconfig.defaults     ESP-IDF configuration (commented)
 ```

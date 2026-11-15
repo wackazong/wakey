@@ -15,6 +15,9 @@ What can go, or must be re-checked, when a dependency is updated: workarounds an
 - **USB host: root port powered once, never down** (`firmware/src/audio/uac/host.rs`, `device.rs`): powering the root port down during enumeration aborts in `hub.c` (espressif/esp-idf#18366). Fixed only in the esp-usb `usb_host` managed component (1.4.1), not in the in-tree `components/usb` of 5.5. Keep the workaround unless Wakey moves to the managed component.
 - **ISP overflow interrupts masked, sensor at 5 fps** (`firmware/src/ambient.rs`): ESP-IDF's ISP driver logs FIFO overflow from its ISR. Not reported upstream: re-tests on 2026-11-14 at 30 fps (frames back to back, overflow bits counted per frame) found none, idle or under a TLS download, a 52 MB/s PSRAM copy, or a download written to the SD card, masked or with the interrupts enabled. The storm seen on 2026-11-12 (TIDAL download to the card, display, camera at 30 fps) did not come back; its cause is unknown. Nothing to drop: 5 fps is all a light meter needs, and the mask costs nothing.
 
+- **Vendored `esp_lcd`** (`firmware/vendor/esp-idf-components/esp_lcd`): the DPI panel allocates its frame buffers through replaceable functions, so display sleep keeps them (`display::FB_POOL`). ESP-IDF has no way to pass frame buffers in. With every ESP-IDF update: copy its `esp_lcd` again, re-apply the two hunks marked "wakey", `cargo clean -p esp-idf-sys --release`. Drop the copy once the driver takes buffers from outside.
+- **The C6 images** (`firmware/c6/`): esp_hosted 2.13.1-wakey1 and the AirDrop receiver are built with ESP-IDF 5.5.5. With an esp_hosted host update, rebuild the slave with `c6/hosted/build.sh` and bump its version suffix.
+
 ## esp_hosted (2.13.1)
 
 - **`net::hosted_task_buffers` / `free_task_buffers`** (`firmware/src/net.rs`): the static task buffers leaked per init/deinit. Fixed on `release/v2.x` (03d438a4, after 2.13.1). Drop with the next 2.x host component; check with the `wifi-leak-test` feature (0 B per session).
@@ -23,6 +26,7 @@ What can go, or must be re-checked, when a dependency is updated: workarounds an
 ## esp-idf-svc (0.53.0, vendored)
 
 - **The vendored copy** (`firmware/vendor/esp-idf-svc`): deleting the previous request's headers (esp-rs/esp-idf#632), `Configuration::save_client_session` and `EspHttpConnection::close` (esp-rs/esp-idf#633). esp-idf-svc now lives in the esp-rs/esp-idf monorepo. Drop the vendored copy and the `[patch.crates-io]` entry once a release has both; upstream's `close()` returns `Result`, so `http::close_all` then needs `let _ =` or a log.
+- **The embassy time driver hunk** (`src/timer.rs`, the 24 h freeze): fixed upstream by esp-rs/esp-idf#618 (c0c177b), on `master` after 0.53.0. A release containing it lets the hunk go; check its `CHANGELOG.md` for #616.
 
 ## Slint (1.18.1, vendored renderer and core)
 
