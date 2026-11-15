@@ -199,6 +199,29 @@ export component SoundRowItem inherits Rectangle {
         height: parent.height;
         background: Theme.accent-dark;
     }
+    // On the TIDAL tab „Zufällig“'s icon sits in the covers'
+    // column, so the texts line up.
+    if root.item.kind == 1: Icon {
+        kind: 5;
+        x: root.tab == 1 ? 46px : 32px;
+        y: 34px;
+        width: 44px;
+        height: 44px;
+        color: Theme.accent;
+    }
+    if root.item.kind == 3: Rectangle {
+        x: 24px;
+        y: 12px;
+        width: 88px;
+        height: 88px;
+        background: Theme.surface;
+        opacity: root.item.failed ? 0.4 : 1;
+        Image {
+            width: 88px;
+            height: 88px;
+            source: root.item.cover;
+        }
+    }
     if root.item.kind != 4: Text {
         x: root.item.kind == 3 || (root.item.kind == 1 && root.tab == 1) ? 132px : root.item.kind == 1 ? 96px : 32px;
         y: root.item.sub != "" ? 10px : 0;
