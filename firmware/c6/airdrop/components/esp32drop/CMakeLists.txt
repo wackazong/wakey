@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Alexander Walter
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
 # ESP32Drop's receiver (vendor/esp32drop, from ./fetch.sh with patches/),
 # built for the ESP32-C6 with ESP-IDF instead of the Arduino core, plus the
 # streaming decoder (stream/) that lets it receive without PSRAM.
@@ -25,7 +28,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     "AD_BULK_CAPS=(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)"
     "AD_RX_HEADROOM=(64u*1024)"
     # AWDL on the unassociated station: the C6 ACKs AWDL's unicast frames there,
-    # not on the soft-AP (patches/0004).
+    # not on the soft-AP (patches/0004-station-interface.patch).
     "AWDL_WIFI_IF=WIFI_IF_STA"
 )
 # Third-party code: keep its warnings visible, but not fatal (ESP-IDF makes

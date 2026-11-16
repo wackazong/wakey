@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Alexander Walter
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
 # Fetches the third-party sources into vendor/ at pinned commits and applies
 # patches/*.patch to ESP32Drop. Run once before the first build; again after
 # changing a pin or a patch (it starts from clean checkouts).
@@ -19,7 +22,7 @@ fetch() { # dir repo commit
 }
 
 fetch esp32drop https://github.com/s-iwaki-d/ESP32Drop \
-	92bdc1221924ca522f3ccbebbd9353612ce5b2d7 # 2026-09-07
+	92bdc1221924ca522f3ccbebbd9353612ce5b2d7
 fetch miniz https://github.com/richgel999/miniz \
 	48605fb1bd5662effe13b789d866981225e71256 # tag v114
 

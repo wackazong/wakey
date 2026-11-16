@@ -1,4 +1,7 @@
-/* ad_stream.h -- decode an AirDrop /Upload body while it arrives, in bounded memory.
+/* SPDX-FileCopyrightText: 2026 Alexander Walter
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ *
+ * ad_stream.h -- decode an AirDrop /Upload body while it arrives, in bounded memory.
  *
  * ESP32Drop decodes a body into one block the size of the whole archive, which needs
  * PSRAM. The ESP32-C6 has none, and the files it receives (sound files, megabytes) are
@@ -26,7 +29,9 @@ extern "C" {
 
 /* Where decoded files go. Runs on the caller of ad_stream_feed(), in order:
  * begin, data..., end for each regular file (directories and other entries are skipped).
- * `name` is the basename, NUL-terminated, valid only during the call.
+ * `name` is the basename, NUL-terminated, at most 255 bytes, valid only during the call.
+ * It comes from the sender unchecked apart from that: it may be "." or ".." (from "./."
+ * or "a/.."), so a sink that makes a path of it must reject those.
  *   begin: false skips this file's bytes (no data or end for it).
  *   data:  false stops the stream (AD_STREAM_E_SINK): the sink cannot take more.
  *   end:   `complete` is false if the stream stopped or was freed inside the file.

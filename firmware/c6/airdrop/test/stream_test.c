@@ -1,4 +1,7 @@
-/* Host test of ad_stream: archives built here, encoded as an iOS/macOS sender does
+/* SPDX-FileCopyrightText: 2026 Alexander Walter
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ *
+ * Host test of ad_stream: archives built here, encoded as an iOS/macOS sender does
  * (128 KiB grains, each deflated with a zlib header or stored with bit 31 set; with or
  * without the zero end record), then fed in pieces of many sizes. The real body this
  * shape is taken from: ESP32Drop's testdata/dvzip_census.inc (12 deflated records of
@@ -422,6 +425,20 @@ static void test_damage(void) {
   ad_stream_free(s);
   free(la.p);
   free(lb.p);
+
+  /* An odc file size above 32 bits (11 octal digits hold 33). */
+  struct buf oa = {0};
+  buf_printf(&oa, "070707%06o%06o%06o%06o%06o%06o%06o%011o%06o%011llo", 0, 1, MODE_FILE, 501, 20,
+             1, 0, 0, 2u, 077777777777ull);
+  buf_put(&oa, "x", 2);
+  struct buf ob = dvzip(&oa, ALWAYS_STORE, true);
+  struct got o = {0};
+  s = feed(&ob, 64, &o, &ok);
+  CHECK(!ok && ad_stream_error(s) == AD_STREAM_E_ARCHIVE && o.n == 0, "33-bit size: %s",
+        ad_stream_error_name(ad_stream_error(s)));
+  ad_stream_free(s);
+  free(oa.p);
+  free(ob.p);
 
   free(body.p);
   free(f[0].data.p);

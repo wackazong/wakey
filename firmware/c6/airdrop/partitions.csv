@@ -1,0 +1,8 @@
+# esp_hosted 2.13.1's table for the C6 (slave/partitions.esp32c6.csv), which the
+# Tab5's C6 has: the receiver must fit esp_hosted's app slots.
+# Name,   Type, SubType, Offset,  Size,   Flags
+nvs,      data, nvs,     0x9000,  16K,
+otadata,  data, ota,     0xd000,  8K,
+phy_init, data, phy,     0xf000,  4K,
+ota_0,    app,  ota_0,   0x10000, 1920K,
+ota_1,    app,  ota_1,   0x1f0000,1920K,

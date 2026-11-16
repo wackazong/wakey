@@ -1,4 +1,8 @@
-/* ad_stream.c -- see ad_stream.h. */
+/* SPDX-FileCopyrightText: 2026 Alexander Walter
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ *
+ * ad_stream.c -- see ad_stream.h.
+ */
 #include "ad_stream.h"
 
 #include <stdlib.h>
@@ -60,7 +64,8 @@ static bool fail(AdStream *s, enum AdStreamError e) {
 
 static uint32_t min_u32(uint32_t a, size_t b) { return b < a ? (uint32_t)b : a; }
 
-/* n ASCII digits in base 8 or 16; false on anything else (then it is not a header). */
+/* n ASCII digits in base 8 or 16; false on anything else (then it is not a header) and
+   on a value above UINT32_MAX (odc's 11 octal digits hold 33 bits). */
 static bool parse_num(const uint8_t *p, int n, int base, uint32_t *out) {
   uint32_t v = 0;
   for (int i = 0; i < n; i++) {
@@ -71,6 +76,7 @@ static bool parse_num(const uint8_t *p, int n, int base, uint32_t *out) {
     else if (c >= 'A' && c <= 'F') d = (uint32_t)(c - 'A' + 10);
     else return false;
     if (d >= (uint32_t)base) return false;
+    if (v > (UINT32_MAX - d) / (uint32_t)base) return false;
     v = v * (uint32_t)base + d;
   }
   *out = v;

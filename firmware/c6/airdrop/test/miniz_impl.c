@@ -1,4 +1,8 @@
-/* miniz 1.14's implementation, built once for the host test. */
+/* SPDX-FileCopyrightText: 2026 Alexander Walter
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ *
+ * miniz 1.14's implementation, built once for the host test.
+ */
 #define MINIZ_NO_STDIO
 #define MINIZ_NO_TIME
 #define MINIZ_NO_ARCHIVE_APIS

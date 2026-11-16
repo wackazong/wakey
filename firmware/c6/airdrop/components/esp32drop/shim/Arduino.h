@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Alexander Walter
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
 // The one Arduino call ESP32Drop's receive path uses, on plain ESP-IDF.
 #pragma once
 

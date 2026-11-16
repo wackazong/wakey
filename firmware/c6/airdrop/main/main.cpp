@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Alexander Walter
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
 // The Tab5's C6 as AirDrop receiver ("Wakey"), the role next to esp_hosted.
 //
 // esp_hosted (../hosted) starts this image on the P4's request; first thing
 // it makes esp_hosted the next boot again, so a power cycle of the C6 ends
-// AirDrop. Received files are decoded while they arrive (ESP32Drop with the
-// streaming patches) and go to the P4 as frames on IO2 (link.h): the P4
+// AirDrop. Received files are decoded while they arrive (ESP32Drop with
+// Wakey's patches) and go to the P4 as frames on IO2 (link.h): the P4
 // writes them to the card and decides what to keep.
 
 #include <cinttypes>
@@ -27,32 +30,54 @@ constexpr const char *kName = "Wakey";
 // esp_hosted's project name.
 constexpr const char *kHostedProject = "network_adapter";
 
-// "2.4 GHz only" in the data_path_state flags (ESP32Drop's default 0x8f24
-// says dualband): 123-136 instead of 79-98 kB/s (spike README).
-constexpr uint16_t kDpsFlags = 0x8f24 & ~0x0020;
+// Announce 2.4 GHz only (ESP32Drop's default says dualband): the iPhone then
+// delivered 123-136 instead of 79-98 kB/s (README.md#speed).
+constexpr uint16_t kDpsFlags = AWDL_DPS_DEFAULT & ~AWDL_DPS_DUALBAND;
 
-// Makes the other slot, if it holds esp_hosted, the next boot. Not inlined:
-// it runs first, with the stack to itself (esp_ota_set_boot_partition hashes
-// the image deep in the stack; an overflow here once left the C6 in a boot
-// loop).
+// What boot_hosted_next() did, logged once the link is up.
+struct {
+  bool found;
+  esp_err_t err;
+  char label[17];
+  esp_app_desc_t desc;
+} g_boot_next;
+
+// Makes the other slot, if it holds esp_hosted, the next boot. Runs before
+// anything else, so that no failure later can leave the C6 booting this image
+// again and again. Not inlined: it has the stack to itself
+// (esp_ota_set_boot_partition hashes the image deep in the stack; an overflow
+// here leaves the C6 in a boot loop).
 __attribute__((noinline)) void boot_hosted_next() {
   const esp_partition_t *other = esp_ota_get_next_update_partition(nullptr);
-  esp_app_desc_t desc;
+  esp_app_desc_t &desc = g_boot_next.desc;
   if (other == nullptr || esp_ota_get_partition_description(other, &desc) != ESP_OK ||
       strcmp(desc.project_name, kHostedProject) != 0) {
+    return;
+  }
+  g_boot_next.found = true;
+  strlcpy(g_boot_next.label, other->label, sizeof g_boot_next.label);
+  g_boot_next.err = esp_ota_set_boot_partition(other);
+}
+
+void log_boot_next() {
+  if (!g_boot_next.found) {
     ESP_LOGE(TAG, "no esp_hosted in the other slot: boot slot unchanged");
     return;
   }
-  esp_err_t err = esp_ota_set_boot_partition(other);
-  ESP_LOGI(TAG, "next boot: %s %s from %s (%s)", desc.project_name, desc.version, other->label,
-           esp_err_to_name(err));
+  ESP_LOGI(TAG, "next boot: %s %s from %s (%s)", g_boot_next.desc.project_name, g_boot_next.desc.version,
+           g_boot_next.label, esp_err_to_name(g_boot_next.err));
 }
 
 // The raw frames' rate (AWDL's action frames, our TCP ACKs): 11g 24 Mbit/s
 // instead of the default 1 Mbit/s (~1 ms of a channel-6 slot per ACK). HT
 // rates wedge the C6's transmitter.
 void set_tx_rate() {
-  wifi_tx_rate_config_t config = {WIFI_PHY_MODE_11G, WIFI_PHY_RATE_24M, false, false};
+  wifi_tx_rate_config_t config = {
+      .phymode = WIFI_PHY_MODE_11G,
+      .rate = WIFI_PHY_RATE_24M,
+      .ersu = false,
+      .dcm = false,
+  };
   esp_err_t err = esp_wifi_config_80211_tx(WIFI_IF_STA, &config);
   if (err != ESP_OK) ESP_LOGW(TAG, "raw TX rate: %s", esp_err_to_name(err));
 }
@@ -64,8 +89,8 @@ uint32_t g_offset;  // in the current file
 bool on_begin(void *, const char *name, uint32_t size) {
   g_offset = 0;
   uint8_t head[4] = {(uint8_t)size, (uint8_t)(size >> 8), (uint8_t)(size >> 16), (uint8_t)(size >> 24)};
-  link_send(LINK_BEGIN, head, sizeof head, name, strlen(name));
-  return true;
+  // Names are at most 255 bytes (ad_stream.h): the frame always fits.
+  return link_send(LINK_BEGIN, head, sizeof head, name, strlen(name));
 }
 
 bool on_data(void *, const uint8_t *data, size_t len) {
@@ -101,13 +126,17 @@ void send_status(bool ready) {
 }  // namespace
 
 extern "C" void app_main() {
+  boot_hosted_next();
   link_init();
   const esp_app_desc_t *app = esp_app_get_description();
   link_send(LINK_HELLO, nullptr, 0, app->version, strlen(app->version));
   ESP_LOGI(TAG, "%s %s", app->project_name, app->version);
-  boot_hosted_next();
+  log_boot_next();
   send_status(false);
 
+  // On a failure below the receiver stops sending, status included: the P4
+  // power-cycles the C6 after 5 s of silence, and it boots esp_hosted (made
+  // the next boot above).
   esp_err_t err = awdl_begin();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "awdl_begin: %s", esp_err_to_name(err));

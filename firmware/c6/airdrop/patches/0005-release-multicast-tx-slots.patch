@@ -1,8 +1,10 @@
+Wakey's change to ESP32Drop; 0BSD like ESP32Drop.
+
 diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
-index 631793f..64f3b54 100644
+index 4492bad..5eb5bee 100644
 --- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
 +++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
-@@ -1717,10 +1717,31 @@ static portMUX_TYPE g_netif_tx_mux = portMUX_INITIALIZER_UNLOCKED;
+@@ -1708,10 +1708,31 @@ static portMUX_TYPE g_netif_tx_mux = portMUX_INITIALIZER_UNLOCKED;
  static volatile uint8_t  g_netif_inflight = 0;
  static volatile uint16_t g_netif_inflight_seq[NETIF_TX_RETRY_SLOTS];
  static volatile uint8_t  g_netif_inflight_used[NETIF_TX_RETRY_SLOTS];
@@ -34,7 +36,7 @@ index 631793f..64f3b54 100644
    room = g_netif_inflight < AWDL_NETIF_INFLIGHT_MAX;
    portEXIT_CRITICAL(&g_netif_tx_mux);
    return room;
-@@ -1733,6 +1754,7 @@ static bool netif_inflight_begin(uint16_t seq) {
+@@ -1724,6 +1745,7 @@ static bool netif_inflight_begin(uint16_t seq) {
    if (g_netif_inflight < AWDL_NETIF_INFLIGHT_MAX && !g_netif_inflight_used[slot]) {
      g_netif_inflight_used[slot] = 1;
      g_netif_inflight_seq[slot] = seq;
@@ -42,21 +44,19 @@ index 631793f..64f3b54 100644
      g_netif_inflight++;
      g_diag.netif_inflight = g_netif_inflight;
      if (g_netif_inflight > g_diag.netif_inflight_max)
-@@ -1786,10 +1808,10 @@ static void raw_tx_done_cb(const esp_80211_tx_info_t *ti) {
+@@ -1774,9 +1796,9 @@ static void raw_tx_done_cb(const esp_80211_tx_info_t *ti) {
      const bool mcast = (f[4] & 0x01) != 0;
      if (mcast) {
        if (ok) g_diag.txdone_mcast_ok++; else g_diag.txdone_mcast_fail++;
 -      return;                         // multicast has no link-layer ACK to recover
 +    } else {
 +      if (ok) g_diag.txdone_ucast_ok++; else g_diag.txdone_ucast_fail++;
-+      g_tx_last_rate = (int)ti->rate;
      }
 -    if (ok) g_diag.txdone_ucast_ok++; else g_diag.txdone_ucast_fail++;
--    g_tx_last_rate = (int)ti->rate;
  
      /* Only our AWDL/IPv6 netif shape. This excludes hidden-AP traffic and makes every
         offset below guarded: LLC ends at 31, AWDL seq is 34..35, IPv6 starts at 40. */
-@@ -1799,7 +1821,11 @@ static void raw_tx_done_cb(const esp_80211_tx_info_t *ti) {
+@@ -1786,7 +1808,11 @@ static void raw_tx_done_cb(const esp_80211_tx_info_t *ti) {
         admitted by the queued netif. Do not let it release the gate or enter retry. */
      if (!netif_inflight_done(seq)) return;
      if (g_cadence_task) xTaskNotifyGive(g_cadence_task);

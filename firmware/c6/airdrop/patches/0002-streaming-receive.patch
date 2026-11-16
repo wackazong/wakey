@@ -1,3 +1,5 @@
+Wakey's change to ESP32Drop; 0BSD like ESP32Drop.
+
 diff --git a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp b/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp
 index 738649b..23edf00 100644
 --- a/ESP32Drop/src/airdrop/port/ad_port_esp32.cpp

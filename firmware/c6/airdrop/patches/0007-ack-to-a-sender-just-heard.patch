@@ -1,5 +1,7 @@
+Wakey's change to ESP32Drop; 0BSD like ESP32Drop.
+
 diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
-index 4998e83..3f85507 100644
+index 5eb5bee..9e8bcbf 100644
 --- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
 +++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
 @@ -119,6 +119,7 @@ static bool     in_ch6_window_now(void);
@@ -10,25 +12,30 @@ index 4998e83..3f85507 100644
  static esp_err_t awdl_netif_init(void);
  static void     awdl_cadence_task_fn(void *);
  static void     proc_task(void *);
-@@ -585,6 +586,9 @@ extern "C" void awdl_rx_format_read(uint32_t out[8], uint8_t *last_rate) {
- }
- extern "C" void awdl_rx_ucast_read(uint32_t *n, uint32_t *retry) { *n = g_rx_ucast; *retry = g_rx_ucast_retry; }
- static volatile uint8_t g_rx_ucast_src[6];  // transmitter of the last unicast data frame for us
-+static volatile int64_t g_rx_ucast_us;       // ...and when it arrived (esp_timer)
-+static volatile uint32_t g_follow_tx;        // frames sent by awdl_netif_follow_tx()
-+extern "C" uint32_t awdl_follow_tx_read(void) { return g_follow_tx; }
- /* One line per peer heard in the last 5 s: the address's last two bytes, its ch6 slots
-    (mask), how long ago it was heard; '*' marks the master we gate on (`master`), '>' the
-    sender of the last unicast data for us. */
-@@ -630,6 +634,7 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
-     g_rx_ucast++;
-     if (pl[1] & 0x08) g_rx_ucast_retry++;
-     memcpy((void *)g_rx_ucast_src, &pl[10], 6);
+@@ -574,6 +575,11 @@ static struct AwdlRing g_ring_cur;     // cursors + drop count (awdl_ring.h)
+ static_assert(AWDL_RING_POW2(RING_SLOTS), "RING_SLOTS must be a power of two");
+ 
+ // ---- promiscuous RX callback (core 0, WiFi task) — KEEP MINIMAL -------------
++/* The transmitter of the last unicast data frame for us, and when it arrived (esp_timer):
++   awdl_netif_follow_tx() sends to that peer while it is still on ch6. */
++static volatile uint8_t g_rx_ucast_src[6];
++static volatile int64_t g_rx_ucast_us;
++
+ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
+   int64_t t0 = esp_timer_get_time();
+   const wifi_promiscuous_pkt_t *pkt = (const wifi_promiscuous_pkt_t *)buf;
+@@ -590,6 +596,10 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
+   if (is_data) { g_diag.data_any++; is_awdl = (memcmp(&pl[16], AWDL_BSSID, 6) == 0); }
+   else if (fc == 0xd0) is_awdl = (memcmp(&pl[24], APPLE_VENDOR, 4) == 0);
+   if (!is_awdl) return;
++  if (is_data && memcmp(&pl[4], g_awdl_mac, 6) == 0) {
++    memcpy((void *)g_rx_ucast_src, &pl[10], 6);
 +    g_rx_ucast_us = t0;
- #if CONFIG_SOC_WIFI_HE_SUPPORT
-     g_rx_format[pkt->rx_ctrl.cur_bb_format & 7]++;
- #endif
-@@ -2052,6 +2057,43 @@ static void awdl_netif_flush_tx(int budget, int64_t deadline_us) {
++  }
+ 
+   // Drop rather than wait when the consumer is behind: this is the WiFi task, and
+   // blocking here costs the transmit window. awdl_ring counts what was dropped.
+@@ -1974,6 +1984,43 @@ static void awdl_netif_flush_tx(int budget, int64_t deadline_us) {
    }
  }
  
@@ -64,7 +71,7 @@ index 4998e83..3f85507 100644
 +      break;
 +    }
 +    esp_err_t te = esp_wifi_80211_tx(AWDL_WIFI_IF, tf.buf, tf.len, true);
-+    if (te == ESP_OK) { g_diag.netif_tx_sent++; g_follow_tx++; }
++    if (te == ESP_OK) g_diag.netif_tx_sent++;
 +    else { netif_inflight_done(seq); g_diag.netif_tx_err++; g_diag.netif_tx_last_err = (int32_t)te; break; }
 +  }
 +}
@@ -72,7 +79,7 @@ index 4998e83..3f85507 100644
  static void awdl_netif_rx_free(void *h, void *buffer) {
    (void)h;
    free(buffer);            // free(NULL) is a safe no-op
-@@ -2408,6 +2450,7 @@ void awdl_cadence_pass(void) {
+@@ -2330,6 +2377,7 @@ void awdl_cadence_pass(void) {
      }
    }
    if (out.drain_max) awdl_netif_flush_tx(out.drain_max, out.drain_until_us);

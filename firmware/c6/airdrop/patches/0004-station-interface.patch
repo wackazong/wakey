@@ -1,5 +1,7 @@
+Wakey's change to ESP32Drop; 0BSD like ESP32Drop.
+
 diff --git a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
-index 950a4bd..631793f 100644
+index 0d09d81..4492bad 100644
 --- a/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
 +++ b/ESP32Drop/src/awdl/port/awdl_port_esp32.cpp
 @@ -58,6 +58,15 @@
@@ -18,7 +20,7 @@ index 950a4bd..631793f 100644
  /* The core for the library's tasks: 1 beside Wi-Fi on core 0 where there are two
     (the ESP32-S3), 0 on a single-core part (Wakey: the ESP32-C6). */
  #define AD_TASK_CORE ((CONFIG_FREERTOS_NUMBER_OF_CORES > 1) ? 1 : 0)
-@@ -1541,7 +1550,7 @@ static void send_mif(const Selection &s) {
+@@ -1532,7 +1541,7 @@ static void send_mif(const Selection &s) {
      }
    }
  #endif
@@ -27,7 +29,7 @@ index 950a4bd..631793f 100644
    g_diag.tx_err = mtx;
    g_diag.tx_count++;
    g_diag.mif_tx++;
-@@ -1587,7 +1596,7 @@ int awdl_tx_ip6_now(const uint8_t dst[6], uint8_t *buf, size_t len) {
+@@ -1578,7 +1587,7 @@ int awdl_tx_ip6_now(const uint8_t dst[6], uint8_t *buf, size_t len) {
     * to be enough to push ssl_setup into -0x7f00 (ALLOC_FAILED). Every static byte the
     * library takes is a byte TLS does not get. */
    build_awdl_data_at(buf, dst, 0x86dd, (int)len, 0);
@@ -36,7 +38,7 @@ index 950a4bd..631793f 100644
    g_diag.tx_count++;
    /* Its OWN latch. g_diag.tx_err is last-write-wins across every transmitter, and send_mif
       assigns it unconditionally four times a second, so an error recorded only there is
-@@ -1964,7 +1973,7 @@ static void awdl_netif_flush_tx(int budget, int64_t deadline_us) {
+@@ -1922,7 +1931,7 @@ static void awdl_netif_flush_tx(int budget, int64_t deadline_us) {
         it is how a transmit path that never works keeps a counter that says it does.
         netif_tx_sent counts what the driver ACCEPTED;
         netif_tx_err counts what it refused, with the last reason. */
@@ -45,7 +47,7 @@ index 950a4bd..631793f 100644
      if (te == ESP_OK) g_diag.netif_tx_sent++;
      else {
        netif_inflight_done(seq);          // refused injections receive no completion callback
-@@ -2139,7 +2148,8 @@ static esp_err_t wifi_probe_init(void) {
+@@ -2097,7 +2106,8 @@ static esp_err_t wifi_probe_init(void) {
    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
    if ((e = esp_wifi_init(&cfg))                    != ESP_OK) return e;
    if ((e = esp_wifi_set_storage(WIFI_STORAGE_RAM)) != ESP_OK) return e;
@@ -55,7 +57,7 @@ index 950a4bd..631793f 100644
    /* The interface MAC and the addr1/addr2 used by AWDL MUST be the same address.
     * Merely deriving a locally-administered g_awdl_mac while leaving the radio at its
     * factory AP MAC makes frames addressed to our AWDL identity invisible to the
-@@ -2147,14 +2157,16 @@ static esp_err_t wifi_probe_init(void) {
+@@ -2105,14 +2115,16 @@ static esp_err_t wifi_probe_init(void) {
     * which hides the mismatch functionally, but the peer receives no 802.11 ACK and
     * retries every inbound TCP frame. Set it while the AP interface is still disabled,
     * as esp_wifi_set_mac requires; wifi_start below enables it. */

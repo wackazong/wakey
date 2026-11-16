@@ -1,4 +1,7 @@
-/* The receiver's link to the P4: frames on UART1, TX on IO2 (the P4's GPIO14).
+/* SPDX-FileCopyrightText: 2026 Alexander Walter
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ *
+ * The receiver's link to the P4: frames on UART1, TX on IO2 (the P4's GPIO14).
  *
  * One way, no flow control: the P4 reads everything (it has the memory); a
  * full TX buffer blocks the writer, which for file data is ESP32Drop's TLS
@@ -7,8 +10,10 @@
  * Frame (little-endian):
  *   0xA5 0x5A, type (1 byte), length (2 bytes), payload (length bytes),
  *   CRC-32 (IEEE, as zlib's) over type, length and payload (4 bytes).
+ * The payload is at most LINK_PAYLOAD_MAX bytes.
  *
- * Types and payloads (firmware/src/airdrop.rs reads them):
+ * Types and payloads (read by wakey-core/src/airdrop.rs, `FrameReader`, on
+ * the P4; firmware/src/airdrop.rs runs it):
  *   HELLO   1  version string (the app's)
  *   STATUS  2  state (0 starting, 1 ready), AWDL peers (1 byte each)
  *   BEGIN   3  file size (4), name (rest, UTF-8)
@@ -38,14 +43,19 @@ enum {
 };
 
 #define LINK_BAUD 3000000
+/* The P4 takes a longer length for a false start and resynchronises:
+   MAX_PAYLOAD in wakey-core/src/airdrop.rs, keep both equal. */
+#define LINK_PAYLOAD_MAX 2048
+/* File bytes per DATA frame (plus the 4-byte offset). */
 #define LINK_DATA_MAX 1024
 
 /* UART1 at LINK_BAUD on IO2; routes ESP_LOG into LOG frames. */
 void link_init(void);
 
 /* One frame: `head` (may be NULL) and `body` form the payload. Blocks while
-   the TX buffer is full. */
-void link_send(uint8_t type, const void *head, size_t head_len, const void *body, size_t body_len);
+   the TX buffer is full. False, and nothing sent, if the payload is longer
+   than LINK_PAYLOAD_MAX. */
+bool link_send(uint8_t type, const void *head, size_t head_len, const void *body, size_t body_len);
 
 #ifdef __cplusplus
 }
