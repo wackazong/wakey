@@ -10,8 +10,8 @@
 //! buffer is overwritten by the next measurement.
 //!
 //! The light maps to a backlight level ([`level_for`]; the panel's
-//! backlight barely dims, so the night halves the pixels instead), and the
-//! thread fades the backlight there.
+//! backlight barely dims, so at night the pixels are scaled down as well),
+//! and the thread fades both there.
 
 use crate::board::Backlight;
 use crate::board::camera;
@@ -36,8 +36,8 @@ const PERIOD: Duration = Duration::from_secs(10);
 /// So there are three ranges of room light (average pixel value at the
 /// longest exposure and 1× gain):
 /// - night, below [`LIGHT_NIGHT`]: [`LEVEL_NIGHT`] and every pixel at
-///   `night_pixels` (config `display.night_pixels_percent`,
-///   [`crate::ui::dim`]); left only above
+///   `night_pixels` (config `display.night_pixels_percent`, the
+///   [`Screen`]'s pixel scaling); left only above
 ///   [`LIGHT_NIGHT_END`];
 /// - a lit room: [`LEVEL_ROOM`];
 /// - from [`LIGHT_ROOM_END`] to [`LIGHT_BRIGHT`]: [`LEVEL_ROOM_TOP`] to
@@ -103,10 +103,22 @@ pub fn night() -> bool {
 /// A frame finished into our buffer (set by the driver's ISR callback).
 static FRAME_DONE: AtomicBool = AtomicBool::new(false);
 
-/// Starts the light meter; it owns the backlight from now on. Without a
-/// working camera the backlight stays at full brightness (logged).
-pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8) {
-    let night_pixels = (u16::from(night_pixels_percent) * crate::ui::dim::FULL / 100).max(1);
+/// The display as the light meter sees it: whether it sleeps (backlight
+/// off), and the brightness of its pixels (`full` = unchanged).
+#[derive(Clone, Copy)]
+pub struct Screen {
+    pub asleep: fn() -> bool,
+    pub pixels: fn() -> u16,
+    pub set_pixels: fn(u16),
+    pub full: u16,
+}
+
+/// Starts the light meter; it owns the backlight from now on and sets the
+/// pixel brightness on `screen` (`night_pixels_percent` in the dark).
+/// Without a working camera the backlight stays at full brightness
+/// (logged).
+pub fn start(bus: SharedI2c, mut backlight: Backlight, screen: Screen, night_pixels_percent: u8) {
+    let night_pixels = (u16::from(night_pixels_percent) * screen.full / 100).max(1);
     let run = move || {
         let mut meter = match Meter::new(&bus) {
             Ok(m) => m,
@@ -122,9 +134,9 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8)
         let _ = set_backlight(&mut backlight, level);
         let mut next = Instant::now();
         loop {
-            // The display's sleep (`ui::power`): backlight off at once,
-            // and back on once it is awake again.
-            if crate::ui::power::asleep() != asleep {
+            // The display's sleep: backlight off at once, and back on once
+            // it is awake again.
+            if (screen.asleep)() != asleep {
                 asleep = !asleep;
                 let _ = set_backlight(&mut backlight, if asleep { 0.0 } else { level });
             }
@@ -140,22 +152,18 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8)
                         };
                         NIGHT.store(night, Ordering::Relaxed);
                         let target = level_for(light, night);
-                        let pixels = if night {
-                            night_pixels
-                        } else {
-                            crate::ui::dim::FULL
-                        };
+                        let pixels = if night { night_pixels } else { screen.full };
                         log::info!(
                             "ambient: backlight {:.1} %, pixels {} %",
                             target * 100.0,
-                            u32::from(pixels) * 100 / 256
+                            u32::from(pixels) * 100 / u32::from(screen.full)
                         );
                         if asleep {
                             // Nothing to see: take the new values at once.
                             level = target;
-                            crate::ui::dim::set(pixels);
+                            (screen.set_pixels)(pixels);
                         } else {
-                            fade(&mut backlight, &mut level, target, pixels);
+                            fade(&screen, &mut backlight, &mut level, target, pixels);
                         }
                     }
                     Err(e) => log::warn!("ambient: {e}"),
@@ -183,17 +191,17 @@ fn level_for(light: f32, night: bool) -> f32 {
 }
 
 /// Moves the backlight to `target` and the pixel brightness to `pixels`
-/// (1/256) over [`FADE`]. The backlight steps every 50 ms; the pixels
-/// change in [`PIXEL_STEPS`] steps.
-fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
+/// over [`FADE`]. The backlight steps every 50 ms; the pixels change in
+/// [`PIXEL_STEPS`] steps.
+fn fade(screen: &Screen, backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
     const STEP: Duration = Duration::from_millis(50);
     let steps = (FADE.as_millis() / STEP.as_millis()) as u32;
-    let (from, pixels_from) = (*level, crate::ui::dim::factor());
+    let (from, pixels_from) = (*level, (screen.pixels)());
     if from == target && pixels_from == pixels {
         return;
     }
     for i in 1..=steps {
-        if crate::ui::power::asleep() {
+        if (screen.asleep)() {
             // The display went to sleep: the backlight stays off.
             break;
         }
@@ -202,12 +210,12 @@ fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
         let _ = set_backlight(backlight, from * (target / from).powf(t));
         let part = (t * PIXEL_STEPS).floor() / PIXEL_STEPS;
         let p = f32::from(pixels_from) * (f32::from(pixels) / f32::from(pixels_from)).powf(part);
-        crate::ui::dim::set(p.round() as u16);
+        (screen.set_pixels)(p.round() as u16);
         std::thread::sleep(STEP);
     }
-    crate::ui::dim::set(pixels);
+    (screen.set_pixels)(pixels);
     *level = target;
-    if crate::ui::power::asleep() {
+    if (screen.asleep)() {
         let _ = set_backlight(backlight, 0.0);
     }
 }

@@ -290,7 +290,18 @@ async fn app(
     let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
 
     // The light meter owns the backlight: full at first, then the room's.
-    crate::ambient::start(i2c.clone(), backlight, config.display.night_pixels_percent);
+    let screen = crate::ambient::Screen {
+        asleep: crate::ui::power::asleep,
+        pixels: crate::ui::dim::factor,
+        set_pixels: crate::ui::dim::set,
+        full: crate::ui::dim::FULL,
+    };
+    crate::ambient::start(
+        i2c.clone(),
+        backlight,
+        screen,
+        config.display.night_pixels_percent,
+    );
     watch_render_loop();
     #[cfg(feature = "task-stats")]
     crate::taskstats::start();
