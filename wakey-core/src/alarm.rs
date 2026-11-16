@@ -30,7 +30,8 @@
 //! - After a boot an alarm still rings if its time is less than the ring
 //!   timeout ago (power cut, crash, wake from power-off a bit late). An
 //!   alarm time crossed by a clock correction (NTP jumping more than that)
-//!   does not ring.
+//!   does not ring. Neither does a snooze that ended more than the ring
+//!   timeout ago (it would have rung out); the alarm is done.
 //! - Deleting or switching off the active alarm ends it.
 
 use crate::datetime::{Date, DateTime};
@@ -49,9 +50,9 @@ pub enum Sound {
     File(String),
     /// A different file from `sounds/` each day ([`pick_daily`]).
     RandomFile,
-    /// A track of the synced TIDAL playlist (V2).
+    /// A track of the synced TIDAL playlist.
     TidalTrack(String),
-    /// A different track of the TIDAL playlist each day (V2).
+    /// A different track of the TIDAL playlist each day.
     TidalRandom,
 }
 
@@ -107,7 +108,7 @@ pub struct AlarmConfig {
     pub fade_in_s: u16,
 }
 
-/// A new alarm: on, 07:00, Monday to Friday, the built-in tone.
+/// A new alarm: on, 07:00, Monday to Friday, a random file from `sounds/`.
 impl Default for AlarmConfig {
     fn default() -> Self {
         Self {
@@ -391,7 +392,12 @@ impl Alarms {
                 snoozes,
                 until,
             } => {
-                if now.unix >= until {
+                if now.unix >= until + ring.timeout_s() {
+                    // Rebooted long after the snooze ended (it would have
+                    // rung out by now): done, not a late ring.
+                    s.done.insert(id, day);
+                    Phase::Idle
+                } else if now.unix >= until {
                     Phase::Ringing {
                         id,
                         day,
@@ -531,38 +537,6 @@ fn ringing(id: u32, day: Date, ring: &RingConfig, now: Now) -> Phase {
         snoozes: 0,
         until: now.unix + ring.timeout_s(),
     }
-}
-
-/// German short form of a weekday selection (Monday first), with runs of
-/// three or more days joined: "Mo–Fr", "Sa, So", "Mo, Mi–Fr", "täglich",
-/// "" for none.
-pub fn weekdays_de(days: &[u8; 7]) -> String {
-    const SHORT: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
-    if days.iter().all(|&d| d != 0) {
-        return "täglich".into();
-    }
-    let mut parts = Vec::new();
-    let mut i = 0;
-    while i < 7 {
-        if days[i] == 0 {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i + 1 < 7 && days[i + 1] != 0 {
-            i += 1;
-        }
-        match i - start {
-            0 => parts.push(SHORT[start].to_string()),
-            1 => {
-                parts.push(SHORT[start].to_string());
-                parts.push(SHORT[i].to_string());
-            }
-            _ => parts.push(format!("{}–{}", SHORT[start], SHORT[i])),
-        }
-        i += 1;
-    }
-    parts.join(", ")
 }
 
 /// Whether alarm `cfg` starts ringing at `now`.
@@ -793,6 +767,19 @@ mod tests {
     }
 
     #[test]
+    fn reboot_long_after_a_snooze_does_not_ring() {
+        let c = cfg();
+        let mut a = Alarms::new(State::default());
+        run(&mut a, &c, ALARM - 1, ALARM);
+        a.input(&r(), at_unix(ALARM + 1), Input::Snooze);
+        let mut b = Alarms::new(a.state().clone());
+        let next_day = ALARM + 20 * 3600;
+        b.tick(&c, &r(), at_unix(next_day));
+        assert_eq!(b.state().phase, Phase::Idle);
+        assert_eq!(b.state().done.get(&1), Some(&at_unix(ALARM).local.date()));
+    }
+
+    #[test]
     fn alarm_set_just_after_its_time_waits_for_tomorrow() {
         let c = cfg();
         let mut a = Alarms::new(State::default());
@@ -926,16 +913,6 @@ mod tests {
         assert_eq!(a.state().done.get(&1).copied(), None);
         run(&mut a, &later, ALARM + 60, ALARM + 1800);
         assert!(a.is_ringing());
-    }
-
-    #[test]
-    fn weekday_summary() {
-        assert_eq!(weekdays_de(&[1, 1, 1, 1, 1, 0, 0]), "Mo–Fr");
-        assert_eq!(weekdays_de(&[0, 0, 0, 0, 0, 1, 1]), "Sa, So");
-        assert_eq!(weekdays_de(&[1, 0, 1, 1, 1, 0, 0]), "Mo, Mi–Fr");
-        assert_eq!(weekdays_de(&[0, 0, 1, 0, 0, 0, 0]), "Mi");
-        assert_eq!(weekdays_de(&[1; 7]), "täglich");
-        assert_eq!(weekdays_de(&[0; 7]), "");
     }
 
     #[test]
