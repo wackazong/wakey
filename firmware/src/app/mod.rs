@@ -25,7 +25,6 @@ use crate::audio::uac::UsbAudio;
 use crate::board::Board;
 use crate::board::ioexp::Pin;
 use crate::display::ppa::PpaRotator;
-use crate::sounds::SoundFile;
 use crate::ui::{input, platform, render_loop, transition};
 use crate::{clock, config, net, runtime};
 use alarm::AlarmClock;
@@ -135,25 +134,14 @@ pub struct Ctx {
     /// The alarm as saved when its page opened (`None`: a new alarm);
     /// Sichern only after a change.
     original: RefCell<Option<AlarmConfig>>,
-    /// `sounds/` as listed when the sound page opened.
-    sound_files: RefCell<Vec<SoundFile>>,
-    /// The sound each row of the sound page stands for.
-    sound_choices: RefCell<Vec<wakey_core::alarm::Sound>>,
-    /// The same for the TIDAL tab's rows.
-    tidal_choices: RefCell<Vec<wakey_core::alarm::Sound>>,
     /// The name being typed.
     name: RefCell<String>,
     /// The built-in speaker, for the wheel click.
     click: BuiltinSpeaker,
     /// TIDAL login and state (sound page's TIDAL tab).
     tidal: crate::tidal::Tidal,
-    /// While the TIDAL tab is open: follows its state.
-    tidal_timer: slint::Timer,
-    /// The TIDAL state last shown.
-    tidal_shown: RefCell<Option<crate::tidal::State>>,
-    /// Album covers read from the card, by cover id (RGB888, 88 px: ~23
-    /// KiB each).
-    covers: RefCell<std::collections::HashMap<String, slint::Image>>,
+    /// The sound page's lists, timers and covers.
+    sound: sound_page::SoundPageState,
 }
 
 impl Ctx {
@@ -256,15 +244,10 @@ async fn app(
         alarm: alarm.clone(),
         draft: RefCell::new(AlarmConfig::default()),
         original: RefCell::new(None),
-        sound_files: RefCell::new(Vec::new()),
-        sound_choices: RefCell::new(Vec::new()),
-        tidal_choices: RefCell::new(Vec::new()),
         name: RefCell::new(String::new()),
         click: builtin,
         tidal: crate::tidal::Tidal::new(config.tidal.clone(), wifi.clone()),
-        tidal_timer: slint::Timer::default(),
-        tidal_shown: RefCell::new(None),
-        covers: RefCell::new(std::collections::HashMap::new()),
+        sound: sound_page::SoundPageState::default(),
     });
     // The saved alarms' TIDAL tracks on the card (downloads if missing).
     sound_page::select_tidal(&ctx);
