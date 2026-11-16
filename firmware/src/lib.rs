@@ -30,6 +30,7 @@ pub mod display;
 pub mod http;
 pub mod net;
 pub mod profiler;
+pub mod psram;
 pub mod runtime;
 pub mod sounds;
 pub mod taskstats;

@@ -34,6 +34,7 @@ use crate::board::sd;
 use crate::config::{self, TidalConfig, TidalSession};
 use crate::http;
 use crate::net::Wifi;
+use crate::psram::PsramBuffer;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::io::{Read, Seek, SeekFrom};
@@ -504,8 +505,9 @@ struct CardWriter {
     /// The block being filled (address), and how full.
     cur: usize,
     len: usize,
-    /// All blocks, one allocation.
-    region: *mut u8,
+    /// All blocks, one allocation (freed after the writer is joined:
+    /// fields drop after [`Drop::drop`]).
+    _region: PsramBuffer,
 }
 
 const BLOCK: usize = 32 * 1024;
@@ -529,22 +531,13 @@ impl CardWriter {
             f.seek(SeekFrom::Start(at))?;
             f
         };
-        let region = unsafe {
-            esp_idf_svc::sys::heap_caps_aligned_alloc(
-                128,
-                BLOCK * BLOCKS,
-                esp_idf_svc::sys::MALLOC_CAP_SPIRAM | esp_idf_svc::sys::MALLOC_CAP_8BIT,
-            )
-        }
-        .cast::<u8>();
-        if region.is_null() {
-            return Err(std::io::Error::other("no memory for the write buffers"));
-        }
+        let region = PsramBuffer::new(BLOCK * BLOCKS, esp_idf_svc::sys::MALLOC_CAP_8BIT)
+            .ok_or_else(|| std::io::Error::other("no memory for the write buffers"))?;
         let (to_writer, from_main) =
             std::sync::mpsc::sync_channel::<Option<(usize, usize)>>(BLOCKS);
         let (to_main, free) = std::sync::mpsc::sync_channel::<usize>(BLOCKS);
         for k in 1..BLOCKS {
-            let _ = to_main.send(region as usize + k * BLOCK);
+            let _ = to_main.send(region.as_mut_ptr() as usize + k * BLOCK);
         }
         let previous =
             esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::get().unwrap_or_default();
@@ -581,9 +574,9 @@ impl CardWriter {
             to_writer: Some(to_writer),
             free,
             writer: Some(writer?),
-            cur: region as usize,
+            cur: region.as_mut_ptr() as usize,
             len: 0,
-            region,
+            _region: region,
         })
     }
 
@@ -659,7 +652,6 @@ impl Drop for CardWriter {
     fn drop(&mut self) {
         // The writer must be done with the blocks before they go.
         let _ = self.join();
-        unsafe { esp_idf_svc::sys::heap_caps_free(self.region.cast()) };
     }
 }
 

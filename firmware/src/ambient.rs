@@ -16,6 +16,7 @@
 use crate::board::Backlight;
 use crate::board::camera;
 use crate::board::i2c::SharedI2c;
+use crate::psram::PsramBuffer;
 use esp_idf_svc::sys::{self, esp};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -215,15 +216,19 @@ fn fade(backlight: &mut Backlight, level: &mut f32, target: f32, pixels: u16) {
     }
 }
 
-/// The camera pipeline: CSI receiver → ISP → `buf`.
+/// The camera pipeline: CSI receiver → ISP → `buf`. Taken down when
+/// dropped (also halfway set up).
 struct Meter {
     ctlr: sys::esp_cam_ctlr_handle_t,
-    buf: *mut u16,
+    isp: sys::isp_proc_handle_t,
+    /// One RGB565 frame, written by the CSI receiver's DMA.
+    buf: PsramBuffer,
     /// Index into [`SETTINGS`] of the last good reading.
     setting: usize,
 }
 
-// The handle and buffer are used by the light meter thread only.
+// SAFETY: the handles and the buffer are used by the light meter thread
+// only.
 unsafe impl Send for Meter {}
 
 unsafe extern "C" fn frame_done(
@@ -240,15 +245,19 @@ const PIXELS: usize = (camera::WIDTH * camera::HEIGHT) as usize;
 impl Meter {
     fn new(bus: &SharedI2c) -> anyhow::Result<Self> {
         camera::init(bus)?;
+        let buf = PsramBuffer::new(PIXELS * 2, sys::MALLOC_CAP_DMA)
+            .ok_or_else(|| anyhow::anyhow!("no PSRAM for the frame"))?;
+        let mut meter = Self {
+            ctlr: core::ptr::null_mut(),
+            isp: core::ptr::null_mut(),
+            buf,
+            setting: SETTINGS.len() - 1,
+        };
+        // SAFETY: driver calls with configurations that live for each
+        // call; the handles are kept in `meter`, whose drop deletes them;
+        // the callback is a plain function. The ISP register is written
+        // after `esp_isp_enable` (its clock is on).
         unsafe {
-            let buf = sys::heap_caps_aligned_alloc(
-                128,
-                (PIXELS * 2).next_multiple_of(128),
-                sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_DMA,
-            )
-            .cast::<u16>();
-            anyhow::ensure!(!buf.is_null(), "no PSRAM for the frame");
-
             let mut csi: sys::esp_cam_ctlr_csi_config_t = core::mem::zeroed();
             csi.ctlr_id = 0;
             csi.clk_src = sys::soc_periph_mipi_csi_phy_clk_src_t_MIPI_CSI_PHY_CLK_SRC_DEFAULT;
@@ -259,18 +268,17 @@ impl Meter {
             csi.input_data_color_type = sys::cam_ctlr_color_t_CAM_CTLR_COLOR_RAW8;
             csi.output_data_color_type = sys::cam_ctlr_color_t_CAM_CTLR_COLOR_RGB565;
             csi.queue_items = 1;
-            let mut ctlr = core::ptr::null_mut();
-            esp!(sys::esp_cam_new_csi_ctlr(&csi, &mut ctlr))?;
+            esp!(sys::esp_cam_new_csi_ctlr(&csi, &mut meter.ctlr))?;
             let cbs = sys::esp_cam_ctlr_evt_cbs_t {
                 on_get_new_trans: None,
                 on_trans_finished: Some(frame_done),
             };
             esp!(sys::esp_cam_ctlr_register_event_callbacks(
-                ctlr,
+                meter.ctlr,
                 &cbs,
                 core::ptr::null_mut()
             ))?;
-            esp!(sys::esp_cam_ctlr_enable(ctlr))?;
+            esp!(sys::esp_cam_ctlr_enable(meter.ctlr))?;
 
             let mut isp: sys::esp_isp_processor_cfg_t = core::mem::zeroed();
             isp.clk_src = sys::soc_periph_isp_clk_src_t_ISP_CLK_SRC_DEFAULT;
@@ -281,21 +289,16 @@ impl Meter {
             isp.h_res = camera::WIDTH;
             isp.v_res = camera::HEIGHT;
             isp.bayer_order = sys::color_raw_element_order_t_COLOR_RAW_ELEMENT_ORDER_BGGR;
-            let mut proc_ = core::ptr::null_mut();
-            esp!(sys::esp_isp_new_processor(&isp, &mut proc_))?;
-            esp!(sys::esp_isp_enable(proc_))?;
-            // FIFO overflow and buffer full no longer interrupt: ESP-IDF's
+            esp!(sys::esp_isp_new_processor(&isp, &mut meter.isp))?;
+            esp!(sys::esp_isp_enable(meter.isp))?;
+            // FIFO overflow and buffer full do not interrupt: ESP-IDF's
             // handler logs each from the interrupt, and a burst of them
             // tripped the interrupt watchdog. `frame` checks them instead.
             let ena = ISP_INT_ENA as *mut u32;
             ena.write_volatile(ena.read_volatile() & !ISP_OVERFLOW);
-            log::info!("ambient: camera light meter ready");
-            Ok(Self {
-                ctlr,
-                buf,
-                setting: SETTINGS.len() - 1,
-            })
         }
+        log::info!("ambient: camera light meter ready");
+        Ok(meter)
     }
 
     /// Wakes the sensor, finds an exposure with a usable average, puts it
@@ -306,8 +309,10 @@ impl Meter {
         let (lines, gain) = SETTINGS[self.setting];
         camera::set_exposure(bus, lines, gain)?;
         camera::stream(bus, true)?;
+        // SAFETY: the controller is enabled (`new`).
         unsafe { esp!(sys::esp_cam_ctlr_start(self.ctlr))? };
         let result = self.settle(bus);
+        // SAFETY: as above.
         unsafe { esp!(sys::esp_cam_ctlr_stop(self.ctlr))? };
         camera::stream(bus, false)?;
         let (mean, tries) = result?;
@@ -352,10 +357,12 @@ impl Meter {
         // SAFETY: ISP registers (the ISP is enabled).
         unsafe { (ISP_INT_CLR as *mut u32).write_volatile(ISP_OVERFLOW) };
         let mut trans = sys::esp_cam_ctlr_trans_t {
-            buffer: self.buf.cast(),
+            buffer: self.buf.as_mut_ptr().cast(),
             buflen: PIXELS * 2,
             received_size: 0,
         };
+        // SAFETY: the buffer holds a whole frame and lives as long as the
+        // controller; only this thread reads it, after `FRAME_DONE`.
         unsafe { esp!(sys::esp_cam_ctlr_receive(self.ctlr, &mut trans, 100))? };
         // A frame takes 200 ms at 5 fps.
         let deadline = Instant::now() + Duration::from_millis(1000);
@@ -363,11 +370,14 @@ impl Meter {
             anyhow::ensure!(Instant::now() < deadline, "no frame from the camera");
             std::thread::sleep(Duration::from_millis(5));
         }
+        // SAFETY: an ISP register (the ISP is enabled).
         let raw = unsafe { (ISP_INT_RAW as *const u32).read_volatile() };
         anyhow::ensure!(raw & ISP_OVERFLOW == 0, "ISP overflow, frame discarded");
-        // The driver invalidated the cache for the buffer before the
-        // callback: these reads see the frame.
-        let frame = unsafe { core::slice::from_raw_parts(self.buf, PIXELS) };
+        // SAFETY: the frame is complete and the driver invalidated the
+        // cache for the buffer before the callback: these reads see it.
+        // No DMA writes until the next `receive`.
+        let frame =
+            unsafe { core::slice::from_raw_parts(self.buf.as_mut_ptr().cast::<u16>(), PIXELS) };
         let (mut sum, mut n) = (0u32, 0u32);
         for y in (0..camera::HEIGHT as usize).step_by(8) {
             let row = &frame[y * camera::WIDTH as usize..][..camera::WIDTH as usize];
@@ -379,5 +389,22 @@ impl Meter {
             }
         }
         Ok(sum as f32 / n as f32)
+    }
+}
+
+impl Drop for Meter {
+    fn drop(&mut self) {
+        // SAFETY: handles from `new` (null if not created); errors of the
+        // disable calls only mean it was not enabled.
+        unsafe {
+            if !self.isp.is_null() {
+                sys::esp_isp_disable(self.isp);
+                sys::esp_isp_del_processor(self.isp);
+            }
+            if !self.ctlr.is_null() {
+                sys::esp_cam_ctlr_disable(self.ctlr);
+                sys::esp_cam_ctlr_del(self.ctlr);
+            }
+        }
     }
 }
