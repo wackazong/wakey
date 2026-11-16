@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexander Walter
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
 # Cargo runner: flashes an ELF with ESP-IDF's own bootloader (built for
 # ESP32-P4 rev < 3, matching the Tab5) and our partition table, then opens
 # the serial monitor.
@@ -20,10 +23,13 @@ if [[ ! -f "$bootloader" ]]; then
     exit 1
 fi
 
-# The C6's images for AirDrop into the "c6" partition (partitions.csv),
-# only if the flash holds something else (2.2 MB take ~25 s).
-c6_offset=0xC10000
-c6_image="$(mktemp -t wakey-c6)"
+# The C6's images for AirDrop into the "c6" partition (partitions.csv), only
+# if the flash holds something else: 3.1 MB to write (2.2 MB of images, the
+# rest the 0xFF gap before the receiver's slot), so compare MD5s first.
+c6_offset=$(python3 "$here/c6/pack.py" --offset)
+c6_dir="$(mktemp -d "${TMPDIR:-/tmp}/wakey-c6.XXXXXX")"
+trap 'rm -rf "$c6_dir"' EXIT
+c6_image="$c6_dir/c6.bin"
 python3 "$here/c6/pack.py" "$c6_image"
 c6_size=$(wc -c < "$c6_image" | tr -d ' ')
 c6_md5=$(md5 -q "$c6_image" 2>/dev/null || md5sum "$c6_image" | cut -d' ' -f1)
@@ -33,7 +39,8 @@ if ! espflash checksum-md5 --chip esp32p4 ${ESPFLASH_ARGS:-} "$c6_offset" "$c6_s
     # shellcheck disable=SC2086
     espflash write-bin --chip esp32p4 --baud 921600 ${ESPFLASH_ARGS:-} "$c6_offset" "$c6_image"
 fi
-rm -f "$c6_image"
+rm -rf "$c6_dir"
+trap - EXIT
 
 # shellcheck disable=SC2086
 exec espflash flash \
