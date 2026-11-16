@@ -30,16 +30,22 @@ pub fn list() -> Vec<SoundFile> {
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
             let (stem, ext) = name.rsplit_once('.')?;
-            let playable = wakey_core::airdrop::SOUND_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str());
+            let playable =
+                wakey_core::airdrop::SOUND_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str());
             (playable && !stem.starts_with('.')).then(|| SoundFile {
                 path: format!("{DIR}/{name}"),
-                // Composed: iOS sends "ö" as "o" + a combining mark.
-                title: wakey_core::airdrop::nfc(&stem.replace('_', " ")),
+                title: title_of(stem),
             })
         })
         .collect();
     files.sort_by_key(|f| f.title.to_lowercase());
     files
+}
+
+/// A file's title from its name without extension: `_` as spaces, and
+/// composed (iOS sends "ö" as "o" + a combining mark).
+fn title_of(stem: &str) -> String {
+    wakey_core::airdrop::nfc(&stem.replace('_', " "))
 }
 
 /// The title shown for `sound` (the alarm page's "Klang" row).
@@ -49,7 +55,7 @@ pub fn title(sound: &Sound) -> String {
         Sound::RandomFile | Sound::TidalRandom => "Zufällig".into(),
         Sound::File(path) => Path::new(path)
             .file_stem()
-            .map(|s| s.to_string_lossy().replace('_', " "))
+            .map(|s| title_of(&s.to_string_lossy()))
             .unwrap_or_else(|| path.clone()),
         Sound::TidalTrack(id) => id
             .parse()
@@ -75,7 +81,9 @@ pub fn resolve(sound: &Sound, id: u32, date: Date) -> Option<PathBuf> {
         Sound::TidalTrack(track) => {
             let file = track.parse().ok().and_then(crate::tidal::track_file);
             if file.is_none() {
-                log::warn!("sounds: TIDAL track {track} not on the card, playing the built-in tone");
+                log::warn!(
+                    "sounds: TIDAL track {track} not on the card, playing the built-in tone"
+                );
             }
             file
         }
