@@ -19,13 +19,13 @@
 mod device;
 mod host;
 
+use super::{SAMPLE_RATE, Source};
 use crate::board::ioexp::Switch;
 use esp_idf_svc::sys::EspError;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 
-/// Stream format the alarm clock uses (the Pebble supports only this).
-pub const SAMPLE_RATE: u32 = 48_000;
+/// Stream format: [`SAMPLE_RATE`], stereo, 16 bit.
 pub const CHANNELS: usize = 2;
 /// Isochronous transfers in flight, and 1 ms packets per transfer: 3 × 8 ms
 /// of buffering.
@@ -33,9 +33,6 @@ const NUM_XFERS: usize = 3;
 const PACKETS: usize = 8;
 /// Bytes per 1 ms packet: 48 frames × 2 channels × 2 bytes.
 const PACKET_BYTES: usize = (SAMPLE_RATE as usize / 1000) * CHANNELS * 2;
-
-/// Fills interleaved stereo i16 samples (`buf.len()` = frames × 2).
-pub type Source = Box<dyn FnMut(&mut [i16]) + Send>;
 
 /// Packets sent and packets that failed, for logs.
 pub static PACKETS_OK: AtomicU32 = AtomicU32::new(0);

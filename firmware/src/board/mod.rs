@@ -25,8 +25,8 @@ use esp_idf_svc::hal::peripherals::Peripherals;
 use i2c::{SharedI2c, SysI2c};
 use ioexp::IoExpanders;
 
-/// Touch controller addresses, used to tell the panel variants apart.
-const ST712X_TOUCH_ADDR: u8 = 0x55;
+/// GT911 touch controller addresses (the ILI9881C variant); the ST712x
+/// variants answer at [`touch::ADDR`].
 const GT911_ADDR_PRIMARY: u8 = 0x14; // INT pulled high during reset (Tab5 default)
 const GT911_ADDR_BACKUP: u8 = 0x5D;
 
@@ -136,16 +136,11 @@ impl Board {
 }
 
 fn detect_panel(i2c: &mut SysI2c) -> PanelVariant {
-    if i2c.probe(ST712X_TOUCH_ADDR) {
-        // Firmware version register 0x0000 (16-bit register address).
-        let mut fw = [0u8];
-        match i2c.write_read(ST712X_TOUCH_ADDR, &[0x00, 0x00], &mut fw) {
-            Ok(()) if fw[0] == 1 => return PanelVariant::St7121,
-            Ok(()) if fw[0] == 3 => return PanelVariant::St7123,
-            Ok(()) => log::warn!(
-                "board: unknown ST712x touch firmware {}, assuming ST7123",
-                fw[0]
-            ),
+    if i2c.probe(touch::ADDR) {
+        match touch::firmware(i2c) {
+            Ok(1) => return PanelVariant::St7121,
+            Ok(3) => return PanelVariant::St7123,
+            Ok(fw) => log::warn!("board: unknown ST712x touch firmware {fw}, assuming ST7123"),
             Err(e) => log::warn!("board: ST712x touch firmware read failed ({e}), assuming ST7123"),
         }
         return PanelVariant::St7123;

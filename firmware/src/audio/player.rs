@@ -11,7 +11,7 @@
 //! the same, but silent instead of the tone when the sound cannot be
 //! played; it also plays a [`Sound::Stream`] (a track still downloading).
 
-use super::uac::{self, Source};
+use super::{SAMPLE_RATE, Source};
 use crate::runtime::Thread;
 use esp_idf_svc::hal::cpu::Core;
 use std::collections::VecDeque;
@@ -24,7 +24,7 @@ use wakey_core::resample::Converter;
 use wakey_core::tone::{self, Beeper};
 
 /// Ring capacity: one second of 48 kHz stereo.
-const RING_SAMPLES: usize = uac::SAMPLE_RATE as usize * 2;
+const RING_SAMPLES: usize = SAMPLE_RATE as usize * 2;
 /// Frames decoded per step.
 const CHUNK_FRAMES: usize = 4096;
 
@@ -85,7 +85,7 @@ impl Player {
         }
     }
 
-    /// A sample source for a speaker's stream ([`uac::UsbAudio::start`],
+    /// A sample source for a speaker's stream ([`super::uac::UsbAudio::start`],
     /// `BuiltinSpeaker::start`). Only one may take from it at a time.
     pub fn source(&self) -> Source {
         let ring = self.ring.clone();
@@ -133,7 +133,7 @@ impl Player {
     /// Plays `sound` until [`stop`](Self::stop), at `gain` (linear) after a
     /// fade-in of `fade_s` seconds.
     pub fn ring(&self, sound: Sound, gain: f32, fade_s: u16) {
-        let fade_frames = u32::from(fade_s) * uac::SAMPLE_RATE;
+        let fade_frames = u32::from(fade_s) * SAMPLE_RATE;
         self.start(gain, fade_frames, move |ring| {
             if let Err(e) = play_sound(sound, ring) {
                 log::error!("player: {e}; playing the tone");
@@ -237,12 +237,12 @@ fn decode_from<R: Read + Seek + Send + 'static>(
         f.bits,
         f.duration_s()
     );
-    let mut resampler = if f.sample_rate != uac::SAMPLE_RATE {
-        let c = Converter::new(f.sample_rate, uac::SAMPLE_RATE).map_err(std::io::Error::other)?;
+    let mut resampler = if f.sample_rate != SAMPLE_RATE {
+        let c = Converter::new(f.sample_rate, SAMPLE_RATE).map_err(std::io::Error::other)?;
         log::info!(
             "player: converting {} Hz → {} Hz ({} frames per block)",
             f.sample_rate,
-            uac::SAMPLE_RATE,
+            SAMPLE_RATE,
             c.block_frames()
         );
         Some(c)
@@ -279,7 +279,7 @@ fn decode_from<R: Read + Seek + Send + 'static>(
 /// The built-in tone until stopped.
 fn beep(ring: &Ring) {
     log::info!("player: built-in tone");
-    let mut beeper = Beeper::new(uac::SAMPLE_RATE);
+    let mut beeper = Beeper::new(SAMPLE_RATE);
     let mut buf = vec![0i16; CHUNK_FRAMES * 2];
     while !ring.stop.load(Ordering::Acquire) {
         beeper.fill(&mut buf);

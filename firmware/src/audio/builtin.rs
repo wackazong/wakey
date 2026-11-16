@@ -15,7 +15,7 @@
 //! 5 V), and the thread sleeps; before the next sound the I2S starts, the
 //! codec is set up again (~3 ms) and the amplifier comes on.
 
-use super::uac::Source;
+use super::{SAMPLE_RATE, Source};
 use crate::board::codec::{self, CodecPins};
 use crate::board::i2c::SharedI2c;
 use crate::board::ioexp::{IoExpanders, Pin};
@@ -29,7 +29,6 @@ use std::sync::mpsc::{self, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 use wakey_core::{mix, tone};
 
-const SAMPLE_RATE: u32 = 48_000;
 /// Peak loudness of a single click, 0–1 of full scale.
 const CLICK_AMPLITUDE: f32 = 0.25;
 /// The amplifier goes off after this long without a click, a wake or the
