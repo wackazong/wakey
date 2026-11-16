@@ -123,6 +123,10 @@ impl Player {
     /// Stops the current file (the ring drains within a second).
     pub fn stop(&self) {
         self.ring.stop.store(true, Ordering::Release);
+        // The decoder checks `stop` and waits under the lock: taking it
+        // here makes sure it is either before its check or already
+        // waiting, so the notification is not lost.
+        drop(self.ring.samples.lock().unwrap());
         self.ring.space.notify_all();
     }
 
@@ -198,7 +202,6 @@ impl Player {
                 {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
-                ring.armed.store(false, Ordering::Release);
                 ring.playing.store(false, Ordering::Release);
             }))
             .expect("decoder thread");
