@@ -88,7 +88,7 @@ pub(super) fn version(which: Image) -> String {
 pub(super) fn install(_transport: &Transport, which: Image, activate: bool) -> anyhow::Result<()> {
     let t = Instant::now();
     let (part, at, len) = locate(which)?;
-    // SAFETY (all RPCs below): plain calls; the transport is up.
+    // SAFETY: plain calls (this and the RPCs below); the transport is up.
     let err = unsafe { sys::esp_hosted_slave_ota_begin() };
     anyhow::ensure!(err == 0, "ota_begin: {err}");
     let mut buf = vec![0u8; CHUNK];

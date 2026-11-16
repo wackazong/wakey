@@ -135,11 +135,17 @@ static FB_IN_USE: [AtomicBool; 2] = [const { AtomicBool::new(false) }; 2];
 /// The DPI driver's own allocation of a frame buffer (`esp_lcd_panel_dpi.c`).
 const FB_CAPS: u32 = sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT | sys::MALLOC_CAP_DMA;
 
+/// A frame buffer as the driver itself allocates one.
+fn calloc_fb(size: usize) -> *mut c_void {
+    // SAFETY: a plain allocation; the driver checks the result.
+    unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn esp_lcd_dpi_panel_alloc_fb(size: usize) -> *mut c_void {
     if size != PIXELS * 2 {
         // Not ours (another size): as the driver would.
-        return unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) };
+        return calloc_fb(size);
     }
     for (slot, in_use) in FB_POOL.iter().zip(&FB_IN_USE) {
         if in_use.swap(true, Ordering::AcqRel) {
@@ -147,7 +153,7 @@ extern "C" fn esp_lcd_dpi_panel_alloc_fb(size: usize) -> *mut c_void {
         }
         let mut fb = slot.load(Ordering::Acquire);
         if fb.is_null() {
-            fb = unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) };
+            fb = calloc_fb(size);
             if fb.is_null() {
                 in_use.store(false, Ordering::Release);
                 return fb;
@@ -161,7 +167,7 @@ extern "C" fn esp_lcd_dpi_panel_alloc_fb(size: usize) -> *mut c_void {
         return fb;
     }
     // More than two at once (never: one panel at a time).
-    unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) }
+    calloc_fb(size)
 }
 
 #[unsafe(no_mangle)]
@@ -172,6 +178,8 @@ extern "C" fn esp_lcd_dpi_panel_free_fb(fb: *mut c_void) {
             return;
         }
     }
+    // SAFETY: not one of the pool's: allocated by `calloc_fb`, and the
+    // driver frees it once.
     unsafe { sys::heap_caps_free(fb) };
 }
 
@@ -228,6 +236,7 @@ impl Display {
             pixel_clock_mhz: None,
         };
 
+        // SAFETY: the configuration is plain data, read during the call.
         unsafe {
             // VDD_MIPI_DPHY is LDO channel 3 at 2.5 V.
             let mut ldo_cfg: sys::esp_ldo_channel_config_t = core::mem::zeroed();
@@ -255,6 +264,8 @@ impl Display {
     /// Creates the DSI bus (PHY) and the command interface (DBI).
     fn open_link(&mut self) -> Result<(), EspError> {
         let timing = self.variant.timing();
+        // SAFETY: the configurations are plain data (zeroed is their
+        // default), read during the calls; the handles are ours.
         unsafe {
             let mut bus_cfg: sys::esp_lcd_dsi_bus_config_t = core::mem::zeroed();
             bus_cfg.bus_id = 0;
@@ -284,6 +295,9 @@ impl Display {
     /// Creates the DPI panel and starts streaming fb0 (video mode).
     fn start_stream(&mut self) -> Result<(), EspError> {
         let timing = self.variant.timing();
+        // SAFETY: the configurations are plain data (zeroed is their
+        // default), read during the calls; the bus is up (`open_link`). The
+        // callback is a plain function that touches only statics.
         unsafe {
             // Video mode (DPI): two frame buffers in PSRAM, allocated by the driver.
             let mut dpi_cfg: sys::esp_lcd_dpi_panel_config_t = core::mem::zeroed();
@@ -343,6 +357,7 @@ impl Display {
         } else {
             params.as_ptr().cast()
         };
+        // SAFETY: `params` is valid for the call; the command interface is up.
         unsafe {
             esp!(sys::esp_lcd_panel_io_tx_param(
                 self.io,
@@ -354,6 +369,7 @@ impl Display {
     }
 
     fn rx(&self, cmd: u8, out: &mut [u8]) -> Result<(), EspError> {
+        // SAFETY: `out` is valid for the call; the command interface is up.
         unsafe {
             esp!(sys::esp_lcd_panel_io_rx_param(
                 self.io,
@@ -430,6 +446,8 @@ impl Display {
         if !self.panel.is_null() {
             self.stop_stream()?;
         }
+        // SAFETY: our handles, deleted once (nulled below); the stream on
+        // the bus is gone.
         unsafe {
             esp!(sys::esp_lcd_panel_io_del(self.io))?;
             esp!(sys::esp_lcd_del_dsi_bus(self.bus))?;
@@ -451,6 +469,7 @@ impl Display {
     /// kept, `FB_POOL`). The DSI link and the panel stay powered.
     fn stop_stream(&mut self) -> Result<(), EspError> {
         self.stop_stream_dma();
+        // SAFETY: our panel, deleted once (nulled below), its DMA stopped.
         esp!(unsafe { sys::esp_lcd_panel_del(self.panel) })?;
         self.panel = ptr::null_mut();
         self.fbs = [ptr::null_mut(); 2];
@@ -565,6 +584,8 @@ impl Display {
         // The driver rejects empty areas; a one-row write-back costs nothing.
         let start = rows.start.min(HEIGHT - 1);
         let end = rows.end.clamp(start + 1, HEIGHT);
+        // SAFETY: the panel is streaming, and the pointer is its back
+        // buffer, which the driver only selects.
         unsafe {
             // A pointer inside a frame buffer makes the driver write back
             // the cache for rows start..end and switch buffers, no copy.

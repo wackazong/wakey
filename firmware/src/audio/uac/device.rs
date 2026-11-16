@@ -59,8 +59,7 @@ unsafe extern "C" fn on_client_event(
     // runs on the client's thread inside `usb_host_client_handle_events`
     // (see `client_thread` on the aliasing this implies); `msg` is valid
     // for the call.
-    let client = unsafe { &mut *(arg as *mut Client) };
-    let msg = unsafe { &*msg };
+    let (client, msg) = unsafe { (&mut *(arg as *mut Client), &*msg) };
     match msg.event {
         sys::usb_host_client_event_t_USB_HOST_CLIENT_EVENT_NEW_DEV => {
             // SAFETY: the union member of this event.
@@ -84,8 +83,8 @@ unsafe extern "C" fn on_iso_done(xfer: *mut sys::usb_transfer_t) {
     // SAFETY: the transfer is ours and back from the driver for the call;
     // its context is the client (`stream`), on whose thread this runs; it
     // was allocated with PACKETS packet descriptors.
-    let x = unsafe { &mut *xfer };
-    let client = unsafe { &mut *(x.context as *mut Client) };
+    let (x, client) = unsafe { (&mut *xfer, &mut *((*xfer).context as *mut Client)) };
+    // SAFETY: as said, PACKETS packet descriptors.
     for p in unsafe { x.isoc_packet_desc.as_mut_slice(PACKETS) } {
         if p.status == sys::usb_transfer_status_t_USB_TRANSFER_STATUS_COMPLETED {
             PACKETS_OK.fetch_add(1, Ordering::Relaxed);
@@ -590,10 +589,12 @@ impl Client {
             x.callback = Some(on_iso_done);
             x.context = (self as *mut Self).cast();
             x.timeout_ms = 100;
+            // SAFETY: allocated with PACKETS packet descriptors.
             for p in unsafe { x.isoc_packet_desc.as_mut_slice(PACKETS) } {
                 p.num_bytes = PACKET_BYTES as i32;
             }
             fill(&mut self.source, &mut self.samples, x);
+            // SAFETY: a set-up transfer of this client's open device.
             if unsafe { sys::usb_host_transfer_submit(xfer) } == sys::ESP_OK {
                 self.device.as_mut().unwrap().in_flight += 1;
             }
@@ -623,8 +624,10 @@ impl Client {
             // transfer of a device that is gone). The interface and the
             // device are ours to release.
             for xfer in d.transfers {
+                // SAFETY: as said, back and no longer used.
                 unsafe { sys::usb_host_transfer_free(xfer) };
             }
+            // SAFETY: as said, ours to release.
             unsafe {
                 sys::usb_host_interface_release(self.handle, d.handle, d.alt.interface);
                 sys::usb_host_device_close(self.handle, d.handle);

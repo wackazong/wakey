@@ -55,6 +55,7 @@ const MIN_LINES: usize = 8;
 pub static WAIT_US: AtomicU32 = AtomicU32::new(0);
 
 fn now_us() -> u32 {
+    // SAFETY: a plain query.
     unsafe { sys::esp_timer_get_time() as u32 }
 }
 
@@ -130,6 +131,8 @@ pub struct PpaRotator {
 impl PpaRotator {
     pub fn new() -> Result<Self, EspError> {
         let mut client: sys::ppa_client_handle_t = ptr::null_mut();
+        // SAFETY: the configurations are plain data (zeroed is their
+        // default), read during the calls.
         unsafe {
             let mut cfg: sys::ppa_client_config_t = core::mem::zeroed();
             cfg.oper_type = sys::ppa_operation_t_PPA_OPERATION_SRM;
@@ -144,7 +147,9 @@ impl PpaRotator {
         }
         let mut bufs = [ptr::null_mut(); NUM_BUFS];
         for b in &mut bufs {
-            // Internal, DMA-capable, cache-line aligned.
+            // Internal, DMA-capable, cache-line aligned. Never freed: the
+            // rotator lives as long as the program.
+            // SAFETY: a plain allocation; the result is checked below.
             let p = unsafe {
                 sys::heap_caps_aligned_alloc(
                     128,
@@ -288,6 +293,11 @@ impl PpaRotator {
         let start = o.first_line.min(t.lines - MIN_LINES);
         let shift = o.first_line - start;
         let buf = self.bufs[o.buf];
+        // SAFETY: the PPA has finished everything queued (waited above), so
+        // neither the strip nor the target is in use. The strip holds
+        // STRIP_LINES ≥ MIN_LINES lines of `w` pixels; the target holds the
+        // rows read (its contract). The CPU never writes the target, so the
+        // invalidation drops no CPU writes.
         unsafe {
             // Picture rows row_ref+1-end..row_ref+1-start hold landscape
             // columns range.start..range.end. Drop any cached copy so the
@@ -332,6 +342,9 @@ impl PpaRotator {
         WAIT_US.fetch_add(now_us().wrapping_sub(t0), Ordering::Relaxed);
         let w = o.range.len() as u32;
         let h = o.lines as u32;
+        // SAFETY: the configuration is plain data (zeroed is its default),
+        // read during the call. The strip is not touched again until the
+        // PPA is done with it (`buf_seq`); the target holds the block.
         unsafe {
             let mut cfg: sys::ppa_srm_oper_config_t = core::mem::zeroed();
             cfg.in_.buffer = self.bufs[o.buf] as *const c_void;

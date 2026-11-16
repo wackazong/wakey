@@ -149,6 +149,8 @@ impl FbCopy {
         let mut handle: Handle = core::ptr::null_mut();
         // The config struct is empty in C; the driver only checks for null.
         let config = 0u32;
+        // SAFETY: both pointers are valid for the call; the driver keeps
+        // neither.
         unsafe {
             esp!(esp_async_fbcpy_install(
                 (&raw const config).cast(),
@@ -189,6 +191,10 @@ impl FbCopy {
             copy_size_y: size.1,
             pixel_format_unique_id: sys::lcd_color_format_t_LCD_COLOR_FMT_RGB565,
         };
+        // SAFETY: the descriptor is read during the call. Both pictures are
+        // DMA-capable memory holding the rectangles (asserted above, by
+        // their owners' contract). `done` is boxed and outlives the copy:
+        // `drop` waits for it.
         unsafe {
             esp!(esp_async_fbcpy(
                 self.handle,

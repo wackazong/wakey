@@ -101,8 +101,11 @@ pub fn moment() -> Now {
 pub fn local(unix: i64) -> DateTime {
     // SAFETY: `tm` is plain data (all zeros is valid) and an out-parameter
     // of the reentrant `localtime_r`.
-    let mut tm: sys::tm = unsafe { core::mem::zeroed() };
-    unsafe { sys::localtime_r(&unix, &mut tm) };
+    let tm = unsafe {
+        let mut tm: sys::tm = core::mem::zeroed();
+        sys::localtime_r(&unix, &mut tm);
+        tm
+    };
     DateTime {
         year: (tm.tm_year + 1900) as u16,
         month: (tm.tm_mon + 1) as u8,

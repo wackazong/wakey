@@ -42,10 +42,11 @@ pub fn start() {
                 let n = unsafe { sys::uxTaskGetNumberOfTasks() } as usize + 4;
                 let mut tasks: Vec<sys::TaskStatus_t> = Vec::with_capacity(n);
                 let mut total = 0u32;
-                let got =
-                    unsafe { sys::uxTaskGetSystemState(tasks.as_mut_ptr(), n as _, &mut total) }
-                        as usize;
-                unsafe { tasks.set_len(got) };
+                // SAFETY: as said; `got` entries are initialised.
+                unsafe {
+                    let got = sys::uxTaskGetSystemState(tasks.as_mut_ptr(), n as _, &mut total);
+                    tasks.set_len(got as usize);
+                }
                 // Counters wrap (32 bit, µs): differences stay right.
                 let span = u64::from(total.wrapping_sub(last_total).max(1));
                 let mut now = BTreeMap::new();
