@@ -2,11 +2,12 @@
 //! isochronous stream, teardown.
 //!
 //! Tab5 specifics, each needed (see `docs/pitfalls.md`): the root port is
-//! powered after VBUS plus a boot delay and power-cycled if nothing
-//! enumerates; `SET_INTERFACE` is sent explicitly (ESP-IDF's interface
-//! claim does not send it, and the Pebble stays silent without it).
+//! powered once, after VBUS plus a boot delay, and stays powered; if
+//! nothing enumerates, VBUS is cycled; `SET_INTERFACE` is sent explicitly
+//! (ESP-IDF's interface claim does not send it, and the Pebble stays
+//! silent without it).
 
-use super::host::set_port_power;
+use super::host::power_root_port;
 use super::{
     CHANNELS, Cmd, NUM_XFERS, PACKET_BYTES, PACKETS, PACKETS_ERR, PACKETS_OK, SAMPLE_RATE, Shared,
     Source,
@@ -54,10 +55,15 @@ unsafe extern "C" fn on_client_event(
     msg: *const sys::usb_host_client_event_msg_t,
     arg: *mut c_void,
 ) {
+    // SAFETY: `arg` is the client registered with this callback, which
+    // runs on the client's thread inside `usb_host_client_handle_events`
+    // (see `client_thread` on the aliasing this implies); `msg` is valid
+    // for the call.
     let client = unsafe { &mut *(arg as *mut Client) };
     let msg = unsafe { &*msg };
     match msg.event {
         sys::usb_host_client_event_t_USB_HOST_CLIENT_EVENT_NEW_DEV => {
+            // SAFETY: the union member of this event.
             client.new_device = Some(unsafe { msg.__bindgen_anon_1.new_dev.address });
         }
         sys::usb_host_client_event_t_USB_HOST_CLIENT_EVENT_DEV_GONE => client.device_gone = true,
@@ -66,6 +72,8 @@ unsafe extern "C" fn on_client_event(
 }
 
 unsafe extern "C" fn on_control_done(xfer: *mut sys::usb_transfer_t) {
+    // SAFETY: the transfer is valid for the call; its context is the
+    // client (`control`), on whose thread this runs.
     let client = unsafe { &mut *((*xfer).context as *mut Client) };
     client.control_done = true;
 }
@@ -73,6 +81,9 @@ unsafe extern "C" fn on_control_done(xfer: *mut sys::usb_transfer_t) {
 /// Refills a finished isochronous transfer from the source and resubmits it,
 /// unless the stream is stopping or the device is gone.
 unsafe extern "C" fn on_iso_done(xfer: *mut sys::usb_transfer_t) {
+    // SAFETY: the transfer is ours and back from the driver for the call;
+    // its context is the client (`stream`), on whose thread this runs; it
+    // was allocated with PACKETS packet descriptors.
     let x = unsafe { &mut *xfer };
     let client = unsafe { &mut *(x.context as *mut Client) };
     for p in unsafe { x.isoc_packet_desc.as_mut_slice(PACKETS) } {
@@ -92,6 +103,7 @@ unsafe extern "C" fn on_iso_done(xfer: *mut sys::usb_transfer_t) {
         return;
     }
     fill(&mut client.source, &mut client.samples, x);
+    // SAFETY: the transfer is set up (`stream`) and not in flight.
     if unsafe { sys::usb_host_transfer_submit(xfer) } == sys::ESP_OK {
         dev.in_flight += 1;
     }
@@ -99,6 +111,8 @@ unsafe extern "C" fn on_iso_done(xfer: *mut sys::usb_transfer_t) {
 
 fn fill(source: &mut Source, samples: &mut [i16], x: &mut sys::usb_transfer_t) {
     source(samples);
+    // SAFETY: the transfer's buffer holds PACKETS packets
+    // (`usb_host_transfer_alloc` in `stream`).
     let bytes = unsafe { core::slice::from_raw_parts_mut(x.data_buffer, PACKET_BYTES * PACKETS) };
     for (dst, s) in bytes.as_chunks_mut::<2>().0.iter_mut().zip(samples.iter()) {
         *dst = s.to_le_bytes();
@@ -124,6 +138,13 @@ pub(super) fn client_thread(
         control_done: false,
         device: None,
     };
+    // SAFETY: `client` stays on this thread's stack for good (the function
+    // never returns), so the pointer given to the callbacks stays valid.
+    // The callbacks run only inside `usb_host_client_handle_events`
+    // (`pump`), while a `&mut Client` is held by the caller: an aliasing
+    // `&mut` that Rust's rules do not allow, though nothing else touches
+    // the client meanwhile. Callback-written state in `Cell`s would remove
+    // it.
     unsafe {
         let mut cfg: sys::usb_host_client_config_t = core::mem::zeroed();
         cfg.is_synchronous = false;
@@ -159,7 +180,7 @@ pub(super) fn client_thread(
                 None if attempt < PORT_ATTEMPTS => {
                     attempt += 1;
                     if !root_port_on {
-                        match set_port_power(true) {
+                        match power_root_port() {
                             Ok(()) => root_port_on = true,
                             Err(e) => log::error!("uac: root port power failed: {e}"),
                         }
@@ -243,6 +264,7 @@ pub(super) fn client_thread(
 
 impl Client {
     fn pump(&mut self, ticks: u32) {
+        // SAFETY: the client is registered; callbacks run in here.
         unsafe { sys::usb_host_client_handle_events(self.handle, ticks) };
     }
 
@@ -270,6 +292,9 @@ impl Client {
         // Setup packet + data stage rounded up to the 64-byte max packet (IN
         // data stages must be a multiple of the endpoint's packet size).
         let data_stage = data.len().next_multiple_of(64).max(64);
+        // SAFETY: the transfer is allocated here with room for the setup
+        // packet and `data_stage`; it is freed once the driver returned it
+        // (or never took it); the callback's context is this client.
         unsafe {
             let mut xfer: *mut sys::usb_transfer_t = ptr::null_mut();
             esp!(sys::usb_host_transfer_alloc(8 + data_stage, 0, &mut xfer))?;
@@ -381,6 +406,7 @@ impl Client {
             log::warn!("uac: device {address} has no 48 kHz / 16 bit / stereo output; ignored");
             return Ok(false);
         };
+        // SAFETY: plain call on the open device.
         unsafe {
             esp!(sys::usb_host_interface_claim(
                 self.handle,
@@ -410,9 +436,8 @@ impl Client {
         }
         self.read_volume_range();
         self.set_mute(false);
-        // The master volume is stored in the device and was found at
-        // -20 dB (once, apparently lower: no sound). Always 0 dB; the
-        // channels carry the volume.
+        // The master volume is kept in the device and may be anywhere
+        // (too low is silence): 0 dB, and the channels carry the volume.
         if let Some(index) = self.feature_index() {
             let _ = self.control(0x21, 0x01, 0x0200, index, &mut 0i16.to_le_bytes());
         }
@@ -540,6 +565,7 @@ impl Client {
         let (handle, endpoint) = (d.handle, d.alt.endpoint);
         while d.transfers.len() < NUM_XFERS {
             let mut xfer: *mut sys::usb_transfer_t = ptr::null_mut();
+            // SAFETY: plain allocation; `xfer` is an out-parameter.
             let r = unsafe {
                 esp!(sys::usb_host_transfer_alloc(
                     PACKET_BYTES * PACKETS,
@@ -555,6 +581,9 @@ impl Client {
         }
         let transfers = d.transfers.clone();
         for xfer in transfers {
+            // SAFETY: allocated above with PACKETS packets and not in
+            // flight (the stream was off); the context is this client,
+            // which outlives its transfers (`teardown`).
             let x = unsafe { &mut *xfer };
             x.device_handle = handle;
             x.bEndpointAddress = endpoint;
@@ -589,6 +618,10 @@ impl Client {
         }
         self.wait_in_flight();
         if let Some(d) = self.device.take() {
+            // SAFETY: the transfers are back: the stream is off, and
+            // `wait_in_flight` waited for them (the driver completes every
+            // transfer of a device that is gone). The interface and the
+            // device are ours to release.
             for xfer in d.transfers {
                 unsafe { sys::usb_host_transfer_free(xfer) };
             }

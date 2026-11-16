@@ -17,6 +17,9 @@ unsafe extern "C" {
 /// after `usb_host_install` (which resets the core) and before the root port
 /// is powered.
 fn set_full_speed_only() {
+    // SAFETY: HCFG of the HS controller, whose registers exist and are
+    // clocked once `usb_host_install` returned; nothing else writes it
+    // before the port is powered.
     unsafe {
         let hcfg = (&raw mut USB_DWC_HS).cast::<u8>().add(0x400).cast::<u32>();
         let v = hcfg.read_volatile();
@@ -27,6 +30,7 @@ fn set_full_speed_only() {
 /// Installs the host library on the high-speed port with the root port
 /// unpowered and starts its daemon thread.
 pub(super) fn install() -> Result<(), EspError> {
+    // SAFETY: plain call with a configuration that lives for it.
     unsafe {
         let mut cfg: sys::usb_host_config_t = core::mem::zeroed();
         cfg.intr_flags = sys::ESP_INTR_FLAG_LOWMED as i32;
@@ -39,8 +43,10 @@ pub(super) fn install() -> Result<(), EspError> {
         .spawn(|| {
             loop {
                 let mut flags = 0u32;
+                // SAFETY: the library's daemon loop, as ESP-IDF prescribes.
                 unsafe { sys::usb_host_lib_handle_events(u32::MAX, &mut flags) };
                 if flags & sys::USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS != 0 {
+                    // SAFETY: as above.
                     unsafe { sys::usb_host_device_free_all() };
                 }
             }
@@ -49,9 +55,10 @@ pub(super) fn install() -> Result<(), EspError> {
     Ok(())
 }
 
-/// Powers the root port (connection detection, reset, enumeration). Only
-/// ever switched on: powered down while a device was still enumerating,
+/// Powers the root port (connection detection, reset, enumeration). Never
+/// switched off again: powered down while a device was still enumerating,
 /// ESP-IDF's hub driver aborted at the next disconnection (`device.rs`).
-pub(super) fn set_port_power(on: bool) -> Result<(), EspError> {
-    unsafe { esp!(sys::usb_host_lib_set_root_port_power(on)) }
+pub(super) fn power_root_port() -> Result<(), EspError> {
+    // SAFETY: plain call; the host library is installed.
+    unsafe { esp!(sys::usb_host_lib_set_root_port_power(true)) }
 }

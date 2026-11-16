@@ -40,7 +40,8 @@ pub static PACKETS_ERR: AtomicU32 = AtomicU32::new(0);
 
 enum Cmd {
     Stream(bool),
-    /// USB-A 5 V and the root port on or off (off: the device goes away).
+    /// USB-A's 5 V on or off (off: the device goes away; the root port
+    /// stays powered).
     Power(bool),
 }
 
@@ -53,6 +54,7 @@ struct Shared {
 }
 
 fn now_ms() -> u32 {
+    // SAFETY: reads a timer, no preconditions.
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000) as u32
 }
 
@@ -96,9 +98,10 @@ impl UsbAudio {
         let _ = self.cmds.send(Cmd::Stream(on));
     }
 
-    /// Powers the USB-A port (5 V and root port) on or off. The switched-on
-    /// Pebble draws ~80 mA at 5 V even when silent. After power on, the
-    /// device needs a few seconds to boot and enumerate.
+    /// Switches USB-A's 5 V on or off (the root port stays powered, see
+    /// `device`). The switched-on Pebble draws ~80 mA at 5 V even when
+    /// silent. After power on, the device needs a few seconds to boot and
+    /// enumerate.
     pub fn set_power(&self, on: bool) {
         let at = if on { now_ms().max(1) } else { 0 };
         self.shared.powered_at_ms.store(at, Ordering::Release);

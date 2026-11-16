@@ -24,6 +24,8 @@ const BUILD_UNIX_TIME: i64 = match i64::from_str_radix(env!("BUILD_UNIX_TIME"), 
 
 /// Sets the time zone and the system time from the RTC.
 pub fn init(rtc: &Rx8130) {
+    // SAFETY: C strings that live for the call; at boot, before other
+    // threads read the environment.
     unsafe {
         sys::setenv(c"TZ".as_ptr(), TZ.as_ptr(), 1);
         sys::tzset();
@@ -57,6 +59,7 @@ pub fn init(rtc: &Rx8130) {
         tv_sec: t.to_unix(),
         tv_usec: 0,
     };
+    // SAFETY: plain call; `tv` lives for it.
     unsafe { sys::settimeofday(&tv, core::ptr::null()) };
     log::info!("clock: {} UTC, local {}", t.hms(), now().hms());
 }
@@ -75,6 +78,7 @@ fn system_time() -> sys::timeval {
         tv_sec: 0,
         tv_usec: 0,
     };
+    // SAFETY: plain call; `tv` is an out-parameter.
     unsafe { sys::gettimeofday(&mut tv, core::ptr::null_mut()) };
     tv
 }
@@ -95,6 +99,8 @@ pub fn moment() -> Now {
 
 /// The local date and time of a Unix time.
 pub fn local(unix: i64) -> DateTime {
+    // SAFETY: `tm` is plain data (all zeros is valid) and an out-parameter
+    // of the reentrant `localtime_r`.
     let mut tm: sys::tm = unsafe { core::mem::zeroed() };
     unsafe { sys::localtime_r(&unix, &mut tm) };
     DateTime {

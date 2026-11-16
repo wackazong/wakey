@@ -51,6 +51,7 @@ struct PinSupply(sys::esp_ldo_channel_handle_t);
 impl PinSupply {
     fn on() -> Result<Self, EspError> {
         let mut handle: sys::esp_ldo_channel_handle_t = core::ptr::null_mut();
+        // SAFETY: plain call with a configuration that lives for it.
         unsafe {
             let mut cfg: sys::esp_ldo_channel_config_t = core::mem::zeroed();
             cfg.chan_id = 4;
@@ -63,6 +64,7 @@ impl PinSupply {
 
 impl Drop for PinSupply {
     fn drop(&mut self) {
+        // SAFETY: the channel acquired in `on`, released once.
         unsafe { sys::esp_ldo_release_channel(self.0) };
     }
 }

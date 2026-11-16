@@ -16,6 +16,7 @@ static NAMES: Mutex<BTreeMap<usize, &'static str>> = Mutex::new(BTreeMap::new())
 /// Wraps a thread's body so the statistics show it under `name`.
 pub fn named<T>(name: &'static str, f: impl FnOnce() -> T) -> impl FnOnce() -> T {
     move || {
+        // SAFETY: plain FreeRTOS query.
         let task = unsafe { sys::xTaskGetCurrentTaskHandle() } as usize;
         NAMES
             .lock()
@@ -35,6 +36,9 @@ pub fn start() {
             let mut last_total = 0u32;
             loop {
                 std::thread::sleep(PERIOD);
+                // SAFETY: plain FreeRTOS queries; `uxTaskGetSystemState`
+                // fills at most `n` entries of `tasks` (room for tasks
+                // created meanwhile) and returns how many.
                 let n = unsafe { sys::uxTaskGetNumberOfTasks() } as usize + 4;
                 let mut tasks: Vec<sys::TaskStatus_t> = Vec::with_capacity(n);
                 let mut total = 0u32;
@@ -50,6 +54,8 @@ pub fn start() {
                 for t in &tasks {
                     let name = match names.get(&(t.xHandle as usize)) {
                         Some(n) => (*n).to_string(),
+                        // SAFETY: FreeRTOS task names are NUL-terminated
+                        // and live with their task.
                         None => unsafe { CStr::from_ptr(t.pcTaskName) }
                             .to_string_lossy()
                             .into_owned(),
