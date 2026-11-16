@@ -9,8 +9,24 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 static ASLEEP: AtomicBool = AtomicBool::new(false);
-/// 0 none, 1 sleep, 2 wake.
+/// The pending [`Request`], 0 for none.
 static REQUEST: AtomicU8 = AtomicU8::new(0);
+
+/// What the app asks of the render loop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u8)]
+pub(super) enum Request {
+    Sleep = 1,
+    Wake,
+}
+
+impl Request {
+    fn from_u8(v: u8) -> Option<Self> {
+        [Self::Sleep, Self::Wake]
+            .into_iter()
+            .find(|r| *r as u8 == v)
+    }
+}
 
 /// True from the moment the panel goes to sleep until the first frame
 /// after waking is on it.
@@ -20,21 +36,17 @@ pub fn asleep() -> bool {
 
 /// Asks the render loop to put the display to sleep (any thread).
 pub fn sleep() {
-    REQUEST.store(1, Ordering::Relaxed);
+    REQUEST.store(Request::Sleep as u8, Ordering::Relaxed);
 }
 
 /// Asks the render loop to wake the display (any thread).
 pub fn wake() {
-    REQUEST.store(2, Ordering::Relaxed);
+    REQUEST.store(Request::Wake as u8, Ordering::Relaxed);
 }
 
-/// The pending request: `Some(true)` sleep, `Some(false)` wake.
-pub(super) fn take_request() -> Option<bool> {
-    match REQUEST.swap(0, Ordering::Relaxed) {
-        1 => Some(true),
-        2 => Some(false),
-        _ => None,
-    }
+/// The request since the last call, if any.
+pub(super) fn take_request() -> Option<Request> {
+    Request::from_u8(REQUEST.swap(0, Ordering::Relaxed))
 }
 
 pub(super) fn set_asleep(on: bool) {

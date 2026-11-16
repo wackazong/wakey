@@ -46,9 +46,10 @@ const BLANK_H: usize = 160;
 
 /// Where the new page comes from.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u8)]
 pub enum Direction {
     /// Deeper (list → alarm → sound): from the right.
-    Forward,
+    Forward = 1,
     /// Back up: from the left.
     Back,
     /// Up from the bottom (the alarm list over the clock).
@@ -57,7 +58,15 @@ pub enum Direction {
     Down,
 }
 
-/// 0 none, 1 forward, 2 back, 3 up, 4 down.
+impl Direction {
+    fn from_u8(v: u8) -> Option<Self> {
+        [Self::Forward, Self::Back, Self::Up, Self::Down]
+            .into_iter()
+            .find(|d| *d as u8 == v)
+    }
+}
+
+/// The requested [`Direction`], 0 for none.
 static PENDING: AtomicU8 = AtomicU8::new(0);
 /// The pages' background colour (RGB565), for the not yet rendered part.
 static BACKGROUND: AtomicU16 = AtomicU16::new(0);
@@ -65,13 +74,7 @@ static BACKGROUND: AtomicU16 = AtomicU16::new(0);
 /// The page is about to change: animate it. Call from the UI thread, right
 /// before the change.
 pub fn request(direction: Direction) {
-    let v = match direction {
-        Direction::Forward => 1,
-        Direction::Back => 2,
-        Direction::Up => 3,
-        Direction::Down => 4,
-    };
-    PENDING.store(v, Ordering::Relaxed);
+    PENDING.store(direction as u8, Ordering::Relaxed);
 }
 
 /// The new page's background colour (RGB565), set before each request.
@@ -86,13 +89,7 @@ pub(super) fn pending() -> bool {
 
 /// The transition requested since the last call, if any.
 pub(super) fn take() -> Option<Direction> {
-    match PENDING.swap(0, Ordering::Relaxed) {
-        1 => Some(Direction::Forward),
-        2 => Some(Direction::Back),
-        3 => Some(Direction::Up),
-        4 => Some(Direction::Down),
-        _ => None,
-    }
+    Direction::from_u8(PENDING.swap(0, Ordering::Relaxed))
 }
 
 /// The pictures and the DMA for transitions.

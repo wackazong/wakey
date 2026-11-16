@@ -13,6 +13,7 @@ use super::stats::FrameStats;
 use crate::display::Display;
 use crate::display::dma2d::Picture;
 use crate::display::ppa::{PpaRotator, Target};
+use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
 use slint::platform::software_renderer::{
@@ -81,25 +82,59 @@ const DEBUG_TOUCH: bool = false;
 /// Log the dirty rectangles of frames that take longer than 35 ms.
 const DEBUG_SLOW_FRAMES: bool = true;
 
-/// Where the render loop is (for the stall report): see [`stage`].
-pub static STAGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-/// Loop iterations since boot.
-pub static ITERATIONS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
-fn stage(s: u32) {
-    STAGE.store(s, core::sync::atomic::Ordering::Relaxed);
+/// Where the render loop is, for the stall report ([`stage`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum Stage {
+    Start,
+    Touch,
+    Timers,
+    BackBuffer,
+    Render,
+    Present,
+    Sleep,
 }
 
-/// Stage names, indexed by [`STAGE`].
-pub const STAGES: [&str; 7] = [
-    "start",
-    "touch",
-    "timers",
-    "back buffer",
-    "render",
-    "present",
-    "sleep",
-];
+impl Stage {
+    const ALL: [Self; 7] = [
+        Self::Start,
+        Self::Touch,
+        Self::Timers,
+        Self::BackBuffer,
+        Self::Render,
+        Self::Present,
+        Self::Sleep,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Touch => "touch",
+            Self::Timers => "timers",
+            Self::BackBuffer => "back buffer",
+            Self::Render => "render",
+            Self::Present => "present",
+            Self::Sleep => "sleep",
+        }
+    }
+}
+
+static STAGE: AtomicU32 = AtomicU32::new(Stage::Start as u32);
+/// Loop iterations since boot.
+pub static ITERATIONS: AtomicU32 = AtomicU32::new(0);
+
+fn enter(stage: Stage) {
+    STAGE.store(stage as u32, Ordering::Relaxed);
+}
+
+/// Where the render loop is now (any thread).
+pub fn stage() -> Stage {
+    let v = STAGE.load(Ordering::Relaxed);
+    Stage::ALL
+        .into_iter()
+        .find(|s| *s as u32 == v)
+        .unwrap_or(Stage::Start)
+}
 
 /// Free PSRAM and its largest block (the frame buffers need 2 × 1.8 MB).
 fn log_psram(when: &str) {
@@ -143,8 +178,8 @@ pub async fn run(
     // Full repaints still due (new frame buffers after waking).
     let mut full_repaints = 0u8;
     loop {
-        ITERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if let Some(sleep) = super::power::take_request()
+        ITERATIONS.fetch_add(1, Ordering::Relaxed);
+        if let Some(sleep) = super::power::take_request().map(|r| r == super::power::Request::Sleep)
             && sleep != (super::power::asleep() && !waking)
         {
             // The panel itself stays on: its touch half (the same chip)
@@ -207,7 +242,7 @@ pub async fn run(
             }
             continue;
         }
-        stage(1);
+        enter(Stage::Touch);
         // Touch: route each event to the hook (e.g. list drags), or Slint.
         while let Some(ev) = woken_by.take().or_else(|| input::EVENTS.try_receive().ok()) {
             if ev.phase == Phase::Down {
@@ -241,12 +276,12 @@ pub async fn run(
                 }
             }
         }
-        stage(2);
+        enter(Stage::Timers);
         slint::platform::update_timers_and_animations();
         // A page change requested during the touch handling above: shown
         // as a slide, which also renders the new page into both buffers.
         if let Some(direction) = super::transition::take() {
-            stage(4);
+            enter(Stage::Render);
             transitions.run(direction, &window, &mut display, rot).await;
             // Slint drew the new page once and believes one buffer holds
             // it; both do, but its next render repaints that region again
@@ -267,11 +302,11 @@ pub async fn run(
         }
 
         // Waits for the previous flip, so this paces to the panel refresh.
-        stage(3);
+        enter(Stage::BackBuffer);
         let fb = display.back_buffer().await.as_mut_ptr();
         let target = Target::frame_buffer(Picture::frame_buffer(fb));
 
-        stage(4);
+        enter(Stage::Render);
         let t0 = Instant::now();
         #[cfg(feature = "ui-bench")]
         let trace = super::trace::Frame::start();
@@ -342,7 +377,7 @@ pub async fn run(
 
         other_buffer_stale = slint_box.is_some() && !catching_up;
         if slint_rendered || hook_started {
-            stage(5);
+            enter(Stage::Present);
             let render_time = t0.elapsed();
             // Always flip after a render, even an empty one (see above). The
             // CPU never wrote the frame buffer (PPA/DMA did): nothing to
@@ -365,7 +400,7 @@ pub async fn run(
             if hook.as_mut().is_some_and(|h| h.idle_work(rot)) {
                 continue;
             }
-            stage(6);
+            enter(Stage::Sleep);
             let wait = slint::platform::duration_until_next_timer_update()
                 .map(|d| Duration::from_micros(d.as_micros() as u64))
                 .unwrap_or(Duration::from_millis(100))

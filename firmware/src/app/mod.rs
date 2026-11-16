@@ -361,10 +361,9 @@ fn watch_render_loop() {
                 }
                 still += 1;
                 if still == 2 || still.is_multiple_of(10) {
-                    let stage = render_loop::STAGE.load(Relaxed) as usize;
                     log::error!(
                         "ui: render loop stuck for {still} s in '{}', panel frames {}, touch read {}",
-                        render_loop::STAGES.get(stage).unwrap_or(&"?"),
+                        render_loop::stage().name(),
                         crate::display::Display::frames_scanned(),
                         if input::READING.load(Relaxed) { "busy" } else { "idle" },
                     );
