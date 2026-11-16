@@ -125,7 +125,13 @@ fn ensure_images(transport: &Transport) -> anyhow::Result<bool> {
     let hosted = ota::version(ota::Image::Hosted);
     // An unreadable image is no reason to replace what runs.
     if !hosted.is_empty() && info.own_version != hosted {
-        log::info!("c6: updating esp_hosted {} to {hosted}", info.own_version);
+        // Builds before the version field send none.
+        let running = if info.own_version.is_empty() {
+            "an older build"
+        } else {
+            &info.own_version
+        };
+        log::info!("c6: updating esp_hosted {running} to {hosted}");
         ota::install(transport, ota::Image::Hosted, true)?;
         return Ok(false);
     }
