@@ -7,15 +7,15 @@
 
 use super::screens::{AppWindow, SoundListLayout, SoundPicker, SoundRow, Theme};
 use super::{Ctx, PAGE_ALARM, PAGE_SOUND, PAGE_SOUND_ROW, alarm_page, show_page};
-use crate::ui::list_layer::{Buffers, Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
-use crate::ui::platform;
-use slint::Weak;
-use std::hash::{Hash, Hasher};
 use crate::airdrop;
 use crate::sounds;
 use crate::tidal::{State, TrackStatus};
-use std::cell::RefCell;
+use crate::ui::list_layer::{Buffers, Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
+use crate::ui::platform;
+use slint::Weak;
 use slint::{ComponentHandle, Image, Model, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
+use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::time::Duration;
 use wakey_core::alarm::Sound;
@@ -77,11 +77,15 @@ fn files_tab(window: &AppWindow, open: bool) {
             return;
         }
         let weak = window.as_weak();
-        t.start(slint::TimerMode::Repeated, Duration::from_millis(250), move || {
-            if let Some(window) = weak.upgrade() {
-                window.global::<SoundPicker>().invoke_airdrop_tick();
-            }
-        });
+        t.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(250),
+            move || {
+                if let Some(window) = weak.upgrade() {
+                    window.global::<SoundPicker>().invoke_airdrop_tick();
+                }
+            },
+        );
     });
 }
 
@@ -98,19 +102,30 @@ fn airdrop_rows(state: &airdrop::State) -> Vec<SoundRow> {
     };
     let note = match state {
         airdrop::State::Off | airdrop::State::Starting => "AirDrop startet …".to_string(),
-        airdrop::State::Ready | airdrop::State::Receiving(_) => "AirDrop bereit für neue Klänge".to_string(),
+        airdrop::State::Ready | airdrop::State::Receiving(_) => {
+            "AirDrop bereit für neue Klänge".to_string()
+        }
         airdrop::State::Failed(e) => format!("AirDrop nicht verfügbar: {e}"),
     };
     let mut rows = Vec::new();
     if let airdrop::State::Receiving(p) = state {
-        rows.push(row(p.name.clone(), "wird empfangen …".into(), 5, fraction(p)));
+        rows.push(row(
+            p.name.clone(),
+            "wird empfangen …".into(),
+            5,
+            fraction(p),
+        ));
     }
     rows.push(row(note, String::new(), 4, -1.0));
     rows
 }
 
 fn fraction(p: &wakey_core::airdrop::Progress) -> f32 {
-    if p.size == 0 { 0.0 } else { (f64::from(p.got) / f64::from(p.size)) as f32 }
+    if p.size == 0 {
+        0.0
+    } else {
+        (f64::from(p.got) / f64::from(p.size)) as f32
+    }
 }
 
 /// Follows AirDrop on the Files tab: the list again when files arrived or
@@ -242,7 +257,8 @@ fn show_state(window: &AppWindow, state: &State) {
         State::LoggedIn => "Die Playlist ist leer.",
         State::Failed(e) => {
             picker.set_tidal_view(0);
-            picker.set_tidal_empty(format!("{e} Zum Wiederholen den Tab erneut öffnen.").into());
+            let why = super::texts::tidal_problem(e);
+            picker.set_tidal_empty(format!("{why} Zum Wiederholen den Tab erneut öffnen.").into());
             return;
         }
     };
@@ -281,8 +297,12 @@ fn cover_image(ctx: &Ctx, id: &str) -> Image {
         return Image::default();
     };
     let px = wakey_core::tidal::sync::COVER_PX;
-    let image = Image::from_rgb8(SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(&rgb, px, px));
-    ctx.covers.borrow_mut().insert(id.to_string(), image.clone());
+    let image = Image::from_rgb8(SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(
+        &rgb, px, px,
+    ));
+    ctx.covers
+        .borrow_mut()
+        .insert(id.to_string(), image.clone());
     image
 }
 
@@ -461,7 +481,9 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         };
         // A failed download cannot be the alarm's sound.
         if let Sound::TidalTrack(id) = &sound
-            && id.parse().is_ok_and(|id| ctx.tidal.track_status(id) == TrackStatus::Failed)
+            && id
+                .parse()
+                .is_ok_and(|id| ctx.tidal.track_status(id) == TrackStatus::Failed)
         {
             return;
         }
@@ -489,7 +511,9 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     }));
     picker.on_tick(ctx.with(|window, ctx| {
         // Only the downloading row's bar, in place (no list rebuild).
-        let Some((id, fraction)) = ctx.tidal.progress() else { return };
+        let Some((id, fraction)) = ctx.tidal.progress() else {
+            return;
+        };
         let want = Sound::TidalTrack(id.to_string());
         let Some(i) = ctx.tidal_choices.borrow().iter().position(|s| *s == want) else {
             return;
@@ -547,7 +571,10 @@ fn set_corner_caps(window: &AppWindow) {
         let mut buf = SharedPixelBuffer::<slint::Rgba8Pixel>::new(r as u32, r as u32);
         for (k, p) in buf.make_mut_slice().iter_mut().enumerate() {
             let (x, y) = (k % r, k / r);
-            let (i, j) = (if mirror_x { r - 1 - x } else { x }, if mirror_y { r - 1 - y } else { y });
+            let (i, j) = (
+                if mirror_x { r - 1 - x } else { x },
+                if mirror_y { r - 1 - y } else { y },
+            );
             let a = alpha[j * r + i];
             *p = slint::Rgba8Pixel {
                 r: bg.red(),
@@ -618,7 +645,11 @@ impl SoundRows {
     fn list(&self) -> Option<(i32, ModelRc<SoundRow>)> {
         self.with_picker(|p| {
             let tab = p.get_shown_tab();
-            let rows = if tab == TAB_TIDAL { p.get_tidal_rows() } else { p.get_rows() };
+            let rows = if tab == TAB_TIDAL {
+                p.get_tidal_rows()
+            } else {
+                p.get_rows()
+            };
             (tab, rows)
         })
     }
@@ -634,7 +665,8 @@ impl ListSource for SoundRows {
         self.window.upgrade().is_some_and(|w| {
             let p = w.global::<SoundPicker>();
             // Not while the TIDAL tab shows the login.
-            w.get_page() == PAGE_SOUND && !(p.get_shown_tab() == TAB_TIDAL && p.get_tidal_view() == 1)
+            w.get_page() == PAGE_SOUND
+                && !(p.get_shown_tab() == TAB_TIDAL && p.get_tidal_view() == 1)
         })
     }
 
@@ -643,7 +675,9 @@ impl ListSource for SoundRows {
     }
 
     fn stamp(&self, i: usize) -> u64 {
-        let Some((tab, r)) = self.row(i) else { return 0 };
+        let Some((tab, r)) = self.row(i) else {
+            return 0;
+        };
         let mut h = std::hash::DefaultHasher::new();
         let cover = r.cover.size();
         (

@@ -16,6 +16,7 @@ mod clock_screen;
 mod name_page;
 mod power;
 mod sound_page;
+mod texts;
 
 use crate::audio::builtin::BuiltinSpeaker;
 use crate::audio::output::Output;
@@ -297,7 +298,11 @@ async fn app(
 
 /// `config.json` is broken: says so on screen and goes no further (no
 /// alarms, no Wi-Fi, nothing written).
-async fn config_error(display: crate::display::Display, mut backlight: crate::board::Backlight, error: String) -> ! {
+async fn config_error(
+    display: crate::display::Display,
+    mut backlight: crate::board::Backlight,
+    error: String,
+) -> ! {
     let mut rot = PpaRotator::new().expect("PPA");
     let window = platform::init();
     let ui = screens::AppWindow::new().expect("UI");
@@ -324,14 +329,21 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
             // Not while a preview plays, nor while a TIDAL login waits for
             // the user (the QR code on the sound page), nor while a file
             // arrives by AirDrop.
-            let limit = if page == PAGE_SOUND { IDLE_CLOSE_SOUND } else { IDLE_CLOSE };
+            let limit = if page == PAGE_SOUND {
+                IDLE_CLOSE_SOUND
+            } else {
+                IDLE_CLOSE
+            };
             if input::idle().as_millis() >= limit.as_millis() as u64
                 && !ctx.alarm.borrow().is_previewing()
                 && !ctx.tidal.logging_in()
                 && !matches!(crate::airdrop::state(), crate::airdrop::State::Receiving(_))
             {
                 ctx.tidal.close();
-                log::info!("ui: back to the clock after {} s without a touch", limit.as_secs());
+                log::info!(
+                    "ui: back to the clock after {} s without a touch",
+                    limit.as_secs()
+                );
                 show_page(window, PAGE_CLOCK);
             } else if page == PAGE_ALARM {
                 alarm_page::fill(window, ctx);

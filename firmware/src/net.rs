@@ -94,13 +94,35 @@ impl From<&EspError> for Failure {
 
 /// Work for a session: called on the `wifi` thread with `Ok` while
 /// connected, or with the reason there is no connection.
-pub type Job = Box<dyn FnOnce(Result<(), String>) + Send>;
+pub type Job = Box<dyn FnOnce(Result<(), Unavailable>) + Send>;
+
+/// Why a job runs without a connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unavailable {
+    /// No Wi-Fi credentials in `config.json`.
+    NotConfigured,
+    /// The network did not take the connection (wrong password, out of
+    /// range).
+    NoConnection { ssid: String },
+    /// The C6 or the driver did not come up, or the `wifi` thread is gone.
+    Failed,
+}
+
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unavailable::NotConfigured => f.write_str("no Wi-Fi configured"),
+            Unavailable::NoConnection { ssid } => write!(f, "no connection to \"{ssid}\""),
+            Unavailable::Failed => f.write_str("Wi-Fi failed"),
+        }
+    }
+}
 
 /// Makes sure a job hears back: dropped unrun, it gets an error.
 struct JobGuard(Option<Job>);
 
 impl JobGuard {
-    fn run(mut self, result: Result<(), String>) {
+    fn run(mut self, result: Result<(), Unavailable>) {
         if let Some(job) = self.0.take() {
             job(result);
         }
@@ -110,7 +132,7 @@ impl JobGuard {
 impl Drop for JobGuard {
     fn drop(&mut self) {
         if let Some(job) = self.0.take() {
-            job(Err("WLAN-Fehler".into()));
+            job(Err(Unavailable::Failed));
         }
     }
 }
@@ -134,7 +156,7 @@ impl Wifi {
     /// a session is under way).
     pub fn run(&self, job: Job) {
         if let Err(mpsc::SendError(job)) = self.jobs.send(job) {
-            job(Err("WLAN nicht verfügbar".into()));
+            job(Err(Unavailable::Failed));
         }
     }
 }
@@ -399,7 +421,7 @@ fn session(
     match cfg {
         Some(cfg) => sync_clock(wifi, cfg, set, job, more),
         None => {
-            job.run(Err("Kein WLAN eingerichtet (config.json)".into()));
+            job.run(Err(Unavailable::NotConfigured));
             scan_once(wifi, set).map(|()| Outcome::Scanned)
         }
     }
@@ -536,7 +558,7 @@ fn sync_clock(
                 let _ = wifi.disconnect();
                 if attempt >= ATTEMPTS {
                     let _ = wifi.stop();
-                    job.run(Err(format!("Keine Verbindung zu „{ssid}“")));
+                    job.run(Err(Unavailable::NoConnection { ssid: ssid.clone() }));
                     anyhow::bail!("no connection to \"{ssid}\"");
                 }
                 std::thread::sleep(ATTEMPT_PAUSE);
