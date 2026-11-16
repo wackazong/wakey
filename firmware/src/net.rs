@@ -521,7 +521,7 @@ impl Station {
 }
 
 /// 802.11b/g/n, not ax: with 802.11ax (HE20) downloads through the C6
-/// were ~25 % slower.
+/// are ~25 % slower.
 fn wifi_mode() {
     use esp_idf_svc::sys;
     let bgn = (sys::WIFI_PROTOCOL_11B | sys::WIFI_PROTOCOL_11G | sys::WIFI_PROTOCOL_11N) as u8;

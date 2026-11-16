@@ -3,20 +3,23 @@
 //!
 //! Layers, top to bottom; each uses only the ones below it:
 //!
-//! - [`app`]: the alarm clock application (screens, wiring).
+//! - [`app`]: the alarm clock application (screens, wiring, UI texts).
 //! - Services: [`ui`] (Slint, touch, list layer), [`audio`] (USB speaker,
-//!   file playback), [`net`] (Wi-Fi, NTP), [`clock`] (local time, RTC),
-//!   [`config`] (`config.json`), [`ambient`] (backlight from the room's
-//!   light, camera as light meter).
-//! - Hardware: [`board`] (pins, chips, power switches, bring-up) and
-//!   [`display`] (panel, frame buffers, PPA, 2D-DMA).
-//! - [`runtime`]: starting the Embassy executor; [`profiler`]: a sampling
-//!   profiler for performance work.
+//!   built-in speaker, file playback), [`net`] (Wi-Fi sessions, NTP),
+//!   [`tidal`] (login, playlist, downloads) over [`http`], [`airdrop`]
+//!   (sound files from iPhones), [`sounds`] (the card's sound files),
+//!   [`clock`] (local time, RTC), [`config`] (`config.json`), [`ambient`]
+//!   (backlight from the room's light, camera as light meter).
+//! - Hardware: [`board`] (pins, chips, power switches, bring-up),
+//!   [`display`] (panel, frame buffers, PPA, 2D-DMA) and [`c6`] (the Wi-Fi
+//!   co-processor: power, esp_hosted's transport, its images).
+//! - Support: [`runtime`] (threads, the Embassy executor), [`psram`]
+//!   (DMA buffers), [`taskstats`] and [`profiler`] (performance work).
 //!
 //! Pure logic (dates, file formats, resampling, descriptors, config model,
-//! scroll physics) is in the `wakey_core` crate and tested on the host.
-//! Binaries in `src/bin/` are thin: the product (`wakey`) and the UI bench
-//! (`ui_bench`).
+//! TIDAL's protocol, scroll physics) is in the `wakey_core` crate and
+//! tested on the host. Binaries in `src/bin/` are thin: the product
+//! (`wakey`) and the UI bench (`ui_bench`).
 
 pub mod airdrop;
 pub mod ambient;

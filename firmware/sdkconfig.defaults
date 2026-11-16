@@ -71,8 +71,9 @@ CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
 # main task: keep its pools and task stacks out of internal RAM and its
 # queues short (internal RAM is tight; see src/runtime.rs).
 CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
-# Longer queues (20/40) and RX double buffering were tried for downloads:
-# no faster (the C6 link gives ~1.1 MiB/s), 3 KiB less internal RAM.
+# Short queues, no RX double buffering: longer ones (20/40) and double
+# buffering make downloads no faster (the C6's radio link is the limit,
+# ~1.5 MiB/s) and cost 3 KiB of internal RAM.
 CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=10
 CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=10
 CONFIG_ESP_HOSTED_SDIO_RX_DOUBLE_BUFFERING=n
@@ -106,12 +107,11 @@ CONFIG_MBEDTLS_CHACHA20_C=y
 CONFIG_MBEDTLS_POLY1305_C=y
 CONFIG_MBEDTLS_CHACHAPOLY_C=y
 
-# TCP receive window: the default 5760 bytes allowed ~185 KiB/s at ~30 ms to
-# TIDAL's CDN (window / round trip; a track took 2.5 min). 64 KiB, and
-# mailboxes that hold a window's worth of segments (65534 / 1440 MSS = 46).
-# The pbufs come from the general heap (PSRAM here).
-# Window scaling (needs lwIP's memory allowed in PSRAM): 256 KiB, and
-# mailboxes for 256 KiB / 1440 = 182 segments.
+# TCP receive window 256 KiB: a download runs at most at window / round
+# trip (~30 ms to TIDAL's CDN), so the default 5760 bytes allow ~185 KiB/s.
+# Beyond 64 KiB it needs window scaling, which needs lwIP's memory allowed
+# in PSRAM. The mailboxes hold a window's worth of segments (256 KiB / 1440
+# MSS = 182); the pbufs come from the general heap (PSRAM here).
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_LWIP_WND_SCALE=y
 CONFIG_LWIP_TCP_RCV_SCALE=3
