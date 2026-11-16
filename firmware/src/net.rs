@@ -66,7 +66,8 @@ pub enum Status {
     },
     /// Off until the next session; the last one synced the clock.
     Off,
-    /// The last attempt failed; retrying later (or never, for `Driver`).
+    /// The last session failed; the next one follows after a back-off
+    /// (10 min, doubling up to the interval).
     Failed {
         ssid: String,
         error: Failure,
@@ -75,7 +76,7 @@ pub enum Status {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failure {
-    /// The driver or the C6 did not come up. No retry.
+    /// The C6, its transport or the driver did not come up.
     Driver,
     /// No connection within the driver's timeout (wrong password, out of
     /// range).
