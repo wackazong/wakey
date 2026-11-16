@@ -1,43 +1,62 @@
 # Wakey
 
-A bedside alarm clock on the M5Stack Tab5 (ESP32-P4, 5" 1280×720 touch panel) that plays sound files from its microSD card on a Creative Pebble V3 USB speaker. Written in Rust (std) on ESP-IDF with the Embassy executor. **Rust only on the P4:** no project-authored C/C++ and no C board support packages; the only C of our own runs on the ESP32-C6 (esp_hosted's addition and the AirDrop receiver, [`firmware/c6/`](firmware/c6/README.md)).
+A bedside alarm clock for the [M5Stack Tab5](https://docs.m5stack.com/en/core/Tab5): a 5" touch screen with a sky that follows the sun, alarms set by touch, and wake-up sounds from the microSD card, a TIDAL playlist, or sent from an iPhone or Mac by AirDrop. The firmware is written in Rust on ESP-IDF.
 
-Working today: clock screen with the RTC time (Europe/Zurich) and a sky that follows the sun, several alarms (each with time, weekdays, name, sound or a random one, volume and fade-in, set on the touch screen with clicking time wheels) ringing on the USB speaker or the built-in one with snooze, sounds from the card, from a TIDAL playlist or sent by AirDrop from an iPhone, Wi-Fi and NTP through the on-board ESP32-C6, brightness from the room's light, and a display that sleeps in the dark. What is planned: [roadmap](docs/roadmap.md).
+<p align="center">
+  <img src="docs/images/clock-morning.jpg" width="49%" alt="Clock face in the morning: large time, date, next alarm">
+  <img src="docs/images/clock-evening.jpg" width="49%" alt="Clock face at sunset with an orange sky">
+</p>
+<p align="center">
+  <img src="docs/images/alarm-list.png" width="32%" alt="Alarm list with switches">
+  <img src="docs/images/alarm.png" width="32%" alt="Alarm page with time wheels, weekdays and sound">
+  <img src="docs/images/sound-tidal.png" width="32%" alt="Sound page with the TIDAL playlist">
+</p>
 
-## Repository
+The screenshots are rendered from the firmware's own UI code by [`tools/ui-preview`](tools/ui-preview/src/main.rs), pixel for pixel as on the device. The UI is in German.
 
-| Path | Content |
-| --- | --- |
-| [`firmware/`](firmware/README.md) | the firmware (own Cargo workspace, ESP32-P4 target): build, flash, layout |
-| [`wakey-core/`](wakey-core/src/lib.rs) | hardware-independent logic, tested on the host |
-| [`docs/architecture.md`](docs/architecture.md) | how the software works: layers, threads, display, audio, time, network |
-| [`docs/hardware.md`](docs/hardware.md) | Tab5 pins, I2C devices, expanders, power, the speaker |
-| [`docs/pitfalls.md`](docs/pitfalls.md) | traps already hit and their fixes — read before changing an area |
-| [`docs/roadmap.md`](docs/roadmap.md) | what comes next and the decisions for it |
-| [`docs/upgrades.md`](docs/upgrades.md) | what can go, or must be re-checked, when a dependency is updated |
-| [`docs/schematics/`](docs/schematics) | Tab5 schematic pages |
-| [`tools/ui-preview/`](tools/ui-preview/src/main.rs) | host tool: renders the firmware's pages to PNG with sample data |
-| [`spikes/tidal-download/`](spikes/tidal-download/README.md) | host tool: download a track from your TIDAL account (V2 groundwork) |
+## Features
 
-## Quick start
+- **Clock face** with large rolling digits, the date and the next alarm. The background sky follows the sun's elevation through the day: blue noon, orange sunset, a dark purple night.
+- **Several alarms**, each with a time, weekdays, a name, a sound, volume and fade-in. They are set on the touch screen with time wheels that click like a mechanical dial. Snooze with a tap, stop by holding.
+- **Wake-up sounds** from `sounds/` on the microSD card (WAV, AIFF, FLAC, MP3, AAC and ALAC in M4A), a random one each day, or tracks from a **TIDAL playlist**, downloaded to the card in lossless quality so an alarm never depends on the network.
+- **AirDrop receiver:** open the sound page's file tab and send sound files from an iPhone or a Mac to "Wakey". The Tab5's ESP32-C6 runs a receiver for the time the tab is open.
+- **Speakers:** a USB speaker (USB Audio Class 1.0, e.g. a Creative Pebble V3) on the Tab5's USB-A port, or the built-in speaker as a fallback.
+- **Kind to a bedroom:** the camera works as a light meter and dims the screen in a dark room; the display sleeps in the dark and wakes on touch, at daylight or when an alarm rings.
+- **Network only when needed:** Wi-Fi is on for a clock sync (NTP) once a day and while TIDAL is in use, and off otherwise. The real-time clock keeps the time in between.
+- **Smooth touch UI:** 66 fps scrolling and swiping on an ESP32-P4, with lists composed by the 2D-DMA engine and pages rendered by Slint through the pixel-processing accelerator.
+
+## Hardware
+
+- [M5Stack Tab5](https://docs.m5stack.com/en/core/Tab5) (ESP32-P4 with ESP32-C6, 1280×720 touch panel). The firmware supports the ST7123 panel variant.
+- A microSD card (FAT).
+- Optional: a USB speaker for the USB-A port.
+
+Details on the board, pins and power: [docs/hardware.md](docs/hardware.md).
+
+## Getting started
+
+Prerequisites: [rustup](https://rustup.rs) and `cargo install espflash ldproxy`. The firmware's pinned nightly toolchain installs itself; the first build downloads and compiles ESP-IDF (about ten minutes).
 
 ```sh
-cd firmware
-cargo run --release --bin wakey      # first build ~10 min (ESP-IDF)
-cd ../wakey-core && cargo test       # host tests
+git clone https://github.com/wackazong/wakey && cd wakey/firmware
+cargo run --release --bin wakey     # build, flash over USB-C, open the log
 ```
 
-Put `config.json` with `{ "wifi": { "ssid": "…", "password": "…" } }` and sound files on the SD card (see [Configure the clock](#configure-the-clock)). Build details in [firmware/README.md](firmware/README.md).
+Then prepare the microSD card:
 
-Each directory with a `Cargo.toml` is its own workspace with its own toolchain: the firmware uses a pinned nightly and an ESP target, the others the host toolchain. Run Cargo from inside them.
+1. Create `config.json` in its root with your Wi-Fi (a 2.4 GHz network): `{ "wifi": { "ssid": "MyNetwork", "password": "secret" } }`. Everything else has defaults and is added to the file at the first start.
+2. Put sound files into a folder `sounds/`. The file name is what the clock shows (`_` becomes a space).
+3. Insert the card and start the clock. Tap the alarm line at the bottom of the clock face to set alarms.
 
-## Configure the clock
+On the first start with network the clock also installs its own firmware on the ESP32-C6 (Wi-Fi with a small addition, and the AirDrop receiver), in the background in about a minute; nothing needs to be done by hand. Building and flashing in detail: [firmware/README.md](firmware/README.md).
 
-The clock reads `config.json` from the root of the microSD card (FAT) at boot. Alarms are set on the touch screen, which writes them back into the file. Settings missing from the file are added with their defaults, so after the first boot the file lists everything. A missing file starts with the defaults; a file that cannot be read (a JSON error) stops the clock on an error page with the parser's message and is not overwritten.
+## Configuration
+
+The clock reads `config.json` from the card at start and writes the alarms back when they are changed on the screen. Settings missing from the file are added with their defaults. A file with a JSON error stops the clock on an error page that shows the parser's message; the file is not overwritten.
 
 ```json
 {
-  "wifi": { "ssid": "MeinNetz", "password": "geheim" },
+  "wifi": { "ssid": "MyNetwork", "password": "secret" },
   "sync_interval_h": 24,
   "alarms": [
     { "id": 1, "name": "Arbeit", "enabled": true, "hour": 6, "minute": 30,
@@ -54,17 +73,51 @@ The clock reads `config.json` from the root of the microSD card (FAT) at boot. A
 | Setting | Meaning |
 | --- | --- |
 | `wifi` | `ssid` and `password` of a 2.4 GHz network. Without it the clock scans once and shows the networks in range. |
-| `sync_interval_h` | Hours between clock syncs over Wi-Fi (NTP), 1–168, default 24. Wi-Fi is off in between. |
-| `alarms` | The alarms, as the settings pages edit them: `id`, optional `name`, `enabled`, `hour`, `minute`, `weekdays` (Monday to Sunday, 0/1), `sound`, `volume` (1–100 %), `fade_in_s`. A file with the old single `alarm` section is migrated. |
-| `sound` | `"random"` (a different file from `sounds/` each day; the default), a path such as `"sounds/morgen.flac"`, or a TIDAL track: `"tidal:<track id>"`, `"tidal:random"`. The built-in tone (`"beep"`) is only the fallback when the sound cannot be played; the sound page does not offer it. |
+| `sync_interval_h` | Hours between clock syncs over Wi-Fi (NTP), 1–168, default 24. |
+| `alarms` | The alarms as the screen edits them: `id`, optional `name`, `enabled`, `hour`, `minute`, `weekdays` (Monday to Sunday, 0 or 1), `sound`, `volume` (1–100 %), `fade_in_s`. |
+| `sound` | `"random"` (a different file from `sounds/` each day, the default), a path such as `"sounds/morning.flac"`, a TIDAL track `"tidal:<track id>"`, or `"tidal:random"`. A built-in tone plays if the sound cannot be played. |
 | `ringing` | For all alarms: `snooze_min` (9), `max_snoozes` (3), `ring_timeout_min` (10; then the alarm stops for the day). |
 | `display` | `night_pixels_percent`: pixel brightness in a dark room, 10–100, default 35. |
-| `power` | `sleep_after_s`: the display sleeps after this long without a touch on the clock page (counted again from when it woke by daylight or an alarm), 10–3600, default 60. `sleep_when`: `"dark"` (default: in a dark room, and always on battery), `"always"` or `"never"`. |
-| `tidal` | The TIDAL app credentials `client_id` and `client_secret` (from `cargo run -- clock-config` in [`spikes/tidal-download`](spikes/tidal-download/README.md)) and `playlist`, the playlist in your TIDAL collection the alarms take their songs from (default "Wecker"). After the login on the sound page's TIDAL tab the clock adds `session` here: it gives access to the account, so keep the card private. |
+| `power` | `sleep_after_s`: the display sleeps after this long without a touch on the clock face, 10–3600, default 60. `sleep_when`: `"dark"` (in a dark room, and always on battery; the default), `"always"` or `"never"`. |
+| `tidal` | Optional. `client_id` and `client_secret` of a TIDAL API client that may use the device login (Wakey ships none), and `playlist`, the playlist in your collection the alarms take their songs from (default "Wecker"). Log in on the sound page's TIDAL tab with the code it shows; the clock then stores its `session` here, so keep the card private. Requires a TIDAL subscription. |
 
-On the card next to `config.json`:
+Next to `config.json` the clock keeps `tidal/` (the playlist and downloaded tracks). Development builds can take Wi-Fi credentials and a test alarm from environment variables instead: see [firmware/README.md](firmware/README.md#sd-card).
 
-- `sounds/`: sound files for the alarms (WAV, AIFF/AIFC, FLAC, M4A with AAC or ALAC, MP3, AAC; mono or stereo, any sample rate), listed by file name (`_` shown as a space). Files can also be sent from an iPhone by AirDrop to "Wakey" while the sound page's Datei tab is open.
-- `tidal/`: written by the clock: the playlist and the downloaded tracks.
+## How it works
 
-For development, the build can set Wi-Fi credentials and a test alarm instead of the file's (see [firmware/README.md](firmware/README.md#sd-card)).
+Rust on ESP-IDF 5.5 (std) with the Embassy executor on the ESP32-P4; the UI is [Slint](https://slint.dev) with a custom platform that renders line by line through the P4's pixel-processing accelerator (PPA) and composes scrolling lists with its 2D-DMA engine. The ESP32-C6 is the Wi-Fi radio through Espressif's esp_hosted, and switches to an AirDrop receiver (based on [ESP32Drop](https://github.com/s-iwaki-d/ESP32Drop)) on request. Everything that does not need the hardware (alarm state machine, configuration, audio decoding, the TIDAL protocol, scroll physics, the sky) is in [`wakey-core`](wakey-core/src/lib.rs) and tested on a PC.
+
+| Document | Content |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | Design: layers, threads, rendering, audio, time, network, AirDrop |
+| [docs/hardware.md](docs/hardware.md) | The Tab5: chips, pins, I2C devices, power |
+| [docs/pitfalls.md](docs/pitfalls.md) | Problems met on this hardware, their causes and fixes |
+| [docs/upgrades.md](docs/upgrades.md) | What to re-check when a dependency is updated |
+| [docs/roadmap.md](docs/roadmap.md) | Known limitations and possible next steps |
+| [firmware/README.md](firmware/README.md) | Building, flashing, the source layout |
+| [firmware/c6/README.md](firmware/c6/README.md) | The ESP32-C6 images and how they are built |
+
+| Path | Content |
+| --- | --- |
+| [`firmware/`](firmware) | The firmware for the ESP32-P4 (its own Cargo workspace and toolchain) |
+| [`firmware/c6/`](firmware/c6) | The ESP32-C6's images (C, ESP-IDF): esp_hosted with Wakey's addition, the AirDrop receiver, a recovery tool |
+| [`wakey-core/`](wakey-core) | Hardware-independent logic, tested on the host |
+| [`tools/ui-preview/`](tools/ui-preview) | Renders every page on the host to PNG and checks the list layer's pixels |
+
+## Limitations
+
+- The UI is German; the time zone (Europe/Zurich) and the location for the sky (Zurich) are compiled in ([`firmware/src/clock.rs`](firmware/src/clock.rs), [`wakey-core/src/sky.rs`](wakey-core/src/sky.rs)).
+- Only the ST7123 display variant of the Tab5 is supported.
+- AirDrop and the TIDAL API are used without official support from Apple or TIDAL; an update on their side can break either. AirDrop is visible to senders set to receive from "Everyone".
+
+More in [docs/roadmap.md](docs/roadmap.md).
+
+## License
+
+Wakey's own code is licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option. Contributions are accepted under the same terms (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+The firmware links [Slint](https://slint.dev), which is available under GPL-3.0, a royalty-free license that excludes embedded systems, or a commercial license. A firmware binary built from this repository therefore uses Slint under GPL-3.0, which makes the binary as a whole subject to the GPL-3.0; the source code in this repository keeps its permissive license. `wakey-core` does not depend on Slint.
+
+Third-party parts: the Inter font ([OFL-1.1](firmware/ui/fonts/OFL.txt)); vendored and patched crates in [`firmware/vendor`](firmware/vendor/README.md) under their own licenses; the prebuilt ESP32-C6 images and their components in [firmware/c6/THIRD_PARTY_NOTICES.md](firmware/c6/THIRD_PARTY_NOTICES.md).
+
+AirDrop and TIDAL are trademarks of their respective owners. This project is not affiliated with Apple or TIDAL.
