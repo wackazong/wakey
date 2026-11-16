@@ -25,8 +25,6 @@ const POOL_MAX: usize = 4;
 
 thread_local! {
     // Kept connections by origin (`https://host`), most recent last.
-    // Already `const`: the lint misfires on it.
-    #[allow(clippy::missing_const_for_thread_local)]
     static POOL: RefCell<Vec<(String, EspHttpConnection)>> = const { RefCell::new(Vec::new()) };
 }
 

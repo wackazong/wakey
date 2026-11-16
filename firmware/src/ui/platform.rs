@@ -7,10 +7,6 @@
 //! created: first the full-screen main window ([`init`]), then any
 //! offscreen windows ([`offscreen_window`]) rendered on demand (list rows).
 
-// `PENDING` below already uses a `const` initializer; clippy's lint misfires
-// on the ESP-IDF target.
-#![allow(clippy::missing_const_for_thread_local)]
-
 use super::{UI_HEIGHT, UI_WIDTH};
 use crate::display::ppa::{PpaRotator, Target};
 use embassy_time::Instant;
