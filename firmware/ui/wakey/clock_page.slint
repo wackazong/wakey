@@ -13,7 +13,7 @@ import { Theme, Icon, IconKind, Roll } from "theme.slint";
 
 export enum AlarmPhase { idle, ringing, snoozed }
 
-// Set from Rust (`app/clock_screen.rs`).
+// Set from Rust (`src/app/clock_screen.rs`).
 export global Clock {
     // "07:38", one character per entry; seconds the same ("05").
     in property <[string]> time: ["-", "-", ":", "-", "-"];
@@ -121,9 +121,9 @@ export component ClockPage inherits Rectangle {
         horizontal-alignment: center;
     }
 
-    // Bottom middle: the next alarm. Touching it opens the alarm list (the
-    // slide starts at once).
-    // Bottom line: white on a dark horizon, dark on a light one.
+    // Bottom middle: the next alarm, white on a dark horizon, dark on a
+    // light one. Touching it opens the alarm list (the slide starts at
+    // once).
     property <color> alarm-color: Clock.bottom-light
         ? (Clock.alarm-phase == AlarmPhase.idle ? Theme.background.with-alpha(0.72) : Theme.accent-dark)
         : (Clock.alarm-phase == AlarmPhase.idle ? root.soft : Theme.accent);

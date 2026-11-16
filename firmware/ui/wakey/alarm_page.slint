@@ -13,7 +13,7 @@ import { Theme, Button, ButtonKind, Chip, Icon, IconKind, VolumeBars } from "the
 import { Wheel } from "wheel.slint";
 
 // The values being edited; filled from Rust when the page opens
-// (`app/alarm_page.rs`), read back on save.
+// (`src/app/alarm_page.rs`), read back on save.
 export global AlarmEditor {
     in-out property <int> hour;
     in-out property <int> minute;

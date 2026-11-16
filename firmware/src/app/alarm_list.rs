@@ -3,7 +3,7 @@
 //! next one marked. Opens from the alarm line on the clock page.
 //!
 //! Scrolling is the list layer's ([`layer`]): it copies rows rendered by a
-//! second `AppWindow` in an offscreen window (page `Page::AlarmListRow`) while
+//! second `AppWindow` in an offscreen window (`Page::AlarmListRow`) while
 //! the list moves, and the page draws the still list.
 
 use super::alarm::AlarmClock;

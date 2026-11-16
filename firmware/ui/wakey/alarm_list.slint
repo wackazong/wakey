@@ -9,8 +9,8 @@
 // │ 07:15  Mo Di Mi Do Fr Sa So                 (  ●) │
 // └────────────────────────────────────────────────────┘
 //
-// Motion is the firmware's list layer (`ui/list_layer.rs`): it sees every
-// touch first and takes a touch over once it moves more than `slop`
+// Motion is the firmware's list layer (`src/ui/list_layer.rs`): it sees
+// every touch first and takes a touch over once it moves more than `slop`
 // (this page then gets a cancel). Mostly vertical: it scrolls the list;
 // mostly sideways on a row: it swipes that row. Either way it copies
 // pre-rendered pictures (`ListRowPage`) by DMA, and when the motion ends
@@ -67,7 +67,7 @@ export struct AlarmRow {
     next: bool,
 }
 
-// Set from Rust (`app/alarm_list.rs`).
+// Set from Rust (`src/app/alarm_list.rs`).
 export global AlarmList {
     in property <[AlarmRow]> rows;
     // How far the still list is scrolled (0 = top); set by the list layer
@@ -230,8 +230,9 @@ export component AlarmListPage inherits Rectangle {
         // right away changes nothing on the page. Not on the switch: a
         // toggle does not light the row up.
         property <bool> held;
-        // The active row's highlight is still fading after the finger left; it is drawn until then. Drawing it on top
-        // of its row for longer would blend the rounded corners twice.
+        // The active row's highlight is still fading after the finger left;
+        // it is drawn until then. Drawing it on top of its row for longer
+        // would blend the rounded corners twice.
         property <bool> settling;
         // The held row shows its highlight.
         property <bool> pressing: ta.pressed && self.touched == self.active

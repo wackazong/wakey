@@ -3,9 +3,10 @@
 //! alarm ringing on the USB speaker.
 //!
 //! Start-up order: board → clock from the RTC → config from the SD card →
-//! Wi-Fi thread → touch task → USB audio thread → alarm → UI. The UI is
-//! defined in `ui/wakey.slint` (one window, one page at a time); each page
-//! has its view model here.
+//! Wi-Fi thread → player and built-in speaker → touch thread → USB audio
+//! thread → alarm → UI → light meter → render loop. The UI is defined in
+//! `ui/wakey.slint` (one window, one page at a time); each page has its
+//! view model here.
 
 mod alarm;
 mod alarm_list;
@@ -301,9 +302,10 @@ async fn config_error(
     render_loop::run(window, display, &mut rot, None).await
 }
 
-/// Every few seconds: back to the clock after a minute without a touch
-/// (not while a preview plays); the alarm page's "Klingelt in" kept
-/// current.
+/// Every few seconds: back to the clock after [`IDLE_CLOSE`] without a
+/// touch ([`IDLE_CLOSE_SOUND`] on the sound page), not while a preview
+/// plays, a TIDAL login waits or a file arrives by AirDrop; the alarm
+/// page's "Klingelt in" kept current.
 fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
     let timer = Timer::default();
     timer.start(
@@ -314,14 +316,14 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
             if page == Page::Clock {
                 return;
             }
-            // Not while a preview plays, nor while a TIDAL login waits for
-            // the user (the QR code on the sound page), nor while a file
-            // arrives by AirDrop.
             let limit = if page == Page::Sound {
                 IDLE_CLOSE_SOUND
             } else {
                 IDLE_CLOSE
             };
+            // Not while a preview plays, nor while a TIDAL login waits for
+            // the user (the QR code on the sound page), nor while a file
+            // arrives by AirDrop.
             if input::idle().as_secs() >= limit.as_secs()
                 && !ctx.alarm.borrow().is_previewing()
                 && !ctx.tidal.logging_in()

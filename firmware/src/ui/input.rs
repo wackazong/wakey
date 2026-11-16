@@ -1,13 +1,13 @@
 //! Touch input as landscape pointer events.
 //!
 //! A thread ([`start`]) polls the touch controller every 10 ms (the touch
-//! interrupt pin is not used yet) and turns readings into Down/Move/Up
+//! interrupt pin is not used) and turns readings into Down/Move/Up
 //! events in UI (landscape) coordinates, timestamped when read and queued
 //! in [`EVENTS`]. The render loop drains the queue once per frame.
 //!
-//! Its own thread, not a task of the UI's executor: there a frame that
-//! took long (a page change, the clock's minute) delayed the next poll, up
-//! to 90 ms, and a fling measured from so few points had no speed.
+//! Its own thread, not a task of the UI's executor: there a long frame (a
+//! page change, the clock's minute) delays the next poll by up to 90 ms,
+//! and a fling measured from so few points has no speed.
 
 use crate::board::i2c::{self, SharedI2c};
 use crate::board::ioexp::{IoExpanders, Pin};
@@ -39,8 +39,8 @@ pub struct TouchEvent {
 const RELEASE_POLLS: u8 = 3;
 
 /// Failed reads within [`ERROR_WINDOW`] that reset the touch controller.
-/// After a burst of I2C timeouts and NACKs while being touched, the ST7123
-/// answered again but never reported a touch until it was reset.
+/// After a burst of I2C timeouts and NACKs while touched, the ST7123 can
+/// answer again yet report no touch until it is reset.
 const RESET_AFTER_ERRORS: u32 = 5;
 const ERROR_WINDOW: Duration = Duration::from_secs(1);
 

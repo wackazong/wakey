@@ -81,7 +81,7 @@ impl PanelTiming {
 impl PanelVariant {
     /// Timings from M5Stack's M5GFX (`esp32p4_board_data.hpp`, the values
     /// M5Stack's own firmware uses). Espressif's BSP runs the panels slower
-    /// (60/70 MHz); at 58 Hz the ST7123 showed visible flicker in black.
+    /// (60/70 MHz); at 58 Hz the ST7123 flickers visibly in black.
     fn timing(self) -> PanelTiming {
         match self {
             // 940 × 1324 at 80 MHz ≈ 64 Hz
@@ -125,13 +125,15 @@ impl PanelVariant {
 
 /// The two frame buffers, allocated by the first stream and handed to every
 /// later one (`vendor/esp-idf-components/esp_lcd`: the DPI driver allocates
-/// and frees them through these functions). A link rebuild (display sleep's
-/// 33 Hz) freed and allocated them anew; PSRAM is tight in the app (~2 MB
-/// free) and the freed 3.7 MB came back too fragmented for new ones (the
-/// largest block 8 KB short): no frame buffer, a crash on waking.
+/// and frees them through these functions). Each link rebuild (display
+/// sleep's 33 Hz) makes a new stream: with ~2 MB of PSRAM free, 3.7 MB
+/// freed and allocated again comes back too fragmented for 1.8 MB in one
+/// piece (`docs/pitfalls.md`).
 static FB_POOL: [AtomicPtr<c_void>; 2] = [const { AtomicPtr::new(ptr::null_mut()) }; 2];
 /// Which of [`FB_POOL`] a panel has now.
 static FB_IN_USE: [AtomicBool; 2] = [const { AtomicBool::new(false) }; 2];
+/// The DPI driver's own allocation of a frame buffer (`esp_lcd_panel_dpi.c`).
+const FB_CAPS: u32 = sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT | sys::MALLOC_CAP_DMA;
 
 #[unsafe(no_mangle)]
 extern "C" fn esp_lcd_dpi_panel_alloc_fb(size: usize) -> *mut c_void {
@@ -174,9 +176,6 @@ extern "C" fn esp_lcd_dpi_panel_free_fb(fb: *mut c_void) {
 }
 
 // ── Frame-complete ISR → async ──────────────────────────────────────────────
-
-/// The DPI driver's allocation of a frame buffer (`esp_lcd_panel_dpi.c`).
-const FB_CAPS: u32 = sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT | sys::MALLOC_CAP_DMA;
 
 /// Frames fully scanned out since boot (wraps).
 static FRAMES_DONE: AtomicU32 = AtomicU32::new(0);
@@ -462,8 +461,8 @@ impl Display {
     /// 5.5.5) frees the channel without disabling it: it keeps streaming
     /// from the freed frame buffers. Alone on the DW-GDMA that goes unseen
     /// (the controller is switched off and reset with its last channel);
-    /// with the camera's CSI receiver on it too, the next stream got the
-    /// still running channel, and writing its registers was a store access
+    /// with the camera's CSI receiver on it too, the next stream gets the
+    /// still running channel, and writing its registers is a store access
     /// fault (`dpi_panel_init`, CH1_LLP0). The channel is found by its
     /// source address, which lies in one of our frame buffers.
     fn stop_stream_dma(&self) {

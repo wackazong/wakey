@@ -62,7 +62,7 @@ pub fn scale(px: u16) -> u16 {
 /// than three).
 ///
 /// The scaled channels have 5 bits of fraction. Cut off, a dimmed
-/// gradient showed stripes (at 35 % a channel has ~11 levels left, and
+/// gradient shows stripes (at 35 % a channel has ~11 levels left, and
 /// the renderer's dithering shrinks below one level); instead an ordered
 /// (4×4 Bayer) threshold per pixel decides between the two neighbouring
 /// levels, so the average stays right. `x0`, `y`: the line's first pixel

@@ -4,7 +4,7 @@
 //! Layers, top to bottom; each uses only the ones below it:
 //!
 //! - [`app`]: the alarm clock application (screens, wiring, UI texts).
-//! - Services: [`ui`] (Slint, touch, list layer), [`audio`] (USB speaker,
+//! - Services: [`ui`] (Slint, touch, list layer, page slides), [`audio`] (USB speaker,
 //!   built-in speaker, file playback), [`net`] (Wi-Fi sessions, NTP),
 //!   [`tidal`] (login, playlist, downloads) over [`http`], [`airdrop`]
 //!   (sound files from iPhones), [`sounds`] (the card's sound files),

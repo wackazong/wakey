@@ -1,6 +1,6 @@
 // The alarm's name, typed on an on-screen keyboard (German QWERTZ, a
 // second layer with digits and punctuation). Keys go to Rust
-// (`app/name_page.rs`), which edits the text (Slint cannot remove a
+// (`src/app/name_page.rs`), which edits the text (Slint cannot remove a
 // character) and limits its length.
 //
 // ┌ Abbrechen ─────────────────────────────────────── Fertig ┐
@@ -15,8 +15,8 @@ import { Theme, Button, ButtonKind, Icon, IconKind } from "theme.slint";
 
 export global NameEditor {
     in property <string> text;
-    // The next letter is a capital (set from Rust: at the start, after a
-    // space, or by the shift key).
+    // The next letter is a capital (set from Rust: for an empty name, or by
+    // the shift key; off again after the next key).
     in property <bool> shift;
     // Digits and punctuation instead of letters.
     in-out property <bool> numbers;

@@ -190,8 +190,8 @@ impl ListSource for SoundRows {
 
     fn changes_on_scroll(&mut self, i: usize) -> bool {
         // Only a row whose second line scrolls; the others look the same at
-        // any time (re-rendering all visible rows cost the first frame
-        // ~20 ms, a visible bump at the start of every scroll).
+        // any time (re-rendering all visible rows would cost the first
+        // frame ~20 ms, a visible bump at the start of every scroll).
         self.prepare(i);
         self.view.get_sound_row_scrolls()
     }

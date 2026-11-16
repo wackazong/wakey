@@ -44,8 +44,8 @@ unsafe extern "C" {
 }
 
 /// Counts the finished copies of one [`FbCopy`] (`cb_args`). Each instance
-/// has its own: with one counter for all, a copy of one instance counted
-/// as done when the other's finished.
+/// has its own counter: with a shared one, an instance would take another's
+/// finished copy for its own.
 unsafe extern "C" fn on_done(_m: Handle, _e: *mut c_void, done: *mut c_void) -> bool {
     // SAFETY: `done` is the `AtomicU32` boxed in the `FbCopy`, which lives
     // as long as its copies (it waits for them before dropping).

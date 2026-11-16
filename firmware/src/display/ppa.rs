@@ -38,9 +38,9 @@ const NUM_BUFS: usize = 4;
 /// several ranges per line when the dirty region has rectangles side by side.
 const MAX_OPEN: usize = 3;
 
-/// Widest block per PPA transaction. A 1280-wide, 5-line block hung the PPA
-/// for good on this P4 rev v1.3 (no completion event); blocks up to 640
-/// wide have always completed. Wider strips are split.
+/// Widest block per PPA transaction: a 1280-wide, 5-line block hangs the
+/// PPA for good on this P4 rev v1.3 (no completion event); blocks up to 640
+/// wide complete. Wider strips are split.
 const MAX_BLOCK_W: usize = 640;
 
 /// Shortest strip handed to the PPA. Rotated by 90°, a strip's line count
@@ -319,8 +319,8 @@ impl PpaRotator {
     ///
     /// Waits for the previous transaction first: with several queued, the
     /// driver starts the next one from the completion ISR, and under load
-    /// that path stalled the PPA for good on this chip (every geometry that
-    /// stalled completes when submitted alone). One in flight still lets
+    /// that path stalls the PPA for good on this chip (every geometry that
+    /// stalls completes when submitted alone). One in flight still lets
     /// the CPU render the next strip while the PPA rotates this one.
     fn submit(&mut self, o: &Open, x: usize, bw: usize) {
         let mut spins = 0;

@@ -203,7 +203,8 @@ enum Touch {
     None,
     /// Down on the still list at (x, y); Slint has it so far.
     Pending(f32, f32),
-    /// A sideways touch: Slint's to the end.
+    /// Left to Slint to its end: a sideways drag where nothing swipes, a
+    /// vertical one on a list that fits the view.
     Slint,
     /// The layer scrolls with it.
     Scroll,
@@ -437,13 +438,13 @@ impl<S: ListSource> ListLayer<S> {
         Some((first, last))
     }
 
-    /// Renders row `i` into its slot, unless it is there and current.
     /// Row `i`'s stamp, including the dimming ([`crate::ui::dim`]): a row
     /// drawn before it changed is stale.
     fn stamp(&self, i: usize) -> u64 {
         self.source.stamp(i) ^ u64::from(crate::ui::dim::epoch()).rotate_left(48)
     }
 
+    /// Renders row `i` into its slot, unless it is there and current.
     fn ensure(&mut self, i: usize, rot: &mut PpaRotator) {
         let slots = self.layout.slots;
         let stamp = self.stamp(i);

@@ -50,7 +50,7 @@ export struct SoundRow {
     failed: bool,
 }
 
-// Set from Rust (`app/sound_page.rs`).
+// Set from Rust (`src/app/sound_page/`).
 export global SoundPicker {
     // The tab bar's choice.
     in property <SoundTab> tab;
@@ -106,7 +106,7 @@ export global SoundPicker {
     callback airdrop-tick();
 }
 
-// As high as a Button (88 px): smaller targets were missed. The active
+// As high as a Button (88 px): smaller targets get missed. The active
 // item's background fills the whole height and slides to a new choice.
 component Segment inherits Rectangle {
     in property <[string]> items;
