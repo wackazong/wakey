@@ -81,18 +81,21 @@ pub fn last() -> (f32, f32) {
 
 /// Free heap memory. DMA-capable memory is internal RAM on the ESP32-P4;
 /// when it runs out, drivers fail (see `sdkconfig.defaults`,
-/// `SPIRAM_MALLOC_ALWAYSINTERNAL`).
-struct FreeHeap {
+/// `SPIRAM_MALLOC_ALWAYSINTERNAL`). PSRAM's largest block shows how
+/// fragmented it is (a frame buffer needs 1.8 MB in one piece).
+pub(super) struct FreeHeap {
     total: usize,
     internal: usize,
     dma: usize,
     /// Largest DMA-capable block (fragmentation).
     dma_block: usize,
+    psram: usize,
+    psram_block: usize,
 }
 
 impl FreeHeap {
-    fn now() -> Self {
-        use esp_idf_svc::sys::{self, MALLOC_CAP_DMA, MALLOC_CAP_INTERNAL};
+    pub(super) fn now() -> Self {
+        use esp_idf_svc::sys::{self, MALLOC_CAP_DMA, MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM};
         // SAFETY: plain queries of the heap allocator.
         unsafe {
             Self {
@@ -100,6 +103,8 @@ impl FreeHeap {
                 internal: sys::heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 dma: sys::heap_caps_get_free_size(MALLOC_CAP_DMA),
                 dma_block: sys::heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                psram: sys::heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                psram_block: sys::heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
             }
         }
     }
@@ -109,11 +114,13 @@ impl core::fmt::Display for FreeHeap {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "heap free {} KiB (internal {} KiB, DMA {} KiB, largest DMA block {} B)",
+            "heap free {} KiB (internal {} KiB, DMA {} KiB, largest DMA block {} B, PSRAM {} KiB, largest PSRAM block {} KiB)",
             self.total / 1024,
             self.internal / 1024,
             self.dma / 1024,
-            self.dma_block
+            self.dma_block,
+            self.psram / 1024,
+            self.psram_block / 1024,
         )
     }
 }

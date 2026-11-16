@@ -133,16 +133,15 @@ pub fn stage() -> Stage {
         .unwrap_or(Stage::Start)
 }
 
-/// Free PSRAM and its largest block (the frame buffers need 2 × 1.8 MB).
-fn log_psram(when: &str) {
-    use esp_idf_svc::sys;
-    let (free, largest) = unsafe {
-        (
-            sys::heap_caps_get_free_size(sys::MALLOC_CAP_SPIRAM),
-            sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_SPIRAM),
-        )
-    };
-    log::info!("display: PSRAM {when}: free {free}, largest block {largest}");
+/// Feature `sleep-cycle-test`: the free memory around each link rebuild
+/// (one leaking or fragmenting PSRAM would show over many cycles).
+fn log_heap_for_test(when: &str) {
+    if cfg!(feature = "sleep-cycle-test") {
+        log::info!(
+            "display: {when} link rebuild: {}",
+            super::stats::FreeHeap::now()
+        );
+    }
 }
 
 /// Pixel clock while the display sleeps: 33 Hz instead of 66 Hz.
@@ -188,7 +187,7 @@ pub async fn run(
             // that rate, which does not matter with the backlight off. A
             // rate change rebuilds the whole display link (a new stream
             // alone leaves the panel black) with new, empty frame buffers.
-            log_psram("before rebuild");
+            log_heap_for_test("before");
             if sleep {
                 super::power::set_asleep(true);
                 // The light meter thread turns the backlight off first.
@@ -215,6 +214,7 @@ pub async fn run(
                 window.request_redraw();
                 other_buffer_stale = true;
             }
+            log_heap_for_test("after");
         }
         if super::power::asleep() && !waking {
             // Nothing is drawn; a touch only wakes (the rest of it is
