@@ -221,12 +221,15 @@ async fn app(
     };
     let nvs = EspDefaultNvsPartition::take().expect("NVS");
     let wifi = net::start(
-        modem,
-        c6_link,
-        ioexp.switch(Pin::WlanPwrEn),
-        nvs.clone(),
-        config.wifi.clone(),
-        Duration::from_secs(u64::from(config.sync_interval_h) * 3600),
+        net::Setup {
+            modem,
+            c6_power: ioexp.switch(Pin::WlanPwrEn),
+            c6_link,
+            nvs: nvs.clone(),
+            cfg: config.wifi.clone(),
+            interval: Duration::from_secs(u64::from(config.sync_interval_h) * 3600),
+            display_asleep: crate::ui::power::asleep,
+        },
         move || clock::store_system_time(&rtc),
     );
     // Speakers: set up now; the player's sound goes to the USB speaker,

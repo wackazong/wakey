@@ -30,6 +30,12 @@ const ST712X_TOUCH_ADDR: u8 = 0x55;
 const GT911_ADDR_PRIMARY: u8 = 0x14; // INT pulled high during reset (Tab5 default)
 const GT911_ADDR_BACKUP: u8 = 0x5D;
 
+/// The UART and the pin of the C6's one-way link to the P4 (`RF_C6_IO2`).
+pub struct C6Link {
+    pub uart: esp_idf_svc::hal::uart::UART1<'static>,
+    pub rx: esp_idf_svc::hal::gpio::Gpio14<'static>,
+}
+
 pub struct Board {
     /// The system I2C bus (touch polling uses it directly).
     pub i2c: SharedI2c,
@@ -45,7 +51,7 @@ pub struct Board {
     /// Wi-Fi through the ESP32-C6, for [`crate::net::start`].
     pub modem: Modem<'static>,
     /// The C6's IO2 → GPIO14, read by UART1: the AirDrop receiver's frames.
-    pub c6_link: crate::airdrop::Link,
+    pub c6_link: C6Link,
     /// I2S to the ES8388 codec (built-in speaker).
     pub codec: codec::CodecPins,
 }
@@ -114,7 +120,7 @@ impl Board {
             backlight,
             sd,
             modem: p.modem,
-            c6_link: crate::airdrop::Link {
+            c6_link: C6Link {
                 uart: p.uart1,
                 rx: p.pins.gpio14,
             },

@@ -23,7 +23,7 @@ pub mod ambient;
 pub mod app;
 pub mod audio;
 pub mod board;
-pub mod c6_ota;
+pub mod c6;
 pub mod clock;
 pub mod config;
 pub mod display;
