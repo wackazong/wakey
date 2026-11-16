@@ -11,15 +11,12 @@ use slint::{ComponentHandle, Image, Model, ModelRc, SharedPixelBuffer, Weak};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-/// Corner radius of the list card (`SoundPage`'s card: 28 px).
-const CORNER_RADIUS: usize = 28;
-
 /// The caps over the list card's corners: the page background outside the
 /// rounding, with the weights the list layer blends
 /// ([`corner_alpha`](crate::ui::list_layer::corner_alpha)).
 pub(super) fn set_corner_caps(window: &AppWindow) {
     let bg = window.global::<Theme>().get_background();
-    let r = CORNER_RADIUS;
+    let r = corner_radius(window);
     let alpha = crate::ui::list_layer::corner_alpha(r);
     let cap = |mirror_x: bool, mirror_y: bool| {
         let mut buf = SharedPixelBuffer::<slint::Rgba8Pixel>::new(r as u32, r as u32);
@@ -46,6 +43,14 @@ pub(super) fn set_corner_caps(window: &AppWindow) {
     picker.set_corner_br(cap(true, true));
 }
 
+/// The radius of the list card's corners.
+fn corner_radius(window: &AppWindow) -> usize {
+    window
+        .global::<SoundListLayout>()
+        .get_corner_radius()
+        .round() as usize
+}
+
 /// The list layer for the sound page's list (the tab shown), drawing into
 /// `shared` (the alarm list's buffers: never on screen together). Call
 /// after `AppWindow` was created (its offscreen row window is the next one,
@@ -66,9 +71,11 @@ pub fn layer(window: &AppWindow, shared: Rc<Buffers>) -> ListLayer<SoundRows> {
         background: crate::ui::rgb565(window.global::<Theme>().get_card()),
         page_draws_still: true,
         swipe: false,
-        // The card's (`SoundPage`): the page around it shows outside.
+        // Square rows in a rounded card.
+        row_radius: 0,
+        // The page around the card shows outside its corners.
         corners: Some((
-            CORNER_RADIUS,
+            corner_radius(window),
             crate::ui::rgb565(window.global::<Theme>().get_background()),
         )),
     };

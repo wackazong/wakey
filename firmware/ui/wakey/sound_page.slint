@@ -167,15 +167,20 @@ component Segment inherits Rectangle {
     }
 }
 
-// Where the sound list is (landscape px) and its rows' pitch: the page and
-// the list layer (`app/sound_page.rs`) both use it.
+// Where the sound list is (landscape px), its rows' pitch and its card's
+// corners: the page and the list layer (`src/app/sound_page/rows.rs`) both
+// use it.
 export global SoundListLayout {
     out property <length> x: 40px;
     out property <length> y: 244px;
-    // What the settings card leaves (see `SoundPage`).
-    out property <length> width: 1280px - 40px - 40px - 24px - (4 * 104px + 3 * 12px + 2 * 32px);
+    // The settings card right of the list: as wide as the four fade-in
+    // pills (4 × 104 + 3 × 12) plus its margins.
+    out property <length> settings-width: 4 * 104px + 3 * 12px + 2 * 32px;
+    // What the settings card leaves.
+    out property <length> width: 1280px - 40px - 40px - 24px - self.settings-width;
     out property <length> height: 444px;
     out property <length> pitch: 112px;
+    out property <length> corner-radius: 28px;
     // How far a finger moves before the touch counts as a scroll.
     out property <length> slop: 12px;
     // Where a row's texts start (`SoundRowItem`): after the cover, or the
@@ -380,15 +385,13 @@ export component SoundPage inherits Rectangle {
         clicked => { SoundPicker.save(); }
     }
 
-    // The list takes what the settings card leaves: the card is as wide as
-    // the four fade-in pills (4 × 104 + 3 × 12) plus its margins.
-    property <length> card-width: 4 * 104px + 3 * 12px + 2 * 32px;
-    property <length> list-width: self.width - 40px - 40px - 24px - self.card-width;
+    // The list card's corner radius.
+    property <length> r: SoundListLayout.corner-radius;
 
     Segment {
-        x: 40px;
+        x: SoundListLayout.x;
         y: 132px;
-        width: root.list-width;
+        width: SoundListLayout.width;
         items: ["Datei", "TIDAL"];
         selected: SoundPicker.tab == SoundTab.files ? 0 : 1;
         chosen(i) => { SoundPicker.select-tab(i == 0 ? SoundTab.files : SoundTab.tidal); }
@@ -400,7 +403,7 @@ export component SoundPage inherits Rectangle {
         y: SoundListLayout.y;
         width: SoundListLayout.width;
         height: SoundListLayout.height;
-        border-radius: 28px;
+        border-radius: SoundListLayout.corner-radius;
         clip: true;
         background: Theme.card;
 
@@ -456,16 +459,16 @@ export component SoundPage inherits Rectangle {
             }
         }
         // Over everything in the card: its rounded corners.
-        Image { x: 0; y: 0; width: 28px; height: 28px; source: SoundPicker.corner-tl; }
-        Image { x: parent.width - 28px; y: 0; width: 28px; height: 28px; source: SoundPicker.corner-tr; }
-        Image { x: 0; y: parent.height - 28px; width: 28px; height: 28px; source: SoundPicker.corner-bl; }
-        Image { x: parent.width - 28px; y: parent.height - 28px; width: 28px; height: 28px; source: SoundPicker.corner-br; }
+        Image { x: 0; y: 0; width: root.r; height: root.r; source: SoundPicker.corner-tl; }
+        Image { x: parent.width - root.r; y: 0; width: root.r; height: root.r; source: SoundPicker.corner-tr; }
+        Image { x: 0; y: parent.height - root.r; width: root.r; height: root.r; source: SoundPicker.corner-bl; }
+        Image { x: parent.width - root.r; y: parent.height - root.r; width: root.r; height: root.r; source: SoundPicker.corner-br; }
     }
 
     Rectangle {
-        x: root.width - 24px - root.card-width;
+        x: root.width - 24px - self.width;
         y: 132px;
-        width: root.card-width;
+        width: SoundListLayout.settings-width;
         height: 556px;
         border-radius: 28px;
         background: Theme.card;

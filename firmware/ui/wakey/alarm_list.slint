@@ -35,7 +35,8 @@ enum Gesture {
     ignore,
 }
 
-// Where the list is, read by the list layer too (`app/alarm_list.rs`).
+// Where the list is and its rows' shape, read by the list layer too
+// (`src/app/alarm_list.rs`).
 export global AlarmListLayout {
     out property <length> x: 40px;
     out property <length> y: 132px;
@@ -45,6 +46,7 @@ export global AlarmListLayout {
     out property <length> row-height: 150px;
     out property <length> gap: 12px;
     out property <length> pitch: self.row-height + self.gap;
+    out property <length> row-radius: 28px;
     // How far a finger moves before the touch counts as a scroll or a
     // swipe.
     out property <length> slop: 12px;
@@ -105,7 +107,7 @@ component Row inherits Rectangle {
 
     height: AlarmListLayout.row-height;
     // No `clip` needed: the list area clips the sliding content.
-    border-radius: 28px;
+    border-radius: AlarmListLayout.row-radius;
     background: root.dx < 0 || root.underlay ? Theme.danger : Theme.card;
 
     Text {
@@ -121,7 +123,7 @@ component Row inherits Rectangle {
     Rectangle {
         x: root.dx;
         width: parent.width;
-        border-radius: 28px;
+        border-radius: AlarmListLayout.row-radius;
         background: root.highlighted ? Theme.surface : Theme.card;
         // Lights up at once, fades out.
         animate background { duration: root.animated && !root.highlighted ? 120ms : 0ms; }

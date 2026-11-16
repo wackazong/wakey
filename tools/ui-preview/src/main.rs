@@ -353,7 +353,7 @@ fn track(title: &str, artist: &str, selected: bool, a: [u8; 3], b: [u8; 3]) -> S
 /// The list card's corner caps, as the firmware makes them
 /// (`sound_page::set_corner_caps`, `list_layer::corner_alpha`).
 fn set_corner_caps(ui: &AppWindow) {
-    let r = 28usize;
+    let r = ui.global::<SoundListLayout>().get_corner_radius().round() as usize;
     let rf = r as f32;
     let bg = ui.global::<Theme>().get_background();
     let alpha: Vec<u8> = (0..r * r)

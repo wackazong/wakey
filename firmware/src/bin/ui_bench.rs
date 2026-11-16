@@ -138,7 +138,9 @@ async fn app(spawner: embassy_executor::Spawner) {
         slop: 12.0,
         background: LIST_BACKGROUND,
         page_draws_still: false,
-        swipe: true,
+        // The layer has every touch: it only scrolls.
+        swipe: false,
+        row_radius: 0,
         corners: None,
     };
     let mut list = ListLayer::new(layout, row_window, Tracks { row });

@@ -21,7 +21,7 @@
 //! **Swiping.** A touch that moves sideways on a still row is the layer's
 //! too: it renders that row (highlighted, its corners on the delete
 //! button's red), the bare delete button and, for the first
-//! [`ROW_RADIUS`] px where the red must not show in the corners, the
+//! [`Layout::row_radius`] px where the red must not show in the corners, the
 //! highlighted row as the page draws it into pictures, and moves the row
 //! with the finger by DMA (two copies of one row band per frame).
 //! Released past [`DELETE_FRACTION`] of the width, the row is deleted;
@@ -66,8 +66,6 @@ const SETTLE_FRAMES: u8 = 2;
 const DELETE_FRACTION: f32 = 2.0 / 3.0;
 /// The spring back of a released row.
 const SNAP: Duration = Duration::from_millis(180);
-/// Corner radius of a row (`Row` in `alarm_list.slint`).
-const ROW_RADIUS: usize = 28;
 
 /// What [`ListSource::prepare_swipe`] puts into the row component.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -142,6 +140,9 @@ pub struct Layout {
     /// A sideways drag on a row swipes it (to delete); otherwise it is the
     /// page's.
     pub swipe: bool,
+    /// Corner radius of a row: a swiped row moved less than this is drawn
+    /// as the page draws it (its corners on the page background).
+    pub row_radius: usize,
     /// The list sits in a card with rounded corners: radius and the colour
     /// outside them (RGB565). Slint clips rectangles only, so the page
     /// draws caps over the corners ([`corner_alpha`]); the layer blends the
@@ -783,7 +784,7 @@ impl<S: ListSource> ListLayer<S> {
         // One of the two content pictures per frame, the one shown first:
         // the first frame stays as short as possible.
         let want_plain = s.highlighted && !s.plain;
-        let near = s.d.round() < ROW_RADIUS as f32;
+        let near = s.d.round() < self.layout.row_radius as f32;
         if want_plain && (near || s.content) {
             let part = SwipePart::Content {
                 highlighted: true,
@@ -842,7 +843,7 @@ impl<S: ListSource> ListLayer<S> {
         // corners. Nearly closed, the left corners are on screen and the
         // right ones are over the underlay's own corners: draw the row
         // plain.
-        let plain = d < ROW_RADIUS || !s.content;
+        let plain = d < self.layout.row_radius || !s.content;
         let ring = plain && !(s.highlighted && s.plain);
         if ring {
             self.ensure(s.row, rot);
