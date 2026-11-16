@@ -128,6 +128,11 @@ impl JobGuard {
             job(result);
         }
     }
+
+    /// The job back, unrun (for a later session).
+    fn into_job(mut self) -> Option<Job> {
+        self.0.take()
+    }
 }
 
 impl Drop for JobGuard {
@@ -224,8 +229,9 @@ enum Outcome {
     Synced,
     /// No credentials: one scan.
     Scanned,
-    /// Ended early for AirDrop, the clock not synced.
-    Interrupted,
+    /// Ended early for AirDrop, the clock not synced; the job if it had
+    /// not run yet (it runs in the session after AirDrop).
+    Interrupted(Option<Job>),
 }
 
 /// The `wifi` thread.
@@ -279,7 +285,8 @@ impl Station {
                         due = false;
                         self.interval
                     }
-                    Ok(Outcome::Interrupted) => {
+                    Ok(Outcome::Interrupted(unrun)) => {
+                        job = unrun;
                         self.set(Status::Off);
                         Duration::ZERO
                     }
@@ -422,7 +429,7 @@ impl Station {
         loop {
             if crate::airdrop::wanted() {
                 let _ = wifi.stop();
-                return Ok(Outcome::Interrupted);
+                return Ok(Outcome::Interrupted(job.into_job()));
             }
             attempt += 1;
             self.set(Status::Connecting { ssid: ssid.clone() });
@@ -495,7 +502,7 @@ impl Station {
         match synced {
             None => {
                 log::info!("wifi: session ended for AirDrop");
-                Ok(Outcome::Interrupted)
+                Ok(Outcome::Interrupted(None))
             }
             Some(true) => Ok(Outcome::Synced),
             Some(false) => {
