@@ -1,6 +1,6 @@
 # Hardware reference
 
-M5Stack Tab5 Kit (ESP32-P4 + ESP32-C6, 5" 720×1280 touch panel, NP-F550 battery), plus a Creative Pebble V3 USB speaker. From the schematic ([schematics/](schematics), [PDF](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1132/Tab5_Schematics_PDF.pdf)), M5Stack's M5Unified/M5GFX sources and measurements on the unit here.
+M5Stack Tab5 Kit (ESP32-P4 + ESP32-C6, 5" 720×1280 touch panel, NP-F550 battery), plus a Creative Pebble V3 USB speaker. From M5Stack's [schematic](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1132/Tab5_Schematics_PDF.pdf), M5Stack's M5Unified/M5GFX sources and measurements on the unit here.
 
 ## The unit here
 

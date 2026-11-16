@@ -21,7 +21,7 @@ Not esp-hal: it supports only P4 rev ≥ v3.0.
 
 ```
 README.md            overview and quick start
-docs/                architecture, hardware, pitfalls, roadmap, schematics
+docs/                architecture, hardware, pitfalls, roadmap
 wakey-core/          pure logic, host-tested (own Cargo workspace)
 firmware/            the firmware (own Cargo workspace, ESP target)
 firmware/c6/         the C6's images and their sources (esp_hosted addition, AirDrop receiver, rescue tool)
