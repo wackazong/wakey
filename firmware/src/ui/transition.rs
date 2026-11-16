@@ -27,12 +27,11 @@
 use super::input;
 use super::platform::PpaLines;
 use crate::display::cache;
-use crate::display::dma2d::{FbCopy, Picture};
+use crate::display::dma2d::{Blit, FbCopy, OwnedPicture, Picture};
 use crate::display::ppa::{PpaRotator, Target};
-use crate::display::{Display, HEIGHT, PIXELS, WIDTH};
+use crate::display::{Display, HEIGHT, WIDTH};
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 use embassy_time::{Duration, Instant};
-use esp_idf_svc::sys;
 use slint::platform::software_renderer::{
     LineBufferProvider, MinimalSoftwareWindow, RenderingRotation, Rgb565Pixel,
 };
@@ -97,43 +96,21 @@ pub(super) fn take() -> Option<Direction> {
     }
 }
 
-/// One 2D-DMA copy: source, source position, destination, destination
-/// position, size (panel orientation).
-type Job = (
-    Picture,
-    (usize, usize),
-    Picture,
-    (usize, usize),
-    (usize, usize),
-);
-
 /// The pictures and the DMA for transitions.
 pub(super) struct Transitions {
-    old: Picture,
-    new: Picture,
+    old: OwnedPicture,
+    new: OwnedPicture,
     /// Background colour: `BLANK_W` landscape columns (panel rows), and
     /// `BLANK_H` landscape rows (panel columns).
-    blank: Picture,
-    blank_v: Picture,
+    blank: OwnedPicture,
+    blank_v: OwnedPicture,
     blank_colour: Option<u16>,
     dma: FbCopy,
 }
 
 /// A picture of `cols × rows` (panel orientation) in PSRAM.
-fn alloc(cols: usize, rows: usize) -> Picture {
-    let p = unsafe {
-        sys::heap_caps_aligned_alloc(
-            128,
-            (rows * cols * 2).next_multiple_of(128),
-            sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_DMA,
-        )
-    };
-    assert!(!p.is_null(), "no PSRAM for page transitions");
-    Picture {
-        buf: p.cast(),
-        w: cols,
-        h: rows,
-    }
+fn alloc(cols: usize, rows: usize) -> OwnedPicture {
+    OwnedPicture::new(cols, rows).expect("no PSRAM for page transitions")
 }
 
 impl Transitions {
@@ -160,10 +137,10 @@ impl Transitions {
         let started = Instant::now();
         let mut slide = Slide {
             direction,
-            old: self.old,
-            new: self.new,
-            blank: self.blank,
-            blank_v: self.blank_v,
+            old: self.old.picture(),
+            new: self.new.picture(),
+            blank: self.blank.picture(),
+            blank_v: self.blank_v.picture(),
             dma: &mut self.dma,
             jobs: VecDeque::new(),
             start: None,
@@ -173,19 +150,15 @@ impl Transitions {
             frames: 0,
         };
         // 1. The screen as shown, before any frame overwrites it.
-        let front = picture(display.front_buffer(), HEIGHT);
-        slide
-            .jobs
-            .push_back((front, (0, 0), slide.old, (0, 0), (WIDTH, HEIGHT)));
+        let front = Picture::frame_buffer(display.front_buffer());
+        slide.jobs.push_back(whole(front, slide.old));
 
-        // 2. The new page, while the slide runs.
-        // SAFETY: `new` holds PIXELS pixels; only the PPA writes it now.
-        let new = unsafe { core::slice::from_raw_parts_mut(self.new.buf, PIXELS) };
+        // 2. The new page, while the slide runs (only the PPA writes "new").
         let mut region = None;
         window.request_redraw();
         window.draw_if_needed(|renderer| {
             renderer.set_rendering_rotation(RenderingRotation::NoRotation);
-            rot.begin(Target::frame_buffer(new));
+            rot.begin(Target::frame_buffer(slide.new));
             let r = renderer.render_by_line(Polling {
                 lines: PpaLines { rot: &mut *rot },
                 slide: &mut slide,
@@ -234,7 +207,7 @@ impl Transitions {
         if self.blank_colour == Some(colour) {
             return;
         }
-        for p in [self.blank, self.blank_v] {
+        for p in [self.blank.picture(), self.blank_v.picture()] {
             let px = p.w * p.h;
             // SAFETY: the picture holds `px` pixels; no DMA uses it now.
             unsafe { core::slice::from_raw_parts_mut(p.buf, px) }.fill(colour);
@@ -253,7 +226,7 @@ struct Slide<'a> {
     blank: Picture,
     blank_v: Picture,
     dma: &'a mut FbCopy,
-    jobs: VecDeque<Job>,
+    jobs: VecDeque<Blit>,
     /// When the first frame was composed (the slide's time 0).
     start: Option<Instant>,
     /// "new" holds the new page.
@@ -277,8 +250,8 @@ impl Slide<'_> {
         if !self.dma.is_done() {
             return;
         }
-        if let Some((src, from, dst, to, size)) = self.jobs.pop_front() {
-            self.dma.start(src, from, dst, to, size);
+        if let Some(blit) = self.jobs.pop_front() {
+            self.dma.start(blit);
             return;
         }
         if self.composed {
@@ -293,12 +266,11 @@ impl Slide<'_> {
         let Some(fb) = display.try_back_buffer() else {
             return;
         };
-        let fb = picture(fb.as_mut_ptr(), HEIGHT);
+        let fb = Picture::frame_buffer(fb.as_mut_ptr());
         let start = *self.start.get_or_insert_with(Instant::now);
         let t = start.elapsed().as_micros() as f32 / DURATION.as_micros() as f32;
         if t >= 1.0 && self.new_ready {
-            self.jobs
-                .push_back((self.new, (0, 0), fb, (0, 0), (WIDTH, HEIGHT)));
+            self.jobs.push_back(whole(self.new, fb));
             self.finals += 1;
         } else {
             let eased = if t < 0.5 {
@@ -376,8 +348,13 @@ impl Slide<'_> {
         if n == 0 {
             return;
         }
-        self.jobs
-            .push_back((src, (from, 0), dst, (to, 0), (n, HEIGHT)));
+        self.jobs.push_back(Blit {
+            src,
+            from: (from, 0),
+            dst,
+            to: (to, 0),
+            size: (n, HEIGHT),
+        });
     }
 
     /// Queues a copy of landscape columns `from..from+n` of `src` to
@@ -387,13 +364,13 @@ impl Slide<'_> {
         if n == 0 {
             return;
         }
-        self.jobs.push_back((
+        self.jobs.push_back(Blit {
             src,
-            (0, src.h - from - n),
+            from: (0, src.h - from - n),
             dst,
-            (0, dst.h - to - n),
-            (WIDTH, n),
-        ));
+            to: (0, dst.h - to - n),
+            size: (WIDTH, n),
+        });
     }
 }
 
@@ -445,15 +422,24 @@ fn outside((x, y, w, h): (usize, usize, usize, usize)) -> Vec<(usize, usize, usi
 
 /// A copy of the landscape rectangle `(x, y, w, h)` between two full-screen
 /// pictures: landscape (x, y) is panel column y, row `HEIGHT-1-x`.
-fn landscape_copy(src: Picture, dst: Picture, x: usize, y: usize, w: usize, h: usize) -> Job {
+fn landscape_copy(src: Picture, dst: Picture, x: usize, y: usize, w: usize, h: usize) -> Blit {
     let row = HEIGHT - x - w;
-    (src, (y, row), dst, (y, row), (h, w))
+    Blit {
+        src,
+        from: (y, row),
+        dst,
+        to: (y, row),
+        size: (h, w),
+    }
 }
 
-fn picture(buf: *mut u16, rows: usize) -> Picture {
-    Picture {
-        buf,
-        w: WIDTH,
-        h: rows,
+/// A copy of all of one full-screen picture into another.
+fn whole(src: Picture, dst: Picture) -> Blit {
+    Blit {
+        src,
+        from: (0, 0),
+        dst,
+        to: (0, 0),
+        size: (WIDTH, HEIGHT),
     }
 }

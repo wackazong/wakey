@@ -9,6 +9,7 @@ use crate::ui::list_layer::{Buffers, Layout, ListLayer, ListSource, SwipeEnd, Sw
 use crate::ui::platform;
 use slint::{ComponentHandle, Image, Model, ModelRc, SharedPixelBuffer, Weak};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 /// Corner radius of the list card (`SoundPage`'s card: 28 px).
 const CORNER_RADIUS: usize = 28;
@@ -49,7 +50,7 @@ pub(super) fn set_corner_caps(window: &AppWindow) {
 /// `shared` (the alarm list's buffers: never on screen together). Call
 /// after `AppWindow` was created (its offscreen row window is the next one,
 /// see `ui::platform`).
-pub fn layer(window: &AppWindow, shared: Buffers) -> ListLayer<SoundRows> {
+pub fn layer(window: &AppWindow, shared: Rc<Buffers>) -> ListLayer<SoundRows> {
     let l = window.global::<SoundListLayout>();
     let px = |v: f32| v.round() as usize;
     let layout = Layout {

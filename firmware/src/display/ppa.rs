@@ -19,7 +19,8 @@
 //! - [`PpaRotator::finish`] must be called before the frame is presented. It
 //!   waits for the queue to drain.
 
-use super::{HEIGHT, PIXELS, WIDTH, cache};
+use super::dma2d::Picture;
+use super::{HEIGHT, WIDTH, cache};
 use core::ffi::c_void;
 use core::ops::Range;
 use core::ptr;
@@ -89,11 +90,12 @@ pub struct Target {
 }
 
 impl Target {
-    /// The panel frame buffer: landscape (x, y) → column y, row HEIGHT-1-x.
-    pub fn frame_buffer(fb: &mut [u16]) -> Self {
-        assert_eq!(fb.len(), PIXELS);
+    /// A whole frame in the panel's orientation (a frame buffer, or a
+    /// picture of the screen): landscape (x, y) → column y, row HEIGHT-1-x.
+    pub fn frame_buffer(fb: Picture) -> Self {
+        assert!(fb.w == WIDTH && fb.h == HEIGHT);
         Self {
-            buf: fb.as_mut_ptr(),
+            buf: fb.buf,
             pic_w: WIDTH,
             pic_h: HEIGHT,
             col_off: 0,

@@ -47,12 +47,11 @@ use super::input::{Phase, TouchEvent};
 use super::platform;
 use super::render_loop::{FrameHook, Route};
 use crate::display::cache;
-use crate::display::dma2d::{FbCopy, Picture};
+use crate::display::dma2d::{Blit, FbCopy, OwnedPicture, Picture};
 use crate::display::ppa::{PpaRotator, Target};
 use crate::display::{HEIGHT, WIDTH};
 use core::ops::Range;
 use embassy_time::{Duration, Instant};
-use esp_idf_svc::sys;
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use std::rc::Rc;
 use wakey_core::scroll::Scroller;
@@ -187,19 +186,14 @@ fn blend565(px: u16, bg: u16, a: u8) -> u16 {
 }
 
 /// The PSRAM a layer draws into: the ring, the blank picture and the swipe
-/// pictures, with their sizes in pixels. Two layers whose pages are never
-/// on screen together can share it ([`ListLayer::new_in`],
-/// [`SharedLayers`]).
-#[derive(Clone, Copy, Debug)]
+/// pictures. Two layers whose pages are never on screen together can share
+/// it ([`ListLayer::new_in`], [`SharedLayers`]), each with its own picture
+/// sizes.
 pub struct Buffers {
-    ring: (*mut u16, usize),
-    blank: (*mut u16, usize),
-    swipe: (*mut u16, usize),
+    ring: OwnedPicture,
+    blank: OwnedPicture,
+    swipe: OwnedPicture,
 }
-
-/// One 2D-DMA copy into the frame buffer: source picture, source position,
-/// destination position, size.
-type Copy = (Picture, (usize, usize), (usize, usize), (usize, usize));
 
 /// Who has the current touch.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -245,6 +239,8 @@ const PLAIN: usize = 2;
 
 pub struct ListLayer<S: ListSource> {
     layout: Layout,
+    /// The memory of `layer`, `blank` and `swipe_pics`.
+    buffers: Rc<Buffers>,
     /// Rows kept rendered behind the view and ahead of it (in the scroll
     /// direction), so filling never evicts a visible row.
     behind: usize,
@@ -261,9 +257,9 @@ pub struct ListLayer<S: ListSource> {
     source: S,
     dma: FbCopy,
     /// Copies of this frame after the first, started in `finish`.
-    pending: heapless::Vec<Copy, 4>,
-    /// Back buffer of the current frame (destination of `pending`).
-    pending_fb: *mut u16,
+    pending: heapless::Vec<Blit, 4>,
+    /// Back buffer of the current frame.
+    fb: Picture,
     frame_start: Instant,
     scroller: Scroller,
     touch: Touch,
@@ -324,7 +320,7 @@ impl<S: ListSource> ListLayer<S> {
         layout: Layout,
         row_window: Rc<MinimalSoftwareWindow>,
         source: S,
-        shared: Option<Buffers>,
+        shared: Option<Rc<Buffers>>,
     ) -> Self {
         let Layout {
             x,
@@ -340,63 +336,36 @@ impl<S: ListSource> ListLayer<S> {
         let visible = height.div_ceil(row_h) + 1;
         assert!(slots > visible, "ring smaller than the view");
         let behind = (slots - visible) / 4;
-        let alloc = |px: usize| {
-            let p = unsafe {
-                sys::heap_caps_aligned_alloc(
-                    128,
-                    (px * 2).next_multiple_of(128),
-                    sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_DMA,
-                )
-            };
-            assert!(!p.is_null(), "no PSRAM for the list layer");
-            p.cast::<u16>()
-        };
-        let w = slots * row_h;
-        // As tall as the view (the blank): covers it even when the list is
-        // shorter.
-        let (ring_px, blank_px, swipe_px) = (w * width, height * width, 3 * row_h * width);
-        let (layer, blank, swipe_pics) = match shared {
+        // In the panel's orientation: the ring and the swipe pictures are
+        // rows side by side; the blank is as tall as the view, so it covers
+        // it even when the list is shorter.
+        let ring_w = slots * row_h;
+        let (swipe_w, blank_w) = (3 * row_h, height);
+        let buffers = match shared {
             Some(b) => {
-                assert!(
-                    ring_px <= b.ring.1
-                        && blank_px <= b.blank.1
-                        && (!layout.swipe || swipe_px <= b.swipe.1),
-                    "shared list layer buffers too small"
-                );
-                log::info!("list layer: ring of {slots} rows ({w}×{width} px), shared");
-                (b.ring.0, b.blank.0, b.swipe.0)
+                log::info!("list layer: ring of {slots} rows ({ring_w}×{width} px), shared");
+                b
             }
             None => {
                 log::info!(
-                    "list layer: ring of {slots} rows ({w}×{width} px, {} KiB PSRAM)",
-                    ring_px * 2 / 1024
+                    "list layer: ring of {slots} rows ({ring_w}×{width} px, {} KiB PSRAM)",
+                    ring_w * width * 2 / 1024
                 );
-                (alloc(ring_px), alloc(blank_px), alloc(swipe_px))
+                let alloc = |w| OwnedPicture::new(w, width).expect("no PSRAM for the list layer");
+                Rc::new(Buffers {
+                    ring: alloc(ring_w),
+                    blank: alloc(blank_w),
+                    swipe: alloc(swipe_w),
+                })
             }
         };
-        let layer = Picture {
-            buf: layer,
-            w,
-            h: width,
-        };
-        let swipe_pics = Picture {
-            buf: swipe_pics,
-            w: 3 * row_h,
-            h: width,
-        };
-        let blank = Picture {
-            buf: blank,
-            w: height,
-            h: width,
-        };
-        if shared.is_none() {
-            // Filled once by the CPU, then written back for the DMA.
-            unsafe { core::slice::from_raw_parts_mut(blank.buf, blank.w * blank.h) }
-                .fill(background);
-            cache::writeback(blank.buf, blank.w * blank.h);
-        }
+        let too_small = "shared list layer buffers too small";
+        let layer = buffers.ring.reshaped(ring_w, width).expect(too_small);
+        let blank = buffers.blank.reshaped(blank_w, width).expect(too_small);
+        let swipe_pics = buffers.swipe.reshaped(swipe_w, width).expect(too_small);
         Self {
             layout,
+            buffers,
             behind,
             ahead: slots - visible - behind,
             layer,
@@ -409,7 +378,7 @@ impl<S: ListSource> ListLayer<S> {
             source,
             dma: FbCopy::new().expect("2D-DMA"),
             pending: heapless::Vec::new(),
-            pending_fb: core::ptr::null_mut(),
+            fb: Picture::frame_buffer(core::ptr::null_mut()),
             frame_start: Instant::now(),
             scroller: Scroller::new(height as f32, 0.0),
             touch: Touch::None,
@@ -429,12 +398,8 @@ impl<S: ListSource> ListLayer<S> {
 
     /// This layer's buffers, for a layer that shares them
     /// ([`Self::new_in`]).
-    pub fn buffers(&self) -> Buffers {
-        Buffers {
-            ring: (self.layer.buf, self.layer.w * self.layer.h),
-            blank: (self.blank.buf, self.blank.w * self.blank.h),
-            swipe: (self.swipe_pics.buf, self.swipe_pics.w * self.swipe_pics.h),
-        }
+    pub fn buffers(&self) -> Rc<Buffers> {
+        self.buffers.clone()
     }
 
     /// The list's page is on screen.
@@ -592,7 +557,7 @@ impl<S: ListSource> ListLayer<S> {
     /// the ring (wrapping at most once), a blank gap below the last row.
     /// View y is the panel column; landscape x..x+width are panel rows
     /// `HEIGHT-x-width..`.
-    fn copies(&self, scroll: i32) -> heapless::Vec<Copy, 5> {
+    fn copies(&self, scroll: i32) -> heapless::Vec<Blit, 4> {
         let Layout {
             x,
             y,
@@ -604,6 +569,16 @@ impl<S: ListSource> ListLayer<S> {
         let row0 = HEIGHT - x - width;
         let content_h = self.content_h() as i32;
         let mut copies = heapless::Vec::new();
+        let mut copy = |src, from, to, size| {
+            let dst = self.fb;
+            let _ = copies.push(Blit {
+                src,
+                from,
+                dst,
+                to,
+                size,
+            });
+        };
         let top = scroll.max(0);
         let bottom = (scroll + view_h).min(content_h);
         if bottom > top {
@@ -611,19 +586,19 @@ impl<S: ListSource> ListLayer<S> {
             let p = top as usize % self.layer.w;
             let n = (bottom - top) as usize;
             let n1 = n.min(self.layer.w - p);
-            let _ = copies.push((self.layer, (p, 0), (dst, row0), (n1, width)));
+            copy(self.layer, (p, 0), (dst, row0), (n1, width));
             if n1 < n {
-                let _ = copies.push((self.layer, (0, 0), (dst + n1, row0), (n - n1, width)));
+                copy(self.layer, (0, 0), (dst + n1, row0), (n - n1, width));
             }
         }
         if scroll < 0 {
             let gap = ((-scroll) as usize).min(height);
-            let _ = copies.push((self.blank, (0, 0), (y, row0), (gap, width)));
+            copy(self.blank, (0, 0), (y, row0), (gap, width));
         }
         if scroll + view_h > content_h {
             let start = (content_h - scroll).max(0) as usize;
             let gap = height - start;
-            let _ = copies.push((self.blank, (0, 0), (y + start, row0), (gap, width)));
+            copy(self.blank, (0, 0), (y + start, row0), (gap, width));
         }
         copies
     }
@@ -664,22 +639,22 @@ impl<S: ListSource> ListLayer<S> {
                 self.ensure(i, rot);
             }
         }
-        // The first copy starts now and runs while Slint renders the rest
-        // of the screen; the others follow in `finish`.
-        let fbp = Picture {
-            buf: fb.buf,
-            w: WIDTH,
-            h: HEIGHT,
-        };
         self.refresh_blank();
-        let mut copies = self.copies(scroll).into_iter();
-        if let Some((src, from, to, size)) = copies.next() {
-            self.dma.start(src, from, fbp, to, size);
+        self.fb = Picture::frame_buffer(fb.buf);
+        let copies = self.copies(scroll);
+        self.start_copies(copies);
+        self.drew = true;
+    }
+
+    /// Starts the first of `copies` now, to run while Slint renders the
+    /// rest of the screen; the others follow in `finish`.
+    fn start_copies(&mut self, copies: impl IntoIterator<Item = Blit>) {
+        let mut copies = copies.into_iter();
+        if let Some(first) = copies.next() {
+            self.dma.start(first);
         }
         self.pending.clear();
         self.pending.extend(copies);
-        self.pending_fb = fb.buf;
-        self.drew = true;
     }
 
     /// Blends the corner caps into the frame buffer `fb` (after the copies
@@ -857,9 +832,7 @@ impl<S: ListSource> ListLayer<S> {
         };
         let Layout {
             x,
-            y,
             width,
-            height,
             row_h,
             slots,
             ..
@@ -874,15 +847,14 @@ impl<S: ListSource> ListLayer<S> {
         if ring {
             self.ensure(s.row, rot);
         }
-        let top = y as i32 + (s.row * row_h) as i32 - self.source.offset().round() as i32;
-        let a = top.max(y as i32);
-        let b = (top + row_h as i32).min((y + height) as i32);
+        self.fb = Picture::frame_buffer(fb.buf);
         self.pending.clear();
-        self.pending_fb = fb.buf;
-        if b <= a {
+        let Some(band) = self.swipe_band() else {
             return;
-        }
-        let (ry0, rh, col) = ((a - top) as usize, (b - a) as usize, a as usize);
+        };
+        // The band's first line in the row, its height and its panel column.
+        let ry0 = (band.start as i32 - self.row_top(s.row)) as usize;
+        let (rh, col) = (band.len(), band.start);
         let (content, content_col) = if ring {
             (self.layer, s.row % slots * row_h)
         } else if plain {
@@ -893,33 +865,28 @@ impl<S: ListSource> ListLayer<S> {
         // Row x `d..width` (picture rows `0..width-d`) to screen x
         // `x..x+width-d`; row x `width-d..width` of the delete button to
         // the rest. Landscape x is panel row `HEIGHT-1-x`.
-        let mut copies: heapless::Vec<Copy, 2> = heapless::Vec::new();
-        if d < width {
-            let _ = copies.push((
-                content,
-                (content_col + ry0, 0),
-                (col, HEIGHT - x - width + d),
-                (rh, width - d),
-            ));
-        }
-        if d > 0 {
-            let _ = copies.push((
-                self.swipe_pics,
-                (UNDERLAY * row_h + ry0, 0),
-                (col, HEIGHT - x - width),
-                (rh, d),
-            ));
-        }
-        let fbp = Picture {
-            buf: fb.buf,
-            w: WIDTH,
-            h: HEIGHT,
-        };
-        let mut copies = copies.into_iter();
-        if let Some((src, from, to, size)) = copies.next() {
-            self.dma.start(src, from, fbp, to, size);
-        }
-        self.pending.extend(copies);
+        let content = (d < width).then_some(Blit {
+            src: content,
+            from: (content_col + ry0, 0),
+            dst: self.fb,
+            to: (col, HEIGHT - x - width + d),
+            size: (rh, width - d),
+        });
+        let underlay = (d > 0).then_some(Blit {
+            src: self.swipe_pics,
+            from: (UNDERLAY * row_h + ry0, 0),
+            dst: self.fb,
+            to: (col, HEIGHT - x - width),
+            size: (rh, d),
+        });
+        self.start_copies(content.into_iter().chain(underlay));
+    }
+
+    /// Landscape y of row `row`'s top on screen (outside the view if it is
+    /// scrolled out).
+    fn row_top(&self, row: usize) -> i32 {
+        let Layout { y, row_h, .. } = self.layout;
+        y as i32 + (row * row_h) as i32 - self.source.offset().round() as i32
     }
 
     /// Landscape rows of the swiped row on screen.
@@ -928,7 +895,7 @@ impl<S: ListSource> ListLayer<S> {
         let Layout {
             y, height, row_h, ..
         } = self.layout;
-        let top = y as i32 + (s.row * row_h) as i32 - self.source.offset().round() as i32;
+        let top = self.row_top(s.row);
         let a = top.max(y as i32);
         let b = (top + row_h as i32).min((y + height) as i32);
         (b > a).then_some(a as usize..b as usize)
@@ -1100,13 +1067,8 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
     }
 
     fn finish(&mut self, rot: &mut PpaRotator) {
-        let fbp = Picture {
-            buf: self.pending_fb,
-            w: WIDTH,
-            h: HEIGHT,
-        };
-        for (src, from, to, size) in core::mem::take(&mut self.pending) {
-            self.dma.start(src, from, fbp, to, size);
+        for blit in core::mem::take(&mut self.pending) {
+            self.dma.start(blit);
         }
         // Fill the ring while the frame has time. Missing rows are never
         // visible ones (those were rendered in `start`), so the running copy
@@ -1114,7 +1076,7 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
         while self.frame_start.elapsed() < FRAME_BUDGET && self.fill_one(rot) {}
         self.dma.wait();
         if self.drew && self.swipe.is_none() {
-            self.apply_caps(self.pending_fb);
+            self.apply_caps(self.fb.buf);
         }
         self.scroll_log.last_busy = self.frame_start.elapsed();
     }

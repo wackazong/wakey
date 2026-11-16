@@ -11,6 +11,7 @@ use super::input::{self, Phase, TouchEvent};
 use super::platform::PpaLines;
 use super::stats::FrameStats;
 use crate::display::Display;
+use crate::display::dma2d::Picture;
 use crate::display::ppa::{PpaRotator, Target};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
@@ -267,7 +268,8 @@ pub async fn run(
 
         // Waits for the previous flip, so this paces to the panel refresh.
         stage(3);
-        let target = Target::frame_buffer(display.back_buffer().await);
+        let fb = display.back_buffer().await.as_mut_ptr();
+        let target = Target::frame_buffer(Picture::frame_buffer(fb));
 
         stage(4);
         let t0 = Instant::now();

@@ -6,6 +6,8 @@
 //! PPA's rate. No pixel processing, no cache maintenance: use it only for
 //! memory the CPU does not write (layers filled by the PPA, frame buffers).
 
+use super::{HEIGHT, WIDTH};
+use crate::psram::PsramBuffer;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
 use esp_idf_svc::sys::{self as sys, EspError, esp};
@@ -59,6 +61,64 @@ pub struct Picture {
     pub h: usize,
 }
 
+impl Picture {
+    /// A panel frame buffer (portrait, `WIDTH × HEIGHT`).
+    pub fn frame_buffer(buf: *mut u16) -> Self {
+        Self {
+            buf,
+            w: WIDTH,
+            h: HEIGHT,
+        }
+    }
+}
+
+/// A picture in memory of its own, freed on drop: PSRAM the DMA engines
+/// can use, cache-line aligned and sized in whole lines (the PPA's output
+/// must be).
+pub struct OwnedPicture {
+    picture: Picture,
+    _memory: PsramBuffer,
+}
+
+impl OwnedPicture {
+    /// `w × h` pixels; `None` if there is no room.
+    pub fn new(w: usize, h: usize) -> Option<Self> {
+        let memory = PsramBuffer::new(w * h * 2, sys::MALLOC_CAP_DMA)?;
+        let picture = Picture {
+            buf: memory.as_mut_ptr().cast(),
+            w,
+            h,
+        };
+        Some(Self {
+            picture,
+            _memory: memory,
+        })
+    }
+
+    pub fn picture(&self) -> Picture {
+        self.picture
+    }
+
+    /// The same memory as a `w × h` picture, if it fits.
+    pub fn reshaped(&self, w: usize, h: usize) -> Option<Picture> {
+        (w * h <= self.picture.w * self.picture.h).then_some(Picture {
+            buf: self.picture.buf,
+            w,
+            h,
+        })
+    }
+}
+
+/// One copy: `size` (w, h) pixels from `src` at `from` to `dst` at `to`.
+#[derive(Clone, Copy, Debug)]
+pub struct Blit {
+    pub src: Picture,
+    pub from: (usize, usize),
+    pub dst: Picture,
+    pub to: (usize, usize),
+    pub size: (usize, usize),
+}
+
 /// The 2D-DMA copy engine. One copy at a time.
 pub struct FbCopy {
     handle: Handle,
@@ -86,16 +146,15 @@ impl FbCopy {
         })
     }
 
-    /// Starts copying `size` (w, h) pixels from `src` at `from` to `dst` at
-    /// `to`. Waits for the previous copy first.
-    pub fn start(
-        &mut self,
-        src: Picture,
-        from: (usize, usize),
-        dst: Picture,
-        to: (usize, usize),
-        size: (usize, usize),
-    ) {
+    /// Starts a copy. Waits for the previous one first.
+    pub fn start(&mut self, blit: Blit) {
+        let Blit {
+            src,
+            from,
+            dst,
+            to,
+            size,
+        } = blit;
         debug_assert!(from.0 + size.0 <= src.w && from.1 + size.1 <= src.h);
         debug_assert!(to.0 + size.0 <= dst.w && to.1 + size.1 <= dst.h);
         self.wait();
