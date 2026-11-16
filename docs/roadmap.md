@@ -10,7 +10,7 @@ A bedside alarm clock: large clock face, several alarms that play a sound file f
 
 ## Known limits
 
-- **AirDrop:** TIDAL downloads pause while the Datei tab is shown (the C6 runs either Wi-Fi or the receiver). Several files at once and a Mac as sender are untested. The protocols are Apple's, reverse-engineered: an iOS update can break them. The C6 part is C (`firmware/c6/airdrop`), an exception to "Rust only", like esp_hosted itself.
+- **AirDrop:** TIDAL downloads pause while the Datei tab is shown (the C6 runs either Wi-Fi or the receiver). Several files at once are untested; a Mac as sender works (tested 2026-11-16). The protocols are Apple's, reverse-engineered: an iOS update can break them. The C6 part is C (`firmware/c6/airdrop`), an exception to "Rust only", like esp_hosted itself.
 
 ## Development tools (idea)
 

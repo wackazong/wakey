@@ -112,5 +112,5 @@ It uses the clock's `partitions.csv`, so the clock's NVS and the `c6` partition 
 
 ## Open
 
-- Several files at once, a Mac as sender, the iPhone off its 5 GHz network (more channel-6 slots?).
+- Several files at once (a Mac as sender works, 2026-11-16), the iPhone off its 5 GHz network (more channel-6 slots?).
 - Block Ack for the iPhone's aggregated frames (Speed, above).
