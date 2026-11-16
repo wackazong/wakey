@@ -4,10 +4,8 @@
 //! to bottom of the screen, evenly spaced): nearly black and purple at
 //! night, plum and magenta in twilight, a glowing orange horizon around
 //! sunrise and sunset, saturated blue by day. Mornings and evenings differ
-//! a little ([`sun_rising`]). The daylight colours follow the user's
-//! reference pictures (macOS "Solar Gradients", sampled at five heights per
-//! sun position); night and twilight are nearly black and plum instead of
-//! their blue.
+//! a little ([`sun_rising`]). The daylight colours are sampled from macOS's
+//! Solar Gradients wallpaper; night and twilight are darker and redder.
 
 /// Zurich, the place the clock's time zone belongs to (degrees, east and
 /// north positive).
@@ -159,15 +157,20 @@ pub fn gradient(elevation: f32, rising: bool) -> Gradient {
 }
 
 fn mix(a: Gradient, b: Gradient, t: f32) -> Gradient {
+    core::array::from_fn(|k| lerp(a[k], b[k], t))
+}
+
+/// The colour `t` (0–1) of the way from `a` to `b`.
+fn lerp(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
-    core::array::from_fn(|k| Rgb(m(a[k].0, b[k].0), m(a[k].1, b[k].1), m(a[k].2, b[k].2)))
+    Rgb(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
 
 /// True if text near the bottom (85–95 % of the height: the clock's alarm
 /// line) should be dark: the horizon is too light there for white text.
 pub fn bottom_is_light(g: &Gradient) -> bool {
     // 90 %: 60 % of the way from the 75 % stop to the bottom.
-    let Rgb(r, gr, b) = mix([g[3]; 5], [g[4]; 5], 0.6)[0];
+    let Rgb(r, gr, b) = lerp(g[3], g[4], 0.6);
     0.2126 * f32::from(r) + 0.7152 * f32::from(gr) + 0.0722 * f32::from(b) > 150.0
 }
 

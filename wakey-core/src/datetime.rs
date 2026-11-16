@@ -39,7 +39,7 @@ pub const WEEKDAYS_DE: [&str; 7] = [
     "Samstag",
 ];
 
-pub const MONTHS_DE: [&str; 12] = [
+const MONTHS_DE: [&str; 12] = [
     "Januar",
     "Februar",
     "März",

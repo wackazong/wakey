@@ -14,7 +14,7 @@ const REST_US: u64 = 80_000;
 /// Rubber-band constant (as on iOS).
 const RUBBER: f32 = 0.55;
 /// Farthest the content can be pulled past an end, px.
-pub const MAX_OVERSCROLL: f32 = 360.0;
+const MAX_OVERSCROLL: f32 = 360.0;
 /// Spring back: critically damped with this angular frequency (1/s);
 /// settles in about 4/SPRING_W seconds.
 const SPRING_W: f32 = 12.0;

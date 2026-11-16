@@ -1,5 +1,6 @@
 //! The built-in alarm tone (used when no sound file is set or it cannot be
-//! played) and the volume curve with fade-in.
+//! played), the volume curve with fade-in, and the click of the time
+//! wheels.
 
 use std::f32::consts::TAU;
 
@@ -15,10 +16,8 @@ const LEVEL: f32 = 0.5;
 
 /// Endless double-beep pattern as interleaved stereo i16.
 ///
-/// One period of the pattern (1 s, a whole number of 880 Hz cycles) is
-/// computed once and played from a table: per-sample `sin` and `%` cost a
-/// whole core on the ESP32-P4 (single-precision FPU only, soft-float and
-/// slow range reduction in the C library) and starved the UI.
+/// One period is computed once and played from a table (per-sample sin is
+/// too slow on the P4).
 pub struct Beeper {
     /// One period, mono.
     table: Vec<i16>,
@@ -84,10 +83,9 @@ pub fn faded(gain: f32, frames: u64, fade_frames: u64) -> f32 {
 }
 
 /// The wheel click: a short "tock" in the mids, mono, peaking at about
-/// `amplitude` (0–1 of full scale). A 1.2 kHz tone (1.8 kHz was too
-/// bright) with a 0.3 ms attack, dying away within 10 ms (2 ms decay): a
-/// click rather than a tone, and over before the next one, which comes at
-/// most once per frame (~15 ms; longer clicks ran together).
+/// `amplitude` (0–1 of full scale). A 1.2 kHz tone with a 0.3 ms attack,
+/// dying away within 10 ms (2 ms decay): a click rather than a tone, and
+/// over before the next one, which comes at most once per frame (~15 ms).
 pub fn click(sample_rate: u32, amplitude: f32) -> Vec<i16> {
     const FREQ: f32 = 1200.0;
     const ATTACK_S: f32 = 0.0003;

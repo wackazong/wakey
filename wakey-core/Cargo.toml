@@ -2,8 +2,13 @@
 name = "wakey-core"
 version = "0.1.0"
 edition = "2024"
+# Let chains, slice::as_chunks_mut and the ICU crates behind `url` need
+# 1.88.
+rust-version = "1.88"
 publish = false
 license = "MIT OR Apache-2.0"
+authors = ["Alexander Walter"]
+repository = "https://github.com/wackazong/wakey"
 description = "Hardware-independent logic of the Tab5 alarm clock, tested on the host"
 
 # Own workspace: `cargo test` here runs on the host with the default
