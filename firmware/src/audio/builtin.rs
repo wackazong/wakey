@@ -119,10 +119,7 @@ impl BuiltinSpeaker {
             amp_on: false,
             last_activity: Instant::now(),
         };
-        std::thread::Builder::new()
-            .name("speaker".into())
-            .stack_size(4096)
-            .spawn(crate::taskstats::named("speaker", move || mixer.run(&rx)))?;
+        crate::runtime::Thread::new(c"speaker", 4096).spawn(move || mixer.run(&rx))?;
         Ok(Self { tx: Some(tx) })
     }
 

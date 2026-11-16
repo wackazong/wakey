@@ -17,7 +17,10 @@ static NAMES: Mutex<BTreeMap<usize, &'static str>> = Mutex::new(BTreeMap::new())
 pub fn named<T>(name: &'static str, f: impl FnOnce() -> T) -> impl FnOnce() -> T {
     move || {
         let task = unsafe { sys::xTaskGetCurrentTaskHandle() } as usize;
-        NAMES.lock().unwrap_or_else(|e| e.into_inner()).insert(task, name);
+        NAMES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(task, name);
         f()
     }
 }
@@ -26,9 +29,7 @@ const PERIOD: Duration = Duration::from_secs(5);
 
 /// Starts the `task-stats` thread.
 pub fn start() {
-    std::thread::Builder::new()
-        .name("task-stats".into())
-        .stack_size(6144)
+    crate::runtime::Thread::new(c"task-stats", 6144)
         .spawn(|| {
             let mut last: BTreeMap<u32, u32> = BTreeMap::new();
             let mut last_total = 0u32;
@@ -37,9 +38,9 @@ pub fn start() {
                 let n = unsafe { sys::uxTaskGetNumberOfTasks() } as usize + 4;
                 let mut tasks: Vec<sys::TaskStatus_t> = Vec::with_capacity(n);
                 let mut total = 0u32;
-                let got = unsafe {
-                    sys::uxTaskGetSystemState(tasks.as_mut_ptr(), n as _, &mut total)
-                } as usize;
+                let got =
+                    unsafe { sys::uxTaskGetSystemState(tasks.as_mut_ptr(), n as _, &mut total) }
+                        as usize;
                 unsafe { tasks.set_len(got) };
                 // Counters wrap (32 bit, µs): differences stay right.
                 let span = u64::from(total.wrapping_sub(last_total).max(1));

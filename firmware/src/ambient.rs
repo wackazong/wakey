@@ -164,11 +164,7 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight, night_pixels_percent: u8)
             std::thread::sleep(Duration::from_millis(50));
         }
     };
-    if let Err(e) = std::thread::Builder::new()
-        .name("ambient".into())
-        .stack_size(6 * 1024)
-        .spawn(crate::taskstats::named("ambient", run))
-    {
+    if let Err(e) = crate::runtime::Thread::new(c"ambient", 6 * 1024).spawn(run) {
         log::error!("ambient: thread: {e}");
     }
 }

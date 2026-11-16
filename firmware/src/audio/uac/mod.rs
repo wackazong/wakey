@@ -81,12 +81,8 @@ impl UsbAudio {
         });
         let (tx, rx) = mpsc::channel();
         let thread_shared = shared.clone();
-        std::thread::Builder::new()
-            .name("uac".into())
-            .stack_size(8192)
-            .spawn(crate::taskstats::named("uac", move || {
-                device::client_thread(thread_shared, rx, vbus, source)
-            }))
+        crate::runtime::Thread::new(c"uac", 8192)
+            .spawn(move || device::client_thread(thread_shared, rx, vbus, source))
             .expect("uac thread");
         Ok(Self { shared, cmds: tx })
     }

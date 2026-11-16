@@ -25,10 +25,10 @@
 
 use crate::board::ioexp::Switch;
 use crate::config::WifiConfig;
+use crate::runtime::Thread;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::modem::Modem;
-use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sntp::{EspSntp, SyncStatus};
 use esp_idf_svc::sys::{ESP_ERR_TIMEOUT, EspError};
@@ -163,20 +163,10 @@ pub fn start(
     // On core 0 it shared the UI's priority there and made animations
     // stutter (a list row's repaint went from ~20 to ~40 ms). Core 1 is
     // mostly idle; a download there is as fast.
-    let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
-    let pinned = ThreadSpawnConfiguration {
-        name: Some(c"wifi"),
-        pin_to_core: Some(Core::Core1),
-        priority: 1,
-        ..ThreadSpawnConfiguration::default()
-    };
-    if let Err(e) = pinned.set() {
-        log::warn!("wifi: thread not pinned: {e}");
-    }
-    std::thread::Builder::new()
-        .name("wifi".into())
-        .stack_size(16 * 1024)
-        .spawn(crate::taskstats::named("wifi", move || {
+    Thread::new(c"wifi", 16 * 1024)
+        .core(Core::Core1)
+        .priority(1)
+        .spawn(move || {
             let set = |s: Status| *status.lock().unwrap_or_else(|e| e.into_inner()) = s;
             let sysloop = match EspSystemEventLoop::take() {
                 Ok(l) => l,
@@ -272,9 +262,8 @@ pub fn start(
                     }
                 }
             }
-        }))
+        })
         .expect("wifi thread");
-    let _ = previous.set();
     wifi
 }
 

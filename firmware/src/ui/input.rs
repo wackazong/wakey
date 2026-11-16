@@ -17,7 +17,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant};
 use esp_idf_svc::hal::cpu::Core;
-use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
@@ -116,25 +115,12 @@ fn reset_controller(bus: &SharedI2c, ioexp: &IoExpanders) {
 /// could otherwise hold it off while it decodes; a poll takes well under
 /// a millisecond.
 pub fn start(bus: SharedI2c, ioexp: IoExpanders) {
-    let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
-    let pinned = ThreadSpawnConfiguration {
-        name: Some(c"touch"),
-        pin_to_core: Some(Core::Core1),
-        priority: 6,
-        ..ThreadSpawnConfiguration::default()
-    };
-    if let Err(e) = pinned.set() {
-        log::warn!("touch: thread not pinned: {e}");
-    }
-    if let Err(e) = std::thread::Builder::new()
-        .name("touch".into())
-        .stack_size(6 * 1024)
-        .spawn(crate::taskstats::named("touch", move || poll(bus, ioexp)))
+    if let Err(e) = crate::runtime::Thread::new(c"touch", 6 * 1024)
+        .core(Core::Core1)
+        .priority(6)
+        .spawn(move || poll(bus, ioexp))
     {
         log::error!("touch: thread not started: {e}");
-    }
-    if let Err(e) = previous.set() {
-        log::warn!("touch: thread configuration not restored: {e}");
     }
 }
 

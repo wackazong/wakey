@@ -12,8 +12,8 @@
 //! played; it also plays a [`Sound::Stream`] (a track still downloading).
 
 use super::uac::{self, Source};
+use crate::runtime::Thread;
 use esp_idf_svc::hal::cpu::Core;
-use esp_idf_svc::hal::task::thread::{MallocCap, ThreadSpawnConfiguration};
 use std::collections::VecDeque;
 use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
@@ -180,20 +180,10 @@ impl Player {
         // above the UI task's (1). 64 KiB of stack in PSRAM: symphonia's
         // MP4 reader and AAC decoder overflowed 8 KiB (stack protection
         // fault in `MediaSourceStream::refill_buffer`).
-        let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
-        let pinned = ThreadSpawnConfiguration {
-            name: Some(c"decoder"),
-            pin_to_core: Some(Core::Core1),
-            stack_alloc_caps: MallocCap::Spiram | MallocCap::Cap8bit,
-            ..ThreadSpawnConfiguration::default()
-        };
-        if let Err(e) = pinned.set() {
-            log::warn!("player: decoder thread not pinned: {e}");
-        }
-        std::thread::Builder::new()
-            .name("decoder".into())
-            .stack_size(64 * 1024)
-            .spawn(crate::taskstats::named("decoder", move || {
+        Thread::new(c"decoder", 64 * 1024)
+            .core(Core::Core1)
+            .stack_in_psram()
+            .spawn(move || {
                 produce(&ring);
                 // Let the ring drain before reporting the end; the tail
                 // running dry is not an underrun.
@@ -203,9 +193,8 @@ impl Player {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
                 ring.playing.store(false, Ordering::Release);
-            }))
+            })
             .expect("decoder thread");
-        let _ = previous.set();
     }
 }
 

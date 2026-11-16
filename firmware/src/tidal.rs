@@ -35,6 +35,8 @@ use crate::config::{self, TidalConfig, TidalSession};
 use crate::http;
 use crate::net::Wifi;
 use crate::psram::PsramBuffer;
+use crate::runtime::Thread;
+use esp_idf_svc::hal::cpu::Core;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::io::{Read, Seek, SeekFrom};
@@ -308,27 +310,14 @@ fn scan_covers() -> Vec<String> {
 /// the JPEG decoder keeps its Huffman tables in itself (~25 KB on the
 /// stack), more than the `wifi` thread's 16 KiB (stack protection fault).
 fn decode_cover(jpeg: &[u8]) -> Result<Vec<u8>, String> {
-    use esp_idf_svc::hal::task::thread::{MallocCap, ThreadSpawnConfiguration};
-    let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
-    let cfg = ThreadSpawnConfiguration {
-        name: Some(c"cover"),
-        stack_alloc_caps: MallocCap::Spiram | MallocCap::Cap8bit,
-        ..ThreadSpawnConfiguration::default()
-    };
-    if let Err(e) = cfg.set() {
-        log::warn!("tidal: cover thread config: {e}");
-    }
-    let result = std::thread::scope(|s| {
-        std::thread::Builder::new()
-            .name("cover".into())
-            .stack_size(64 * 1024)
+    std::thread::scope(|s| {
+        Thread::new(c"cover", 64 * 1024)
+            .stack_in_psram()
             .spawn_scoped(s, || cover::decode(jpeg).map_err(|e| e.to_string()))
             .map_err(|e| format!("cover thread: {e}"))?
             .join()
             .map_err(|_| "cover: decoder panicked".to_string())?
-    });
-    let _ = previous.set();
-    result
+    })
 }
 
 /// Downloads one cover (TIDAL's JPEG, no login needed) and stores it
@@ -539,19 +528,10 @@ impl CardWriter {
         for k in 1..BLOCKS {
             let _ = to_main.send(region.as_mut_ptr() as usize + k * BLOCK);
         }
-        let previous =
-            esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::get().unwrap_or_default();
-        let _ = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration {
-            name: Some(c"card-writer"),
-            pin_to_core: Some(esp_idf_svc::hal::cpu::Core::Core1),
-            priority: 4,
-            ..Default::default()
-        }
-        .set();
-        let writer = std::thread::Builder::new()
-            .name("card-writer".into())
-            .stack_size(6144)
-            .spawn(crate::taskstats::named("card-writer", move || {
+        let writer = Thread::new(c"card-writer", 6144)
+            .core(Core::Core1)
+            .priority(4)
+            .spawn(move || {
                 let mut blocks = 0u32;
                 while let Ok(Some((addr, len))) = from_main.recv() {
                     // SAFETY: the block is this thread's until sent back.
@@ -568,8 +548,7 @@ impl CardWriter {
                     }
                 }
                 file.flush()
-            }));
-        let _ = previous.set();
+            });
         Ok(Self {
             to_writer: Some(to_writer),
             free,
