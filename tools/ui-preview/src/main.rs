@@ -645,9 +645,13 @@ fn main() {
     p.release(380.0, 176.0);
     // Back to „Datei“ (nothing here switches the tab), animation done.
     std::thread::sleep(Duration::from_millis(300));
-    // No sound files: only the note (the built-in tone is no choice).
-    sp.set_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
-    sp.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());
+    // No sound files: only AirDrop's note (the built-in tone is no choice).
+    sp.set_rows(ModelRc::new(VecModel::from(vec![sound(
+        "AirDrop bereit für neue Klänge",
+        "",
+        false,
+        SoundRowKind::AirdropNote,
+    )])));
     p.shot("3-sound-no-files");
     sp.set_tab(SoundTab::Tidal);
     sp.set_shown_tab(SoundTab::Tidal);

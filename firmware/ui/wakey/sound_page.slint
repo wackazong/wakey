@@ -4,10 +4,10 @@
 //
 // ┌ ‹ Alarm ──────────────────────────────────────────────┐
 // │ (Datei | TIDAL)           │ Lautstärke                │
-// │ Eingebauter Ton           │ ───────●──────            │
-// │ ⤮ Zufällig                │ Einblenden                │
-// │ Morgenlicht            ✓  │ (aus)(10 s)(30 s)(60 s)   │
-// │ Vogelstimmen              │ [▶ Probehören]            │
+// │ ⤮ Zufällig                │ ───────●──────            │
+// │ Morgenlicht            ✓  │ Einblenden                │
+// │ Vogelstimmen              │ (aus)(10 s)(30 s)(60 s)   │
+// │ AirDrop bereit für …      │ [▶ Probehören]            │
 // └───────────────────────────────────────────────────────┘
 
 import { Theme, Button, ButtonKind, BackButton, Icon, IconKind, Marquee, Pills, Slider } from "theme.slint";
@@ -36,7 +36,7 @@ export enum TidalView {
 
 export struct SoundRow {
     title: string,
-    // Second line (artist, "Piepen"), or empty.
+    // Second line (artist, „wechselt jeden Tag“), or empty.
     sub: string,
     selected: bool,
     kind: SoundRowKind,
@@ -60,13 +60,14 @@ export global SoundPicker {
     // Both lists, filled when the page opens.
     in property <[SoundRow]> rows;
     in property <[SoundRow]> tidal-rows;
-    // A note below the rows (no sound files; no TIDAL yet), or empty.
-    in property <string> empty;
+    // A note below the TIDAL tab's rows (why there are none), or empty.
+    // The Files tab's list ends with AirDrop's note, a row.
     in property <string> tidal-empty;
     // Scroll positions of both lists (content y at the top), set by the
     // list layer when a scroll ends; it shows the list while it moves.
     in property <length> files-scroll;
     in property <length> tidal-scroll;
+    // The list layer moves the list (the page does not draw it then).
     in property <bool> layer-active;
     // The scrolling texts' clock (ms, wraps hourly): advanced every 25 ms
     // while the page draws the list (`SoundPage`), paused while the list
@@ -316,8 +317,6 @@ component SoundList inherits Rectangle {
     in property <string> empty;
     in property <SoundTab> tab;
     in property <length> scroll;
-    // The list layer shows the list (it moves): no scrolling text.
-    in property <bool> layer-active;
     callback select(int);
     // Below the rows, in the space left.
     if root.empty != "": Text {
@@ -410,10 +409,8 @@ export component SoundPage inherits Rectangle {
         SoundList {
             visible: SoundPicker.shown-tab == SoundTab.files;
             rows: SoundPicker.rows;
-            empty: SoundPicker.empty;
             tab: SoundTab.files;
             scroll: SoundPicker.files-scroll;
-            layer-active: SoundPicker.layer-active;
             select(i) => { SoundPicker.select(i); }
         }
         SoundList {
@@ -422,7 +419,6 @@ export component SoundPage inherits Rectangle {
             empty: SoundPicker.tidal-empty;
             tab: SoundTab.tidal;
             scroll: SoundPicker.tidal-scroll;
-            layer-active: SoundPicker.layer-active;
             select(i) => { SoundPicker.select(i); }
         }
         // The login: QR code of the link, and the code.

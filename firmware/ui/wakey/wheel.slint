@@ -31,7 +31,6 @@ export component Wheel inherits Rectangle {
     property <bool> dragging;
     property <bool> moving;
     property <float> press-pos;
-    property <length> last-y;
     property <duration> last-t;
     // The row in the middle right now.
     property <int> current: root.wrap(Math.round(root.pos));
@@ -73,7 +72,6 @@ export component Wheel inherits Rectangle {
                 root.moving = false;
                 root.press-pos = root.pos;
                 root.vel = 0;
-                root.last-y = self.mouse-y;
                 root.last-t = animation-tick();
             } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
                 root.dragging = false;
