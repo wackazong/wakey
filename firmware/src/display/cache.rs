@@ -16,27 +16,41 @@ unsafe extern "C" {
 }
 
 /// Writes CPU-written pixels back to PSRAM, so DMA engines see them.
-pub fn writeback(buf: *mut u16, pixels: usize) {
-    unsafe {
+///
+/// # Safety
+///
+/// `buf` must point to `pixels` pixels of one allocation in PSRAM.
+pub unsafe fn writeback(buf: *mut u16, pixels: usize) {
+    // SAFETY: the caller's range; a write-back changes no memory contents.
+    let err = unsafe {
         esp_cache_msync(
             buf.cast(),
             pixels * 2,
             ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED,
-        );
-    }
+        )
+    };
+    debug_assert_eq!(err, sys::ESP_OK, "cache write-back");
 }
 
 /// Drops cached copies of `pixels` pixels at `buf` (widened to whole cache
-/// lines), so CPU reads see what a DMA engine wrote. Cached CPU writes in
-/// those lines are lost.
-pub fn invalidate(buf: *mut u16, pixels: usize) {
+/// lines), so CPU reads see what a DMA engine wrote.
+///
+/// # Safety
+///
+/// `buf` must point to `pixels` pixels in PSRAM, and the cache lines
+/// around them must hold no CPU writes that are still needed: they are
+/// dropped too.
+pub unsafe fn invalidate(buf: *mut u16, pixels: usize) {
     let first = buf as usize & !(LINE - 1);
     let last = buf as usize + pixels * 2;
-    unsafe {
+    // SAFETY: whole cache lines around the caller's range, whose dirty
+    // contents the caller gives up.
+    let err = unsafe {
         esp_cache_msync(
             first as *mut c_void,
             (last - first).next_multiple_of(LINE),
             ESP_CACHE_MSYNC_FLAG_DIR_M2C,
-        );
-    }
+        )
+    };
+    debug_assert_eq!(err, sys::ESP_OK, "cache invalidation");
 }

@@ -6,7 +6,7 @@
 //! PPA's rate. No pixel processing, no cache maintenance: use it only for
 //! memory the CPU does not write (layers filled by the PPA, frame buffers).
 
-use super::{HEIGHT, WIDTH};
+use super::{HEIGHT, WIDTH, cache};
 use crate::psram::PsramBuffer;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -68,6 +68,22 @@ impl Picture {
             buf,
             w: WIDTH,
             h: HEIGHT,
+        }
+    }
+
+    /// Fills the picture with `colour` by the CPU, written back for the DMA
+    /// engines.
+    ///
+    /// # Safety
+    ///
+    /// `buf` must hold `w × h` pixels in PSRAM that no DMA engine uses
+    /// meanwhile.
+    pub unsafe fn fill(self, colour: u16) {
+        let n = self.w * self.h;
+        // SAFETY: the caller's pixels, not shared with a DMA engine now.
+        unsafe {
+            core::slice::from_raw_parts_mut(self.buf, n).fill(colour);
+            cache::writeback(self.buf, n);
         }
     }
 }

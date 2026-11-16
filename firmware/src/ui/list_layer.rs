@@ -547,9 +547,9 @@ impl<S: ListSource> ListLayer<S> {
     fn refresh_blank(&mut self) {
         if crate::ui::dim::changed_since(&mut self.blank_epoch) {
             let colour = crate::ui::dim::scale(self.background);
-            let n = self.blank.w * self.blank.h;
-            unsafe { core::slice::from_raw_parts_mut(self.blank.buf, n) }.fill(colour);
-            cache::writeback(self.blank.buf, n);
+            // SAFETY: the layer's picture; its copies have finished (`finish`
+            // waits for them), the next start after this.
+            unsafe { self.blank.fill(colour) };
         }
     }
 
@@ -667,16 +667,22 @@ impl<S: ListSource> ListLayer<S> {
         let bg = crate::ui::dim::scale(outside);
         for (start, weights) in &self.caps {
             let n = weights.len();
-            // SAFETY: the runs lie inside the frame buffer (`caps`).
-            let px = unsafe { fb.add(*start) };
-            cache::invalidate(px, n);
-            let run = unsafe { core::slice::from_raw_parts_mut(px, n) };
+            // SAFETY: the runs lie inside the frame buffer (`caps`), whose
+            // copies have arrived and which no DMA writes until the next
+            // frame. The CPU writes it only here and writes each run back
+            // at once, so the invalidated lines hold no other CPU writes.
+            let run = unsafe {
+                let px = fb.add(*start);
+                cache::invalidate(px, n);
+                core::slice::from_raw_parts_mut(px, n)
+            };
             for (p, &a) in run.iter_mut().zip(weights) {
                 if a > 0 {
                     *p = blend565(*p, bg, a);
                 }
             }
-            cache::writeback(px, n);
+            // SAFETY: the same run.
+            unsafe { cache::writeback(run.as_mut_ptr(), n) };
         }
     }
 

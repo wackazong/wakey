@@ -26,7 +26,6 @@
 
 use super::input;
 use super::platform::PpaLines;
-use crate::display::cache;
 use crate::display::dma2d::{Blit, FbCopy, OwnedPicture, Picture};
 use crate::display::ppa::{PpaRotator, Target};
 use crate::display::{Display, HEIGHT, WIDTH};
@@ -207,11 +206,9 @@ impl Transitions {
         if self.blank_colour == Some(colour) {
             return;
         }
-        for p in [self.blank.picture(), self.blank_v.picture()] {
-            let px = p.w * p.h;
-            // SAFETY: the picture holds `px` pixels; no DMA uses it now.
-            unsafe { core::slice::from_raw_parts_mut(p.buf, px) }.fill(colour);
-            cache::writeback(p.buf, px);
+        for p in [&self.blank, &self.blank_v] {
+            // SAFETY: an owned picture; no slide (no DMA) runs now.
+            unsafe { p.picture().fill(colour) };
         }
         self.blank_colour = Some(colour);
     }
