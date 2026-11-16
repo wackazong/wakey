@@ -71,9 +71,6 @@ debug-overlay = []
 sleep-cycle-test = []
 # Logs CPU time per task every 5 s (`taskstats`).
 task-stats = []
-# USB-A switched on and off at random 50–3000 ms intervals (the USB host's
-# handling of power changes during enumeration; `app::power`).
-usb-cycle-test = []
 
 [profile.release]
 opt-level = 3
