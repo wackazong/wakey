@@ -326,8 +326,9 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
         let mut choices = Vec::new();
         // No note below the rows: AirDrop's ends the list (`airdrop_rows`).
         picker.set_empty("".into());
-        if !files.is_empty() {
-            // Without files "Zufällig" would only play the built-in tone.
+        // Only with a choice: with one file it is that file, without any
+        // only the built-in tone. Kept while an alarm being edited has it.
+        if files.len() > 1 || (files.len() == 1 && selected == Sound::RandomFile) {
             choices.push((
                 row("Zufällig", "wechselt jeden Tag", &Sound::RandomFile, 1),
                 Sound::RandomFile,
@@ -343,7 +344,7 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
         // login or the state shown by `show_state`.
         let tracks = ctx.tidal.listed();
         let mut choices = Vec::new();
-        if !tracks.is_empty() {
+        if tracks.len() > 1 || (tracks.len() == 1 && selected == Sound::TidalRandom) {
             choices.push((
                 row("Zufällig", "wechselt jeden Tag", &Sound::TidalRandom, 1),
                 Sound::TidalRandom,
