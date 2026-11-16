@@ -28,8 +28,6 @@ pub mod config;
 pub mod display;
 pub mod http;
 pub mod net;
-#[cfg(feature = "download-bench")]
-pub mod netbench;
 pub mod profiler;
 pub mod runtime;
 pub mod sounds;

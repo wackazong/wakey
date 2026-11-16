@@ -71,13 +71,6 @@ debug-overlay = []
 sleep-cycle-test = []
 # Logs CPU time per task every 5 s (`taskstats`).
 task-stats = []
-# Samples core 0 (Wi-Fi, TLS) during the first TIDAL download (with
-# download-bench: its second round) and logs the hottest addresses and the
-# callers of time with interrupts off (`profiler`; scripts/profile.sh).
-profile-download = []
-# After boot, downloads the TIDAL playlist's first track twice to a
-# scratch file and once without writing it; logs speeds and the link.
-download-bench = []
 # USB-A switched on and off at random 50–3000 ms intervals (the USB host's
 # handling of power changes during enumeration; `app::power`).
 usb-cycle-test = []

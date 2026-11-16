@@ -171,7 +171,7 @@ pub fn start(
     // writer (4), so neither starves: a download takes about half a core.
     // On core 0 it shared the UI's priority there and made animations
     // stutter (a list row's repaint went from ~20 to ~40 ms). Core 1 is
-    // mostly idle; a download there is as fast (`netbench`).
+    // mostly idle; a download there is as fast.
     let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
     let pinned = ThreadSpawnConfiguration {
         name: Some(c"wifi"),
@@ -578,16 +578,9 @@ fn log_c6_version() {
 }
 
 /// 802.11b/g/n, not ax: with 802.11ax (HE20) downloads through the C6
-/// were ~25 % slower (1160 against 1553 KiB/s, same router and place).
-/// Feature `download-bench` with `WAKEY_BENCH_WIFI=ax` at build time keeps
-/// ax for comparison.
+/// were ~25 % slower.
 fn wifi_mode() {
     use esp_idf_svc::sys;
-    #[cfg(feature = "download-bench")]
-    if option_env!("WAKEY_BENCH_WIFI") == Some("ax") {
-        log::warn!("wifi: bench: 802.11ax left on");
-        return;
-    }
     let bgn = (sys::WIFI_PROTOCOL_11B | sys::WIFI_PROTOCOL_11G | sys::WIFI_PROTOCOL_11N) as u8;
     // SAFETY: a plain driver call after `start`, before `connect`.
     let err = unsafe { sys::esp_wifi_set_protocol(sys::wifi_interface_t_WIFI_IF_STA, bgn) };
