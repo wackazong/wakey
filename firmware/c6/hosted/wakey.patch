@@ -1,3 +1,5 @@
+Wakey's modification of esp_hosted 2.13.1 (Apache-2.0): version suffix and wakey_switch.c.
+
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 673a75e..6811ce7 100644
 --- a/CMakeLists.txt
@@ -7,7 +9,7 @@ index 673a75e..6811ce7 100644
      set(PROJECT_VERSION_PATCH_1 "${CMAKE_MATCH_3}")
      # Set PROJECT_VER before project() call to override git versioning
 -    set(PROJECT_VER "${PROJECT_VERSION_MAJOR_1}.${PROJECT_VERSION_MINOR_1}.${PROJECT_VERSION_PATCH_1}")
-+    set(PROJECT_VER "${PROJECT_VERSION_MAJOR_1}.${PROJECT_VERSION_MINOR_1}.${PROJECT_VERSION_PATCH_1}-wakey1")
++    set(PROJECT_VER "${PROJECT_VERSION_MAJOR_1}.${PROJECT_VERSION_MINOR_1}.${PROJECT_VERSION_PATCH_1}-wakey2")
      message(STATUS "Setting PROJECT_VER to: ${PROJECT_VER}")
  endif()
  
