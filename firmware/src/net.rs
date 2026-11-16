@@ -465,7 +465,11 @@ impl Station {
             ip,
             rssi: wifi.wifi().driver().get_rssi().ok(),
         });
-        // The job first: the clock (from the RTC) is good enough for TLS.
+        // SNTP first: lwIP syncs in the background while the job runs, so a
+        // long job (an open TIDAL tab) does not hold the clock back. The
+        // clock from the RTC is good enough for TLS meanwhile.
+        let sntp = EspSntp::new_default();
+        let t = Instant::now();
         job.run(Ok(()));
         // Jobs that come in meanwhile; not once AirDrop is wanted (they wait
         // for the session after it).
@@ -477,8 +481,7 @@ impl Station {
             }
         };
         run_more();
-        let sntp = EspSntp::new_default()?;
-        let t = Instant::now();
+        let sntp = sntp?;
         let synced = loop {
             run_more();
             if crate::airdrop::wanted() {
