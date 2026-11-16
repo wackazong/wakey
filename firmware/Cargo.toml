@@ -74,9 +74,7 @@ task-stats = []
 # USB-A switched on and off at random 50–3000 ms intervals (the USB host's
 # handling of power changes during enumeration; `app::power`).
 usb-cycle-test = []
-# At start: Wi-Fi sessions in growing stages (driver; connect; one HTTPS
-# request), five each, logging the free heap after each (`net::leak_test`).
-wifi-leak-test = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"
