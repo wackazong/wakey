@@ -358,7 +358,9 @@ impl<S: ListSource> ListLayer<S> {
         let (layer, blank, swipe_pics) = match shared {
             Some(b) => {
                 assert!(
-                    ring_px <= b.ring.1 && blank_px <= b.blank.1 && (!layout.swipe || swipe_px <= b.swipe.1),
+                    ring_px <= b.ring.1
+                        && blank_px <= b.blank.1
+                        && (!layout.swipe || swipe_px <= b.swipe.1),
                     "shared list layer buffers too small"
                 );
                 log::info!("list layer: ring of {slots} rows ({w}×{width} px), shared");
@@ -389,7 +391,8 @@ impl<S: ListSource> ListLayer<S> {
         };
         if shared.is_none() {
             // Filled once by the CPU, then written back for the DMA.
-            unsafe { core::slice::from_raw_parts_mut(blank.buf, blank.w * blank.h) }.fill(background);
+            unsafe { core::slice::from_raw_parts_mut(blank.buf, blank.w * blank.h) }
+                .fill(background);
             cache::writeback(blank.buf, blank.w * blank.h);
         }
         Self {
@@ -682,7 +685,9 @@ impl<S: ListSource> ListLayer<S> {
     /// Blends the corner caps into the frame buffer `fb` (after the copies
     /// arrived).
     fn apply_caps(&self, fb: *mut u16) {
-        let Some((_, outside)) = self.layout.corners else { return };
+        let Some((_, outside)) = self.layout.corners else {
+            return;
+        };
         let bg = crate::ui::dim::scale(outside);
         for (start, weights) in &self.caps {
             let n = weights.len();
@@ -1170,7 +1175,11 @@ pub struct SharedLayers<A: ListSource, B: ListSource> {
 
 impl<A: ListSource, B: ListSource> SharedLayers<A, B> {
     pub fn new(a: ListLayer<A>, b: ListLayer<B>) -> Self {
-        Self { a, b, b_owns: false }
+        Self {
+            a,
+            b,
+            b_owns: false,
+        }
     }
 
     /// Hands the buffers to the layer shown (else `a`).
@@ -1187,7 +1196,11 @@ impl<A: ListSource, B: ListSource> SharedLayers<A, B> {
     }
 
     fn owner(&mut self) -> &mut dyn FrameHook {
-        if self.b_owns { &mut self.b } else { &mut self.a }
+        if self.b_owns {
+            &mut self.b
+        } else {
+            &mut self.a
+        }
     }
 }
 

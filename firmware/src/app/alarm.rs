@@ -10,9 +10,9 @@
 use crate::audio::output::Output;
 use crate::audio::player::{Player, Sound as PlayerSound};
 use crate::{clock, config, sounds};
+use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use wakey_core::alarm::{self, AlarmConfig, Alarms, Input, Phase, RingConfig, State};
 use wakey_core::datetime::DateTime;
 use wakey_core::tone;
@@ -156,14 +156,20 @@ impl AlarmClock {
             return;
         }
         self.cancel_stream();
-        let sound = match (sounds::resolve(&cfg.sound, cfg.id, clock::now().date()), &cfg.sound) {
+        let sound = match (
+            sounds::resolve(&cfg.sound, cfg.id, clock::now().date()),
+            &cfg.sound,
+        ) {
             (Some(path), _) => Some(PlayerSound::File(path)),
             (None, alarm::Sound::Beep) => Some(PlayerSound::Tone),
             (None, alarm::Sound::TidalTrack(id)) => id.parse().ok().and_then(|id| {
                 let cancel = Arc::new(AtomicBool::new(false));
                 let stream = tidal.stream(id, cancel.clone())?;
                 self.stream_cancel = Some(cancel);
-                Some(PlayerSound::Stream(format!("TIDAL {id} (downloading)"), Box::new(stream)))
+                Some(PlayerSound::Stream(
+                    format!("TIDAL {id} (downloading)"),
+                    Box::new(stream),
+                ))
             }),
             (None, _) => None,
         };

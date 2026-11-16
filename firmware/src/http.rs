@@ -122,7 +122,10 @@ pub fn send(req: &Request) -> anyhow::Result<(u16, Vec<u8>)> {
             }
             // The server closed the kept connection meanwhile.
             Err(e) if kept && !retried => {
-                log::info!("http: {}: kept connection gone ({e}), new one", host(&req.url));
+                log::info!(
+                    "http: {}: kept connection gone ({e}), new one",
+                    host(&req.url)
+                );
                 retried = true;
             }
             Err(e) => return Err(e),
@@ -135,7 +138,8 @@ pub fn send(req: &Request) -> anyhow::Result<(u16, Vec<u8>)> {
 fn exchange(conn: &mut EspHttpConnection, req: &Request) -> anyhow::Result<(u16, Vec<u8>, u128)> {
     let t = Instant::now();
     let len = req.body.as_ref().map(|b| b.len().to_string());
-    let mut headers: Vec<(&str, &str)> = req.headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let mut headers: Vec<(&str, &str)> =
+        req.headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
     if let Some(len) = &len {
         headers.push(("Content-Length", len));
     }
@@ -148,7 +152,9 @@ fn exchange(conn: &mut EspHttpConnection, req: &Request) -> anyhow::Result<(u16,
     if let Some(body) = &req.body {
         let mut rest = body.as_bytes();
         while !rest.is_empty() {
-            let n = conn.write(rest).map_err(|e| anyhow::anyhow!("HTTPS send: {e}"))?;
+            let n = conn
+                .write(rest)
+                .map_err(|e| anyhow::anyhow!("HTTPS send: {e}"))?;
             anyhow::ensure!(n > 0, "HTTPS send: connection closed");
             rest = &rest[n..];
         }
@@ -160,7 +166,9 @@ fn exchange(conn: &mut EspHttpConnection, req: &Request) -> anyhow::Result<(u16,
     let mut body = Vec::new();
     let mut buf = [0u8; 2048];
     loop {
-        let n = conn.read(&mut buf).map_err(|e| anyhow::anyhow!("HTTPS read: {e}"))?;
+        let n = conn
+            .read(&mut buf)
+            .map_err(|e| anyhow::anyhow!("HTTPS read: {e}"))?;
         if n == 0 {
             break;
         }
@@ -245,7 +253,9 @@ fn fetch(
     let mut buf = vec![0u8; 16 * 1024];
     let mut total = 0u64;
     loop {
-        let n = conn.read(&mut buf).map_err(|e| anyhow::anyhow!("download read: {e}"))?;
+        let n = conn
+            .read(&mut buf)
+            .map_err(|e| anyhow::anyhow!("download read: {e}"))?;
         if n == 0 {
             break;
         }
