@@ -72,7 +72,6 @@ src/
 ├─ tidal.rs            TIDAL login, playlist sync, downloads, covers
 ├─ airdrop.rs          C6 as AirDrop receiver: switching, installing, receiving files
 ├─ c6_ota.rs           esp_hosted's OTA to the C6 (used by airdrop.rs)
-├─ c6_update.rs        feature c6-update: the stock esp_hosted image to the C6
 ├─ ambient.rs          camera as light meter, backlight
 ├─ clock.rs            system time from the RTC, local time, RTC sync
 ├─ config.rs           config.json from the SD card

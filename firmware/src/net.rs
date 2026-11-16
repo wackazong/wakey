@@ -523,10 +523,7 @@ fn session(
         sysloop.clone(),
     )?;
     log::info!("wifi: driver up after {} ms", t.elapsed().as_millis());
-    if let Some(_version) = log_c6_version() {
-        #[cfg(feature = "c6-update")]
-        crate::c6_update::run(_version);
-    }
+    log_c6_version();
     // Once per boot: is the C6 set up for AirDrop (installed after the
     // session if not).
     crate::airdrop::check();
@@ -543,17 +540,17 @@ fn session(
 /// The C6 firmware this firmware expects: esp_hosted slave, the version of
 /// the host component (`Cargo.toml`) and of the image in `firmware/c6/`.
 /// The factory firmware (M5Stack's 1.4.1) works, but with warnings at start
-/// and a known RX stall; feature `c6-update` installs this one.
+/// and a known RX stall; the AirDrop setup (`airdrop::setup`) replaces it
+/// with ours (this version plus Wakey's addition) after the first session.
 pub const C6_FIRMWARE: [u32; 3] = [2, 13, 1];
 
 /// Logs the C6 firmware's version once per boot (`GetCoprocessorFwVersion`
 /// RPC, slave ≥ 1.0.0; the startup event of the factory firmware carries
-/// none and shows as 0.0.0) and warns if it is not [`C6_FIRMWARE`]. Returns
-/// it (major, minor, patch) the first time.
-fn log_c6_version() -> Option<[u32; 3]> {
+/// none and shows as 0.0.0) and warns if it is not [`C6_FIRMWARE`].
+fn log_c6_version() {
     static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        return None;
+        return;
     }
     let mut v = esp_idf_svc::sys::esp_hosted_coprocessor_fwver_t::default();
     // SAFETY: `v` is a plain out-parameter, valid for the call.
@@ -571,14 +568,12 @@ fn log_c6_version() -> Option<[u32; 3]> {
         let version = [v.major1, v.minor1, v.patch1];
         if version != C6_FIRMWARE {
             log::warn!(
-                "wifi: the C6 runs {version:?}, expected {C6_FIRMWARE:?}: update it \
-                 (feature c6-update, firmware/c6/README.md)"
+                "wifi: the C6 runs {version:?}, expected {C6_FIRMWARE:?}: the AirDrop \
+                 setup installs it after this session (firmware/c6/README.md)"
             );
         }
-        Some(version)
     } else {
         log::warn!("wifi: C6 firmware version not available: {err}");
-        None
     }
 }
 

@@ -23,8 +23,6 @@ pub mod app;
 pub mod audio;
 pub mod board;
 pub mod c6_ota;
-#[cfg(feature = "c6-update")]
-pub mod c6_update;
 pub mod clock;
 pub mod config;
 pub mod display;

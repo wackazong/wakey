@@ -1,21 +1,14 @@
 # ESP32-C6 firmware
 
-`esp_hosted_slave-2.13.1-esp32c6.bin`: Espressif's esp_hosted co-processor firmware ("slave", `network_adapter`) 2.13.1 for the Tab5's ESP32-C6, SDIO, streaming mode, DIO flash. The same version as the host component in `Cargo.toml` (`espressif/esp_hosted` 2.13.1). Built 2026-11-13 from the component's `slave` project with ESP-IDF 5.5.5 and its defaults for the C6. SHA-256 `9ec988fa729eff62d09571a62464d1d3423b277eabf9779a5644b9168d1e7bea`.
+`esp_hosted_slave-2.13.1-esp32c6.bin`: Espressif's stock esp_hosted co-processor firmware ("slave", `network_adapter`) 2.13.1 for the Tab5's ESP32-C6, SDIO, streaming mode, DIO flash. The same version as the host component in `Cargo.toml` (`espressif/esp_hosted` 2.13.1). Built 2026-11-13 from the component's `slave` project with ESP-IDF 5.5.5 and its defaults for the C6. Used by [`rescue/`](airdrop/README.md#recovery), which writes it over SDIO through the C6's ROM loader; the clock itself installs Wakey's variant (below). SHA-256 `9ec988fa729eff62d09571a62464d1d3423b277eabf9779a5644b9168d1e7bea`.
 
 The Tab5 ships with M5Stack's slave 1.4.1. It works with the host, but logs warnings at start, has a known RX stall (m5stack/M5Tab5-UserDemo#20) and reports no version at start.
 
 ## Updating a Tab5's C6
 
-The firmware checks the C6's version at the first Wi-Fi session after boot and warns in the log if it is not the expected one (`net::C6_FIRMWARE`): `wifi: the C6 runs [1, 4, 1], expected [2, 13, 1]: update it`.
+Nothing to do: after the first Wi-Fi session of a boot the firmware installs its own esp_hosted (2.13.1-wakey1, below) and the AirDrop receiver if the C6 lacks them, in the background (~35 s), also over the factory 1.4.1 (tested 2026-11-15). The log says `airdrop: the C6 is set up for AirDrop`.
 
-No cable: the P4 sends the image over SDIO (esp_hosted's slave OTA, `src/c6_update.rs`).
-
-1. Flash a build with the feature: `cargo run --release --features c6-update` (or `espflash flash --monitor` on the built ELF). A `config.json` with Wi-Fi is not needed; the update runs in the first Wi-Fi session after the driver is up.
-2. The log shows `c6-update: C6 runs [1, 4, 1], image [2, 13, 1] … updating`, the percentage (~12 s), `end ok`, a 5 s timeout of `activate` (slaves before 2.6 do not know it; harmless), SDIO errors as the C6 restarts, then the P4 restarts.
-3. After the restart: `wifi: C6 firmware 2.13.1` and `c6-update: … nothing to do`; the "Version mismatch" and "transport size" warnings are gone.
-4. Flash the normal firmware again (without the feature).
-
-If the C6 runs the image's version already, the feature does nothing. A failure before `end ok` leaves the old firmware. The C6 has no rollback: if it does not answer after an update, reflash it by cable through header J1 "C6_ISP" (`docs/hardware.md`): 3.3 V USB-UART adapter, IO9 to GND during reset, then `esptool --chip esp32c6 write_flash 0x10000 <image>` (or M5Stack's factory image through M5Burner). Without an adapter: bridge only G9 to GND there and let the P4 reflash the C6 over SDIO with [`rescue/`](airdrop/README.md#recovery) (used once, 2026-11-13).
+A failed install leaves the C6 on its old firmware. The C6 has no rollback: if it does not answer after an update, reflash it by cable through header J1 "C6_ISP" (`docs/hardware.md`): 3.3 V USB-UART adapter, IO9 to GND during reset, then `esptool --chip esp32c6 write_flash 0x10000 <image>` (or M5Stack's factory image through M5Burner). Without an adapter: bridge only G9 to GND there and let the P4 reflash the C6 over SDIO with [`rescue/`](airdrop/README.md#recovery) (used once, 2026-11-13).
 
 ## Building the image
 
@@ -30,7 +23,7 @@ python $IDF_PATH/tools/idf.py set-target esp32c6
 python $IDF_PATH/tools/idf.py build    # build/network_adapter.bin
 ```
 
-Keep DIO flash mode (the default): QIO images of slaves 2.1–2.8 refuse later OTAs. When the host component is updated, build the matching image, replace the file here, the name in `src/c6_update.rs` and `net::C6_FIRMWARE`; `c6-update` refuses an image whose version differs from `net::C6_FIRMWARE`. A test image with another version (e.g. esp_hosted's RawTP test) needs `C6_FIRMWARE` changed for that build.
+Keep DIO flash mode (the default): QIO images of slaves 2.1–2.8 refuse later OTAs. When the host component is updated, build the matching images (this one and Wakey's, `hosted/build.sh`), replace the files here, their names in `rescue/` and `pack.py`, and `net::C6_FIRMWARE`.
 
 ## AirDrop: the C6's other two images
 

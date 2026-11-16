@@ -1,6 +1,6 @@
 //! An app image into the C6's other slot over esp_hosted's slave OTA
-//! (begin, write in chunks, end; activation is the caller's). Used by the
-//! esp_hosted update (`c6_update`) and by AirDrop (`airdrop`), during a
+//! (begin, write in chunks, end; activation is the caller's). Used by
+//! AirDrop (`airdrop`) for Wakey's esp_hosted and the receiver, during a
 //! session with esp_hosted's transport up.
 
 use esp_idf_svc::sys;
