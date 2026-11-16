@@ -422,51 +422,14 @@ impl Display {
         self.variant
     }
 
-    /// Spike support (`bin/chip_sleep`): streams the DSI host's own colour
-    /// bars instead of the frame buffer (`true`; no PSRAM reads), or the
-    /// frame buffer again (`false`).
-    pub fn set_test_pattern(&mut self, on: bool) -> Result<(), EspError> {
-        let pattern = if on {
-            sys::mipi_dsi_pattern_type_t_MIPI_DSI_PATTERN_BAR_HORIZONTAL
-        } else {
-            sys::mipi_dsi_pattern_type_t_MIPI_DSI_PATTERN_NONE
-        };
-        esp!(unsafe { sys::esp_lcd_dpi_panel_set_pattern(self.panel, pattern) })
-    }
-
-    /// Spike support (`bin/chip_sleep`): panel display off and sleep in
-    /// (`true`), or sleep out and display on (`false`). The video stream
-    /// keeps running.
-    pub fn set_panel_sleep(&self, sleep: bool) -> Result<(), EspError> {
-        if sleep {
-            self.tx(0x28, &[])?;
-            FreeRtos::delay_ms(20);
-            self.tx(0x10, &[])?;
-        } else {
-            self.tx(0x11, &[])?;
-            FreeRtos::delay_ms(120);
-            self.tx(0x29, &[])?;
-        }
-        FreeRtos::delay_ms(120);
-        Ok(())
-    }
-
-    /// Spike support (`bin/chip_sleep`): the panel's software reset and
-    /// vendor init again (ends with sleep out and display on), with the
-    /// video stream running.
-    pub fn reinit_panel(&self) -> Result<(), EspError> {
-        self.init_panel()
-    }
-
-    /// Spike support (`bin/chip_sleep`): takes the whole display link down
-    /// (stream, command interface, DSI bus and PHY; the PHY's LDO stays
-    /// on). Light sleep stops the PHY's clock: after it, commands stay in
-    /// the DSI command FIFO forever. [`link_up`] rebuilds it as at boot.
+    /// Takes the whole display link down: stream, command interface, DSI
+    /// bus and PHY (the PHY's LDO stays on). [`link_up`] rebuilds it as at
+    /// boot.
     ///
     /// [`link_up`]: Self::link_up
-    pub fn link_down(&mut self) -> Result<(), EspError> {
+    fn link_down(&mut self) -> Result<(), EspError> {
         if !self.panel.is_null() {
-            self.suspend_stream()?;
+            self.stop_stream()?;
         }
         unsafe {
             esp!(sys::esp_lcd_panel_io_del(self.io))?;
@@ -477,20 +440,17 @@ impl Display {
         Ok(())
     }
 
-    /// Spike support: DSI bus, panel init (software reset, vendor init,
-    /// sleep out, display on) and a new stream, as at boot.
-    pub fn link_up(&mut self) -> Result<(), EspError> {
+    /// DSI bus, panel init (software reset, vendor init, sleep out, display
+    /// on) and a new stream, as at boot.
+    fn link_up(&mut self) -> Result<(), EspError> {
         self.open_link()?;
         self.init_panel()?;
         self.start_stream()
     }
 
-    /// Spike support (`bin/chip_sleep`): stops the video stream (deletes
-    /// the DPI panel and its frame buffers); [`resume_stream`] starts a new
-    /// one. The DSI link and the panel stay powered.
-    ///
-    /// [`resume_stream`]: Self::resume_stream
-    pub fn suspend_stream(&mut self) -> Result<(), EspError> {
+    /// Stops the video stream: deletes the DPI panel (the frame buffers are
+    /// kept, `FB_POOL`). The DSI link and the panel stay powered.
+    fn stop_stream(&mut self) -> Result<(), EspError> {
         self.stop_stream_dma();
         esp!(unsafe { sys::esp_lcd_panel_del(self.panel) })?;
         self.panel = ptr::null_mut();
@@ -537,14 +497,6 @@ impl Display {
         }
     }
 
-    /// Spike support: a new video stream after [`suspend_stream`] (new frame
-    /// buffers, contents undefined).
-    ///
-    /// [`suspend_stream`]: Self::suspend_stream
-    pub fn resume_stream(&mut self) -> Result<(), EspError> {
-        self.start_stream()
-    }
-
     /// Pixel clock `mhz` (80 MHz = 66 Hz refresh on the ST7123), or the
     /// panel's own with `None`; used while the display sleeps. The frame
     /// buffers are new afterwards (contents undefined).
@@ -555,14 +507,6 @@ impl Display {
         self.link_down()?;
         self.pixel_clock_mhz = mhz;
         self.link_up()
-    }
-
-    /// Spike support (`bin/chip_sleep`): DCS "get power mode" (0x0A):
-    /// bit 4 sleep out, bit 2 display on.
-    pub fn power_mode(&self) -> Result<u8, EspError> {
-        let mut v = [0u8];
-        self.rx(0x0A, &mut v)?;
-        Ok(v[0])
     }
 
     /// Frames the panel has scanned out since boot (wrapping counter).

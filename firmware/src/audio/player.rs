@@ -5,10 +5,9 @@
 //! through [`Player::source`]. When the ring runs empty the stream
 //! plays silence and counts an underrun.
 //!
-//! [`Player::play`] plays a file once (tests); [`Player::ring`] is the
-//! alarm: a file in a loop, or the built-in [`Beeper`] tone if there is no
-//! file or it cannot be read, with a volume and a fade-in applied in
-//! [`Player::source`]. [`Player::preview`] is the sound page's preview:
+//! [`Player::ring`] is the alarm: a file in a loop, or the built-in
+//! [`Beeper`] tone if there is no file or it cannot be read, with a volume
+//! and a fade-in applied in [`Player::source`]. [`Player::preview`] is the sound page's preview:
 //! the same, but silent instead of the tone when the sound cannot be
 //! played; it also plays a [`Sound::Stream`] (a track still downloading).
 
@@ -39,7 +38,7 @@ struct Ring {
     /// Output gain (f32 bits) and fade-in length in frames.
     gain: AtomicU32,
     fade_frames: AtomicU32,
-    /// Set by `play`/`ring`: the source restarts the fade.
+    /// Set when a sound starts: the source restarts the fade.
     restart_fade: AtomicBool,
 }
 
@@ -125,16 +124,6 @@ impl Player {
     pub fn stop(&self) {
         self.ring.stop.store(true, Ordering::Release);
         self.ring.space.notify_all();
-    }
-
-    /// Plays `path` once at full gain on a decoder thread; returns at once.
-    pub fn play(&self, path: impl Into<PathBuf>) {
-        let path = path.into();
-        self.start(1.0, 0, move |ring| {
-            if let Err(e) = decode(&path, ring, false) {
-                log::error!("player: {}: {e}", path.display());
-            }
-        });
     }
 
     /// Plays `sound` until [`stop`](Self::stop), at `gain` (linear) after a
@@ -225,20 +214,19 @@ fn play_sound(sound: Sound, ring: &Ring) -> Result<(), String> {
             beep(ring);
             Ok(())
         }
-        Sound::File(path) => decode(&path, ring, true).map_err(|e| format!("{}: {e}", path.display())),
+        Sound::File(path) => decode(&path, ring).map_err(|e| format!("{}: {e}", path.display())),
         Sound::Stream(name, reader) => {
             AudioFile::from_reader(BufReader::with_capacity(32 * 1024, reader))
-                .and_then(|file| decode_from(&name, file, ring, true))
+                .and_then(|file| decode_from(&name, file, ring))
                 .map_err(|e| format!("{name}: {e}"))
         }
     }
 }
 
-/// Decodes `path` into the ring, from the start again at its end if
-/// `repeat`.
-fn decode(path: &std::path::Path, ring: &Ring, repeat: bool) -> std::io::Result<()> {
+/// Decodes `path` into the ring, from the start again at its end.
+fn decode(path: &std::path::Path, ring: &Ring) -> std::io::Result<()> {
     let file = AudioFile::open(path)?;
-    decode_from(&path.display().to_string(), file, ring, repeat)
+    decode_from(&path.display().to_string(), file, ring)
 }
 
 /// [`decode`] from an opened file (`name` for the log).
@@ -246,7 +234,6 @@ fn decode_from<R: Read + Seek + Send + 'static>(
     name: &str,
     mut file: AudioFile<R>,
     ring: &Ring,
-    repeat: bool,
 ) -> std::io::Result<()> {
     let f = file.format.clone();
     log::info!(
@@ -279,7 +266,7 @@ fn decode_from<R: Read + Seek + Send + 'static>(
         }
         let frames = file.read(&mut input)?;
         if frames == 0 {
-            if repeat && f.frames > 0 {
+            if f.frames > 0 {
                 file.rewind()?;
                 continue;
             }

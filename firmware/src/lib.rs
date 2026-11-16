@@ -15,7 +15,8 @@
 //!
 //! Pure logic (dates, file formats, resampling, descriptors, config model,
 //! scroll physics) is in the `wakey_core` crate and tested on the host.
-//! Binaries in `src/bin/` are thin: the product (`wakey`) and two benches.
+//! Binaries in `src/bin/` are thin: the product (`wakey`) and the UI bench
+//! (`ui_bench`).
 
 pub mod airdrop;
 pub mod ambient;
