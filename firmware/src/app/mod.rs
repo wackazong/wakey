@@ -196,7 +196,10 @@ pub fn main() -> ! {
 }
 
 #[embassy_executor::task]
-async fn app(spawner: embassy_executor::Spawner) {
+async fn app(
+    // Only the UI bench spawns a task here (its scripted gestures).
+    #[allow(unused_variables)] spawner: embassy_executor::Spawner,
+) {
     let Board {
         display,
         backlight,
@@ -229,7 +232,7 @@ async fn app(spawner: embassy_executor::Spawner) {
     // or the built-in one if none is connected, while an alarm rings.
     let player = Player::new();
     let builtin = BuiltinSpeaker::start(codec, i2c.clone(), ioexp.clone(), player.source());
-    spawner.spawn(input::touch_task(i2c.clone(), ioexp.clone()).unwrap());
+    input::start(i2c.clone(), ioexp.clone());
     let speaker = UsbAudio::start(ioexp.switch(Pin::Usb5vEn), player.source()).expect("USB host");
     let alarm = Rc::new(RefCell::new(AlarmClock::new(
         config.alarms,

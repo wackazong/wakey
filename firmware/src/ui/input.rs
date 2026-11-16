@@ -1,9 +1,13 @@
 //! Touch input as landscape pointer events.
 //!
-//! [`touch_task`] polls the touch controller every 10 ms (the touch
+//! A thread ([`start`]) polls the touch controller every 10 ms (the touch
 //! interrupt pin is not used yet) and turns readings into Down/Move/Up
-//! events in UI (landscape) coordinates, queued in [`EVENTS`]. The render
-//! loop drains the queue once per frame.
+//! events in UI (landscape) coordinates, timestamped when read and queued
+//! in [`EVENTS`]. The render loop drains the queue once per frame.
+//!
+//! Its own thread, not a task of the UI's executor: there a frame that
+//! took long (a page change, the clock's minute) delayed the next poll, up
+//! to 90 ms, and a fling measured from so few points had no speed.
 
 use crate::board::i2c::{self, SharedI2c};
 use crate::board::ioexp::{IoExpanders, Pin};
@@ -11,7 +15,9 @@ use crate::board::touch;
 use crate::display;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant};
+use esp_idf_svc::hal::cpu::Core;
+use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
@@ -91,7 +97,7 @@ fn release(down: &mut bool, last: (f32, f32)) {
 }
 
 /// Pulses the touch controller's reset line and waits until it answers.
-async fn reset_controller(bus: &SharedI2c, ioexp: &IoExpanders) {
+fn reset_controller(bus: &SharedI2c, ioexp: &IoExpanders) {
     let pulse = ioexp.set(Pin::TpRst, false).and_then(|()| {
         esp_idf_svc::hal::delay::FreeRtos::delay_ms(10);
         ioexp.set(Pin::TpRst, true)
@@ -101,15 +107,40 @@ async fn reset_controller(bus: &SharedI2c, ioexp: &IoExpanders) {
         return;
     }
     // The controller needs a moment after reset (see `board::Board::init`).
-    Timer::after(Duration::from_millis(300)).await;
+    std::thread::sleep(std::time::Duration::from_millis(300));
     let fw = touch::firmware(&mut i2c::lock(bus));
     log::warn!("touch: controller reset, firmware {fw:?}");
 }
 
+/// Starts the touch thread: on core 1 above the audio decoder (5), which
+/// could otherwise hold it off while it decodes; a poll takes well under
+/// a millisecond.
+pub fn start(bus: SharedI2c, ioexp: IoExpanders) {
+    let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
+    let pinned = ThreadSpawnConfiguration {
+        name: Some(c"touch"),
+        pin_to_core: Some(Core::Core1),
+        priority: 6,
+        ..ThreadSpawnConfiguration::default()
+    };
+    if let Err(e) = pinned.set() {
+        log::warn!("touch: thread not pinned: {e}");
+    }
+    if let Err(e) = std::thread::Builder::new()
+        .name("touch".into())
+        .stack_size(6 * 1024)
+        .spawn(crate::taskstats::named("touch", move || poll(bus, ioexp)))
+    {
+        log::error!("touch: thread not started: {e}");
+    }
+    if let Err(e) = previous.set() {
+        log::warn!("touch: thread configuration not restored: {e}");
+    }
+}
+
 /// Polls the touch controller forever (shares the system I2C bus), and
 /// resets it after a burst of failed reads.
-#[embassy_executor::task]
-pub async fn touch_task(bus: SharedI2c, ioexp: IoExpanders) {
+fn poll(bus: SharedI2c, ioexp: IoExpanders) {
     let mut down = false;
     let mut last = (0.0, 0.0);
     let mut errors = 0u32;
@@ -162,12 +193,12 @@ pub async fn touch_task(bus: SharedI2c, ioexp: IoExpanders) {
                     // would keep repeating).
                     release(&mut down, last);
                     empty = 0;
-                    reset_controller(&bus, &ioexp).await;
+                    reset_controller(&bus, &ioexp);
                     recent = 0;
                     window_start = Instant::now();
                 }
             }
         }
-        Timer::after(Duration::from_millis(10)).await;
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
