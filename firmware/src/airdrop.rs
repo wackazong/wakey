@@ -39,6 +39,20 @@ enum C6Image {
     Receiver = 0x20_0000,
 }
 const RECEIVER_PROJECT: &str = "wakey_airdrop_c6";
+/// The esp_hosted version our addition is built on (`net::C6_FIRMWARE`'s
+/// major and minor): anything older is a stock esp_hosted.
+const HOSTED_MIN: [u32; 3] = [2, 13, 0];
+/// The first esp_hosted slave with the OTA activate RPC.
+const ACTIVATE_MIN: [u32; 3] = [2, 6, 0];
+
+/// The esp_hosted version the C6 reports (an RPC; the transport is up), or
+/// `None` if it does not answer.
+fn c6_version() -> Option<[u32; 3]> {
+    let mut v = sys::esp_hosted_coprocessor_fwver_t::default();
+    // SAFETY: `v` is a plain out-parameter, valid for the call.
+    let err = unsafe { sys::esp_hosted_get_coprocessor_fwversion(&mut v) };
+    (err == 0).then_some([v.major1, v.minor1, v.patch1])
+}
 
 /// The partition, and the image's offset and length in it.
 fn image(which: C6Image) -> anyhow::Result<(*const sys::esp_partition_t, usize, usize)> {
@@ -219,8 +233,12 @@ fn prepare(power: &Switch, stop_transport: &dyn Fn(), boot: bool) -> anyhow::Res
         anyhow::ensure!(err == 0, "esp_hosted_connect_to_slave: {err}");
         let step = (|| -> anyhow::Result<bool> {
             let Some(info) = query()? else {
-                log::warn!("airdrop: the C6's esp_hosted lacks Wakey's addition: installing it");
-                install(C6Image::Hosted, true)?;
+                let version = c6_version();
+                log::warn!("airdrop: the C6's esp_hosted {version:?} lacks Wakey's addition: installing it");
+                // Slaves before 2.6 have no activate RPC: they switch to
+                // the new image at the end of the OTA, and the power cycle
+                // below starts it.
+                install(C6Image::Hosted, version.is_none_or(|v| v >= ACTIVATE_MIN))?;
                 return Ok(false);
             };
             if !info.holds_receiver() {
@@ -288,6 +306,12 @@ fn receiver_version() -> String {
 }
 
 fn query() -> anyhow::Result<Option<SlotInfo>> {
+    // Older than our esp_hosted (the factory 1.4.1): it cannot have the
+    // addition, and its custom-data RPC fails (-1) instead of answering
+    // `ESP_ERR_NOT_FOUND`.
+    if c6_version().is_some_and(|v| v < HOSTED_MIN) {
+        return Ok(None);
+    }
     let Some(reply) = request(WK_QUERY, WK_INFO)? else {
         return Ok(None);
     };
