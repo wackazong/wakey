@@ -3,6 +3,21 @@
 
 use crate::net::Unavailable;
 use crate::tidal::Problem;
+use wakey_core::alarm::Sound;
+
+/// The title shown for `sound` (the alarm page's "Klang" row).
+pub fn sound_title(sound: &Sound) -> String {
+    match sound {
+        Sound::Beep => "Eingebauter Ton".into(),
+        Sound::RandomFile | Sound::TidalRandom => "Zufällig".into(),
+        Sound::File(path) => crate::sounds::file_title(path),
+        Sound::TidalTrack(id) => id
+            .parse()
+            .ok()
+            .and_then(crate::tidal::track_title)
+            .map_or_else(|| "TIDAL-Titel".into(), |(title, _)| title),
+    }
+}
 
 /// Why the TIDAL tab shows no playlist (a sentence).
 pub fn tidal_problem(problem: &Problem) -> String {

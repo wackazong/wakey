@@ -7,7 +7,7 @@
 use super::alarm::AlarmClock;
 use super::screens::{AlarmEditor, AppWindow};
 use super::{Ctx, PAGE_ALARM, PAGE_LIST, alarm_list, name_page, show_page, sound_page};
-use crate::{clock, sounds};
+use crate::clock;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::rc::Rc;
 use wakey_core::alarm::AlarmConfig;
@@ -38,7 +38,7 @@ pub fn fill(window: &AppWindow, ctx: &Ctx) {
     editor.set_name(cfg.name.as_str().into());
     editor.set_any_day(cfg.any_day());
     editor.set_changed(changed(ctx));
-    editor.set_sound(sounds::title(&cfg.sound).into());
+    editor.set_sound(super::texts::sound_title(&cfg.sound).into());
     editor.set_volume_bars((i32::from(cfg.volume) + 19) / 20);
     editor.set_fade(fade_text(cfg.fade_in_s).into());
     editor.set_relative(relative(&ctx.alarm.borrow(), &cfg).into());
@@ -49,7 +49,12 @@ pub fn fill(window: &AppWindow, ctx: &Ctx) {
 pub fn changed(ctx: &Ctx) -> bool {
     let draft = ctx.draft.borrow();
     match &*ctx.original.borrow() {
-        Some(saved) => AlarmConfig { enabled: saved.enabled, ..draft.clone() } != *saved,
+        Some(saved) => {
+            AlarmConfig {
+                enabled: saved.enabled,
+                ..draft.clone()
+            } != *saved
+        }
         None => true,
     }
 }

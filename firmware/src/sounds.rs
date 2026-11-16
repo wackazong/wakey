@@ -48,21 +48,12 @@ fn title_of(stem: &str) -> String {
     wakey_core::airdrop::nfc(&stem.replace('_', " "))
 }
 
-/// The title shown for `sound` (the alarm page's "Klang" row).
-pub fn title(sound: &Sound) -> String {
-    match sound {
-        Sound::Beep => "Eingebauter Ton".into(),
-        Sound::RandomFile | Sound::TidalRandom => "Zufällig".into(),
-        Sound::File(path) => Path::new(path)
-            .file_stem()
-            .map(|s| title_of(&s.to_string_lossy()))
-            .unwrap_or_else(|| path.clone()),
-        Sound::TidalTrack(id) => id
-            .parse()
-            .ok()
-            .and_then(crate::tidal::track_title)
-            .map_or_else(|| "TIDAL-Titel".into(), |(title, _)| title),
-    }
+/// The title of the file at `path` (below the card root), as [`list`]
+/// shows it.
+pub fn file_title(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .map_or_else(|| path.to_string(), |s| title_of(&s.to_string_lossy()))
 }
 
 /// The file to play for alarm `id` on `date`; `None` for the built-in tone

@@ -105,7 +105,7 @@ fn airdrop_rows(state: &airdrop::State) -> Vec<SoundRow> {
         airdrop::State::Ready | airdrop::State::Receiving(_) => {
             "AirDrop bereit für neue Klänge".to_string()
         }
-        airdrop::State::Failed(e) => format!("AirDrop nicht verfügbar: {e}"),
+        airdrop::State::Failed => "AirDrop nicht verfügbar".to_string(),
     };
     let mut rows = Vec::new();
     if let airdrop::State::Receiving(p) = state {

@@ -108,7 +108,9 @@ pub enum State {
     /// "Wakey" is in the iPhones' AirDrop list.
     Ready,
     Receiving(Progress),
-    Failed(String),
+    /// It did not come up (details in the log); not again until wanted
+    /// anew.
+    Failed,
 }
 
 static WANTED: AtomicBool = AtomicBool::new(false);
@@ -166,7 +168,7 @@ pub(crate) fn run(link: &mut Link, power: &Switch, stop_transport: &dyn Fn()) {
                 log::warn!("airdrop: {e}");
                 failures += 1;
                 if failures >= 3 {
-                    set_state(State::Failed(e.to_string()));
+                    set_state(State::Failed);
                     // Not again until wanted anew.
                     while wanted() {
                         std::thread::sleep(Duration::from_millis(250));
