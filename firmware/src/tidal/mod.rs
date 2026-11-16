@@ -199,6 +199,16 @@ impl Inner {
     fn missing(&self) -> bool {
         self.tracks().iter().any(|t| self.lacks(t.id))
     }
+
+    /// The picked track, if it is to be downloaded and can be: one of
+    /// [`Self::tracks`] (a track whose title was never seen is not).
+    fn preferred(&self) -> Option<u64> {
+        let p = self.prefer?;
+        let in_tracks = self.playlist.iter().any(|t| t.id == p)
+            || ((self.selected.contains(&p) || self.keep.contains(&p))
+                && self.known.contains_key(&p));
+        (in_tracks && self.lacks(p)).then_some(p)
+    }
 }
 
 /// What a TIDAL job does in its Wi-Fi session, before
@@ -527,10 +537,7 @@ impl Tidal {
             let wanted = self.lock().wanted;
             let due = wanted && last_sync.elapsed() >= WATCH;
             // A picked track that is missing goes before the sync.
-            let urgent = {
-                let inner = self.lock();
-                inner.prefer.is_some_and(|p| inner.lacks(p))
-            };
+            let urgent = self.lock().preferred().is_some();
             if (!due || urgent)
                 && let Some(track) = self.next_missing()
             {
@@ -590,7 +597,7 @@ impl Tidal {
     /// The first track of the playlist the card lacks (not failed before).
     fn next_missing(&self) -> Option<Track> {
         let inner = self.lock();
-        let preferred = inner.prefer.filter(|&id| inner.lacks(id));
+        let preferred = inner.preferred();
         let tracks = inner.tracks();
         tracks
             .iter()
@@ -605,8 +612,7 @@ impl Tidal {
         if crate::airdrop::wanted() {
             return true;
         }
-        let inner = self.lock();
-        inner.prefer.is_some_and(|p| p != id && inner.lacks(p))
+        self.lock().preferred().is_some_and(|p| p != id)
     }
 
     /// Records progress; a new track also refills the list.
