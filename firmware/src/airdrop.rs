@@ -68,7 +68,10 @@ fn image(which: C6Image) -> anyhow::Result<(*const sys::esp_partition_t, usize, 
     let at = which as usize;
     let mut head = [0u8; 8];
     read_part(part, at, &mut head)?;
-    anyhow::ensure!(&head[..4] == b"WKC6", "the C6 images are missing (scripts/flash.sh)");
+    anyhow::ensure!(
+        &head[..4] == b"WKC6",
+        "the C6 images are missing (scripts/flash.sh)"
+    );
     let len = u32::from_le_bytes(head[4..].try_into().unwrap()) as usize;
     Ok((part, at + 8, len))
 }
@@ -118,7 +121,10 @@ static FILES: AtomicU32 = AtomicU32::new(0);
 /// later).
 pub fn set_wanted(on: bool) {
     if WANTED.swap(on, Ordering::Relaxed) != on {
-        log::info!("airdrop: {}", if on { "wanted" } else { "no longer wanted" });
+        log::info!(
+            "airdrop: {}",
+            if on { "wanted" } else { "no longer wanted" }
+        );
     }
 }
 
@@ -234,7 +240,9 @@ fn prepare(power: &Switch, stop_transport: &dyn Fn(), boot: bool) -> anyhow::Res
         let step = (|| -> anyhow::Result<bool> {
             let Some(info) = query()? else {
                 let version = c6_version();
-                log::warn!("airdrop: the C6's esp_hosted {version:?} lacks Wakey's addition: installing it");
+                log::warn!(
+                    "airdrop: the C6's esp_hosted {version:?} lacks Wakey's addition: installing it"
+                );
                 // Slaves before 2.6 have no activate RPC: they switch to
                 // the new image at the end of the OTA, and the power cycle
                 // below starts it.
@@ -256,7 +264,9 @@ fn prepare(power: &Switch, stop_transport: &dyn Fn(), boot: bool) -> anyhow::Res
             }
             let result = request(WK_BOOT_AIRDROP, WK_RESULT)?
                 .ok_or_else(|| anyhow::anyhow!("no answer to booting the receiver"))?;
-            let code = result.get(..4).map_or(-1, |b| i32::from_le_bytes(b.try_into().unwrap()));
+            let code = result
+                .get(..4)
+                .map_or(-1, |b| i32::from_le_bytes(b.try_into().unwrap()));
             anyhow::ensure!(code == 0, "the C6 refused to boot the receiver: {code}");
             Ok(true)
         })();
@@ -297,7 +307,9 @@ fn receiver_version() -> String {
         let (part, at, _) = image(C6Image::Receiver)?;
         let mut head = [0u8; 112];
         read_part(part, at, &mut head)?;
-        app_desc(&head).map(|d| d.1).ok_or_else(|| anyhow::anyhow!("not an app image"))
+        app_desc(&head)
+            .map(|d| d.1)
+            .ok_or_else(|| anyhow::anyhow!("not an app image"))
     };
     read().unwrap_or_else(|e| {
         log::warn!("airdrop: {e}");
@@ -320,7 +332,11 @@ fn query() -> anyhow::Result<Option<SlotInfo>> {
         let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
         String::from_utf8_lossy(&b[..end]).into_owned()
     };
-    Ok(Some(SlotInfo { other_label: field(1..18), other_project: field(18..50), other_version: field(50..82) }))
+    Ok(Some(SlotInfo {
+        other_label: field(1..18),
+        other_project: field(18..50),
+        other_version: field(50..82),
+    }))
 }
 
 /// The last reply from our esp_hosted: (message id, payload).
@@ -329,7 +345,11 @@ static REPLIED: Condvar = Condvar::new();
 
 unsafe extern "C" fn on_reply(id: u32, data: *const u8, len: usize, _ctx: *mut c_void) {
     // SAFETY: esp_hosted passes `len` valid bytes for the call.
-    let bytes = if data.is_null() { Vec::new() } else { unsafe { std::slice::from_raw_parts(data, len) }.to_vec() };
+    let bytes = if data.is_null() {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }.to_vec()
+    };
     *REPLY.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, bytes));
     REPLIED.notify_all();
 }
@@ -339,7 +359,9 @@ unsafe extern "C" fn on_reply(id: u32, data: *const u8, len: usize, _ctx: *mut c
 /// an esp_hosted without Wakey's addition) or sent no reply.
 fn request(msg: u32, reply: u32) -> anyhow::Result<Option<Vec<u8>>> {
     // SAFETY: registers a plain function; esp_hosted keeps the pointer.
-    let err = unsafe { sys::esp_hosted_register_custom_callback(reply, Some(on_reply), core::ptr::null_mut()) };
+    let err = unsafe {
+        sys::esp_hosted_register_custom_callback(reply, Some(on_reply), core::ptr::null_mut())
+    };
     anyhow::ensure!(err == 0, "register_custom_callback: {err}");
     let mut slot = REPLY.lock().unwrap_or_else(|e| e.into_inner());
     *slot = None;
@@ -360,7 +382,10 @@ fn request(msg: u32, reply: u32) -> anyhow::Result<Option<Vec<u8>>> {
         if rest.is_zero() {
             return Ok(None);
         }
-        slot = REPLIED.wait_timeout(slot, rest).unwrap_or_else(|e| e.into_inner()).0;
+        slot = REPLIED
+            .wait_timeout(slot, rest)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
     }
 }
 
@@ -397,7 +422,9 @@ fn install(which: C6Image, activate: bool) -> anyhow::Result<()> {
 /// Reads the receiver's frames until AirDrop is no longer wanted. An error
 /// if the receiver goes silent.
 fn receive(link: &mut Link) -> anyhow::Result<()> {
-    let config = UartConfig::new().baudrate(Hertz(BAUD)).rx_fifo_size(RX_BUFFER);
+    let config = UartConfig::new()
+        .baudrate(Hertz(BAUD))
+        .rx_fifo_size(RX_BUFFER);
     // SAFETY: the reborrowed UART and pin live only as long as this driver,
     // dropped before the next call reborrows them.
     let uart = UartRxDriver::new(
@@ -425,7 +452,10 @@ fn receive(link: &mut Link) -> anyhow::Result<()> {
                     log::info!("airdrop: receiver {v} started");
                 }
                 Frame::Log(line) => log::info!("c6: {line}"),
-                Frame::Done { ok, why } => log::info!("airdrop: transfer {} ({why})", if *ok { "ok" } else { "failed" }),
+                Frame::Done { ok, why } => log::info!(
+                    "airdrop: transfer {} ({why})",
+                    if *ok { "ok" } else { "failed" }
+                ),
                 _ => {}
             }
             match receiver.frame(frame) {
@@ -467,7 +497,7 @@ struct SdStore {
 
 impl SdStore {
     fn new() -> Self {
-        let dir = PathBuf::from(sd::MOUNT_POINT).join(crate::sounds::DIR);
+        let dir = sd::path(crate::sounds::DIR);
         let _ = std::fs::create_dir_all(&dir);
         Self { dir }
     }
@@ -485,7 +515,10 @@ impl Store for SdStore {
     }
 
     fn create(&mut self, name: &str, _size: u32) -> std::io::Result<Self::File> {
-        Ok(std::io::BufWriter::with_capacity(32 * 1024, std::fs::File::create(self.part(name))?))
+        Ok(std::io::BufWriter::with_capacity(
+            32 * 1024,
+            std::fs::File::create(self.part(name))?,
+        ))
     }
 
     fn write(&mut self, file: &mut Self::File, bytes: &[u8]) -> std::io::Result<()> {

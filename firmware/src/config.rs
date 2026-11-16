@@ -21,29 +21,29 @@ pub const FILE: &str = "config.json";
 /// old `alarm` section is migrated and settings missing from the file are
 /// added to it.
 pub fn load() -> Result<Config, String> {
-    let path = format!("{}/{FILE}", sd::MOUNT_POINT);
+    let path = sd::path(FILE);
     let mut cfg = match std::fs::read_to_string(&path) {
         Ok(text) => match Config::load(&text) {
             Ok((cfg, updated)) => {
                 if let Some(updated) = updated {
-                    match replace(&updated) {
-                        Ok(()) => log::info!("config: updated {path} (new or missing settings)"),
-                        Err(e) => log::error!("config: writing {path}: {e}"),
+                    match sd::replace(&path, updated.as_bytes()) {
+                        Ok(()) => log::info!("config: updated {FILE} (new or missing settings)"),
+                        Err(e) => log::error!("config: {e}"),
                     }
                 }
                 cfg
             }
             Err(e) => {
-                log::error!("config: {path}: {e}");
+                log::error!("config: {FILE}: {e}");
                 return Err(e.to_string());
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            log::info!("config: no {path} ({e})");
+            log::info!("config: no {FILE} ({e})");
             Config::default()
         }
         Err(e) => {
-            log::error!("config: {path}: {e}");
+            log::error!("config: {FILE}: {e}");
             return Err(e.to_string());
         }
     };
@@ -76,10 +76,13 @@ pub fn load() -> Result<Config, String> {
 /// Writes `alarms` into `config.json`, keeping the rest of the file.
 pub fn save_alarms(alarms: &[AlarmConfig]) -> std::io::Result<()> {
     let _w = WRITE.lock().unwrap_or_else(|e| e.into_inner());
-    let path = format!("{}/{FILE}", sd::MOUNT_POINT);
+    let path = sd::path(FILE);
     let old = std::fs::read_to_string(&path).ok();
-    replace(&Config::with_alarms(old.as_deref(), alarms))?;
-    log::info!("config: alarms saved to {path}");
+    sd::replace(
+        &path,
+        Config::with_alarms(old.as_deref(), alarms).as_bytes(),
+    )?;
+    log::info!("config: alarms saved to {FILE}");
     Ok(())
 }
 
@@ -87,27 +90,19 @@ pub fn save_alarms(alarms: &[AlarmConfig]) -> std::io::Result<()> {
 /// keeping the rest of the file.
 pub fn save_tidal_session(session: Option<&TidalSession>) -> std::io::Result<()> {
     let _w = WRITE.lock().unwrap_or_else(|e| e.into_inner());
-    let path = format!("{}/{FILE}", sd::MOUNT_POINT);
+    let path = sd::path(FILE);
     let old = std::fs::read_to_string(&path).ok();
-    replace(&Config::with_tidal_session(old.as_deref(), session))?;
-    log::info!("config: TIDAL session {}", if session.is_some() { "saved" } else { "removed" });
-    Ok(())
-}
-
-/// Replaces `config.json` through a temporary file, so a failed write
-/// leaves the old file intact.
-fn replace(text: &str) -> std::io::Result<()> {
-    let path = format!("{}/{FILE}", sd::MOUNT_POINT);
-    let tmp = format!("{}/config.tmp", sd::MOUNT_POINT);
-    let context =
-        |step: &str, e: std::io::Error| std::io::Error::new(e.kind(), format!("{step}: {e}"));
-    std::fs::write(&tmp, text).map_err(|e| context("writing config.tmp", e))?;
-    // FAT cannot rename onto an existing file.
-    match std::fs::remove_file(&path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(context("removing config.json", e));
+    sd::replace(
+        &path,
+        Config::with_tidal_session(old.as_deref(), session).as_bytes(),
+    )?;
+    log::info!(
+        "config: TIDAL session {}",
+        if session.is_some() {
+            "saved"
+        } else {
+            "removed"
         }
-        _ => {}
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| context("renaming config.tmp", e))
+    );
+    Ok(())
 }

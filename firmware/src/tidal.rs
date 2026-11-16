@@ -185,7 +185,7 @@ pub enum TrackStatus {
 
 /// The tracks on the card.
 fn scan_tracks() -> BTreeSet<u64> {
-    std::fs::read_dir(sd_path(sync::DIR))
+    std::fs::read_dir(sd::path(sync::DIR))
         .map(|dir| {
             dir.flatten()
                 .filter_map(|e| sync::track_id_of(&e.file_name().to_string_lossy()))
@@ -226,16 +226,19 @@ struct SyncState {
 }
 
 fn load_state() -> Option<SyncState> {
-    serde_json::from_slice(&std::fs::read(sd_path(STATE_FILE)).ok()?).ok()
+    serde_json::from_slice(&std::fs::read(sd::path(STATE_FILE)).ok()?).ok()
 }
 
 fn save_state(state: &SyncState) {
-    let result = serde_json::to_vec(state)
-        .map_err(std::io::Error::other)
-        .and_then(|json| std::fs::write(sd_path(STATE_FILE), json));
-    if let Err(e) = result {
-        log::warn!("tidal: {STATE_FILE}: {e}");
+    if let Err(e) = save_json(STATE_FILE, state) {
+        log::warn!("tidal: {e}");
     }
+}
+
+/// `value` as JSON into `rel` on the card, through a temporary file.
+fn save_json(rel: &str, value: &impl serde::Serialize) -> std::io::Result<()> {
+    let json = serde_json::to_vec(value).map_err(std::io::Error::other)?;
+    sd::replace(&sd::path(rel), &json)
 }
 
 fn send(req: &wakey_core::tidal::Request, stage: &str) -> Result<(u16, Vec<u8>), String> {
@@ -264,13 +267,9 @@ fn send(req: &wakey_core::tidal::Request, stage: &str) -> Result<(u16, Vec<u8>),
     Ok((status, body))
 }
 
-fn sd_path(rel: &str) -> PathBuf {
-    PathBuf::from(sd::MOUNT_POINT).join(rel)
-}
-
 /// The playlist as last synced (empty if none).
 fn load_playlist() -> Vec<Track> {
-    std::fs::read(sd_path(sync::PLAYLIST_FILE))
+    std::fs::read(sd::path(sync::PLAYLIST_FILE))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
@@ -289,13 +288,13 @@ pub fn downloaded() -> Vec<Track> {
 /// A cover as stored (RGB888, [`cover::COVER_BYTES`]), if it is on the
 /// card.
 pub fn cover_rgb(cover: &str) -> Option<Vec<u8>> {
-    let rgb = std::fs::read(sd_path(&sync::cover_path(cover))).ok()?;
+    let rgb = std::fs::read(sd::path(&sync::cover_path(cover))).ok()?;
     (rgb.len() == cover::COVER_BYTES).then_some(rgb)
 }
 
 /// The covers on the card (ids).
 fn scan_covers() -> Vec<String> {
-    std::fs::read_dir(sd_path(&format!("{}/covers", sync::DIR)))
+    std::fs::read_dir(sd::path(&format!("{}/covers", sync::DIR)))
         .map(|dir| {
             dir.flatten()
                 .filter_map(|e| {
@@ -334,12 +333,12 @@ fn fetch_cover(id: &str) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     let rgb = decode_cover(&jpeg)?;
-    let _ = std::fs::create_dir_all(sd_path(&format!("{}/covers", sync::DIR)));
-    std::fs::write(sd_path(&sync::cover_path(id)), rgb).map_err(|e| e.to_string())
+    let _ = std::fs::create_dir_all(sd::path(&format!("{}/covers", sync::DIR)));
+    sd::replace(&sd::path(&sync::cover_path(id)), &rgb).map_err(|e| e.to_string())
 }
 
 pub fn track_file(id: u64) -> Option<PathBuf> {
-    let path = sd_path(&sync::track_path(id));
+    let path = sd::path(&sync::track_path(id));
     path.exists().then_some(path)
 }
 
@@ -350,20 +349,15 @@ const KNOWN_FILE: &str = "tidal/known.json";
 type Known = std::collections::BTreeMap<u64, Track>;
 
 fn load_known() -> Known {
-    std::fs::read(sd_path(KNOWN_FILE))
+    std::fs::read(sd::path(KNOWN_FILE))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
 
 fn save_known(known: &Known) {
-    match serde_json::to_vec(known) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(sd_path(KNOWN_FILE), json) {
-                log::warn!("tidal: {KNOWN_FILE}: {e}");
-            }
-        }
-        Err(e) => log::warn!("tidal: {KNOWN_FILE}: {e}"),
+    if let Err(e) = save_json(KNOWN_FILE, known) {
+        log::warn!("tidal: {e}");
     }
 }
 
@@ -398,7 +392,7 @@ pub struct Growing {
 impl Growing {
     /// Opens the finished file, else the part if it has more than `pos`.
     fn reopen(&mut self) -> std::io::Result<bool> {
-        let path = sd_path(&sync::track_path(self.id));
+        let path = sd::path(&sync::track_path(self.id));
         if let Ok(mut f) = std::fs::File::open(&path) {
             f.seek(SeekFrom::Start(self.pos))?;
             self.file = Some(f);
@@ -444,7 +438,7 @@ impl Read for Growing {
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 // Renamed between the two looks: the finished file is there.
-                TrackStatus::Ready if sd_path(&sync::track_path(self.id)).exists() => {}
+                TrackStatus::Ready if sd::path(&sync::track_path(self.id)).exists() => {}
                 _ => return Ok(0),
             }
         }
@@ -634,20 +628,9 @@ impl Drop for CardWriter {
     }
 }
 
-/// Writes the playlist through a temporary file.
 fn save_playlist(tracks: &[Track]) -> std::io::Result<()> {
-    std::fs::create_dir_all(sd_path(sync::DIR))?;
-    let path = sd_path(sync::PLAYLIST_FILE);
-    let tmp = path.with_extension("tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec(tracks).map_err(std::io::Error::other)?,
-    )?;
-    match std::fs::remove_file(&path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-        _ => {}
-    }
-    std::fs::rename(&tmp, &path)
+    std::fs::create_dir_all(sd::path(sync::DIR))?;
+    save_json(sync::PLAYLIST_FILE, &tracks)
 }
 
 /// Handle on the TIDAL state. Cheap to clone.
@@ -1016,8 +999,8 @@ impl Tidal {
         let (status, body) = self.call(&s, &api::playback_info(&s, track.id), "stream")?;
         let plan = api::parse_playback_info(status, &body, track.id, f64::from(track.duration_s))
             .map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(sd_path(sync::DIR)).map_err(|e| e.to_string())?;
-        let path = sd_path(&sync::track_path(track.id));
+        std::fs::create_dir_all(sd::path(sync::DIR)).map_err(|e| e.to_string())?;
+        let path = sd::path(&sync::track_path(track.id));
         let part = path.with_extension("flac.part");
         let t = Instant::now();
         self.set_progress(track.id, 0.0);
@@ -1224,7 +1207,7 @@ impl Tidal {
         inner.uuid = None;
         inner.last_updated = None;
         inner.bound = None;
-        let _ = std::fs::remove_file(sd_path(STATE_FILE));
+        let _ = std::fs::remove_file(sd::path(STATE_FILE));
     }
 
     /// After a sync: the state.
@@ -1428,7 +1411,7 @@ impl Tidal {
         };
         let gone = sync::plan(&tracks, &have, &[]).delete_tracks;
         for id in gone.into_iter().filter(|id| !spare.contains(id)) {
-            match std::fs::remove_file(sd_path(&sync::track_path(id))) {
+            match std::fs::remove_file(sd::path(&sync::track_path(id))) {
                 Ok(()) => log::info!("tidal: removed {id} (not in the playlist)"),
                 Err(e) => log::warn!("tidal: removing {id}: {e}"),
             }
@@ -1475,7 +1458,7 @@ impl Tidal {
     fn sync_covers(&self, tracks: &[Track]) {
         let plan = sync::plan(tracks, &[], &scan_covers());
         for id in plan.delete_covers {
-            let _ = std::fs::remove_file(sd_path(&sync::cover_path(&id)));
+            let _ = std::fs::remove_file(sd::path(&sync::cover_path(&id)));
         }
         let wanted: BTreeSet<String> = plan.download_covers.into_iter().collect();
         for id in wanted {

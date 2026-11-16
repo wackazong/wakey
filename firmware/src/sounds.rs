@@ -21,7 +21,7 @@ pub struct SoundFile {
 
 /// Files the player can read, sorted by title.
 pub fn list() -> Vec<SoundFile> {
-    let dir = Path::new(sd::MOUNT_POINT).join(DIR);
+    let dir = sd::path(DIR);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -68,15 +68,14 @@ pub fn title(sound: &Sound) -> String {
 /// The file to play for alarm `id` on `date`; `None` for the built-in tone
 /// (also for a TIDAL track not downloaded yet).
 pub fn resolve(sound: &Sound, id: u32, date: Date) -> Option<PathBuf> {
-    let root = Path::new(sd::MOUNT_POINT);
     match sound {
         Sound::Beep => None,
-        Sound::File(path) => Some(root.join(path)),
+        Sound::File(path) => Some(sd::path(path)),
         Sound::RandomFile => {
             let files = list();
             let file = files.get(alarm::pick_daily(files.len(), date, id))?;
             log::info!("sounds: today's random pick: {}", file.path);
-            Some(root.join(&file.path))
+            Some(sd::path(&file.path))
         }
         Sound::TidalTrack(track) => {
             let file = track.parse().ok().and_then(crate::tidal::track_file);

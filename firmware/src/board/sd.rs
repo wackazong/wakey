@@ -12,8 +12,32 @@ use esp_idf_svc::hal::sd::mmc::{SDMMC0, SdMmcHostConfiguration, SdMmcHostDriver}
 use esp_idf_svc::hal::sd::{SdCardConfiguration, SdCardDriver};
 use esp_idf_svc::io::vfs::MountedFatfs;
 use esp_idf_svc::sys::{self as sys, EspError, esp};
+use std::path::{Path, PathBuf};
 
 pub const MOUNT_POINT: &str = "/sdcard";
+
+/// `rel` on the card (`"tidal/state.json"` → `/sdcard/tidal/state.json`).
+pub fn path(rel: &str) -> PathBuf {
+    Path::new(MOUNT_POINT).join(rel)
+}
+
+/// Replaces `path` with `bytes` through a temporary file beside it
+/// (`.tmp`): a failed write leaves the old file intact. FAT cannot rename
+/// onto an existing file, so the old one goes just before the rename.
+pub fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    let context = |step: &str, file: &Path, e: std::io::Error| {
+        std::io::Error::new(e.kind(), format!("{step} {}: {e}", file.display()))
+    };
+    std::fs::write(&tmp, bytes).map_err(|e| context("writing", &tmp, e))?;
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(context("removing", path, e));
+        }
+        _ => {}
+    }
+    std::fs::rename(&tmp, path).map_err(|e| context("renaming", &tmp, e))
+}
 
 /// The mounted card (and the pin supply); unmounted when dropped.
 pub struct SdCard {
