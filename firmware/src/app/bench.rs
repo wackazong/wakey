@@ -4,12 +4,13 @@
 //! twice: no slide), flings the list, stops a fling with a tap (must not
 //! open the alarm), flings back, presses, swipes a row (it springs back),
 //! toggles a switch twice (saved; the state ends as it began), turns the
-//! minute wheel of an alarm (clicks) and goes back, with the per-frame trace (`ui::trace`) on. The gestures go through
-//! the touch queue like real ones. Each step is logged as `bench: <step>`;
-//! the frames after it belong to that step.
+//! minute wheel of an alarm (clicks) and goes back, with the per-frame
+//! trace (`ui::trace`) on. The gestures go through the touch queue like
+//! real ones. Each step is logged as `bench: <step>`; the frames after it
+//! belong to that step.
 //!
-//! The positions follow the layouts in `ui/wakey/clock_page.slint` and
-//! `ui/wakey/alarm_list.slint`. The list needs at least two alarms, and
+//! The positions follow the layouts in `ui/wakey/clock_page.slint`,
+//! `ui/wakey/alarm_list.slint` and `ui/wakey/alarm_page.slint`. The list needs at least two alarms, and
 //! more than fit the screen (four) for the scroll steps: a list that fits
 //! does not scroll.
 
@@ -27,6 +28,9 @@ const FIRST_ROW: (f32, f32) = (600.0, 210.0);
 const FIRST_SWITCH: (f32, f32) = (1150.0, 210.0);
 /// A point in the lower part of the list.
 const LOWER_LIST: (f32, f32) = (640.0, 600.0);
+/// The alarm page's minute wheel, and "Abbrechen".
+const MINUTE_WHEEL: (f32, f32) = (420.0, 450.0);
+const ALARM_CANCEL: (f32, f32) = (140.0, 64.0);
 
 async fn send(phase: Phase, (x, y): (f32, f32)) {
     let at = Instant::now();
@@ -99,9 +103,9 @@ pub async fn run() {
     step("wheel", 1500).await;
     tap(FIRST_ROW).await;
     Timer::after_millis(1000).await;
-    drag((420.0, 450.0), (0.0, -200.0), 20).await;
+    drag(MINUTE_WHEEL, (0.0, -200.0), 20).await;
     Timer::after_millis(1500).await;
-    tap((140.0, 64.0)).await;
+    tap(ALARM_CANCEL).await;
     step("back to clock", 1500).await;
     tap(LIST_BACK).await;
 

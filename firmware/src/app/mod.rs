@@ -322,7 +322,7 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
             } else {
                 IDLE_CLOSE
             };
-            if input::idle().as_millis() >= limit.as_millis() as u64
+            if input::idle().as_secs() >= limit.as_secs()
                 && !ctx.alarm.borrow().is_previewing()
                 && !ctx.tidal.logging_in()
                 && !matches!(crate::airdrop::state(), crate::airdrop::State::Receiving(_))
@@ -345,30 +345,33 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
 /// Logs when the render loop has not gone round for 2 s, and where it is.
 fn watch_render_loop() {
     use core::sync::atomic::Ordering::Relaxed;
-    std::thread::Builder::new()
-        .name("ui-watch".into())
-        .stack_size(4096)
-        .spawn(|| {
-            let mut last = render_loop::ITERATIONS.load(Relaxed);
-            let mut still = 0u32;
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                let now = render_loop::ITERATIONS.load(Relaxed);
-                if now != last {
-                    last = now;
-                    still = 0;
-                    continue;
-                }
-                still += 1;
-                if still == 2 || still.is_multiple_of(10) {
-                    log::error!(
-                        "ui: render loop stuck for {still} s in '{}', panel frames {}, touch read {}",
-                        render_loop::stage().name(),
-                        crate::display::Display::frames_scanned(),
-                        if input::READING.load(Relaxed) { "busy" } else { "idle" },
-                    );
-                }
+    let watch = runtime::Thread::new(c"ui-watch", 4096).spawn(|| {
+        let mut last = render_loop::ITERATIONS.load(Relaxed);
+        let mut still = 0u32;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let now = render_loop::ITERATIONS.load(Relaxed);
+            if now != last {
+                last = now;
+                still = 0;
+                continue;
             }
-        })
-        .expect("ui-watch thread");
+            still += 1;
+            if still == 2 || still.is_multiple_of(10) {
+                log::error!(
+                    "ui: render loop stuck for {still} s in '{}', panel frames {}, touch read {}",
+                    render_loop::stage().name(),
+                    crate::display::Display::frames_scanned(),
+                    if input::READING.load(Relaxed) {
+                        "busy"
+                    } else {
+                        "idle"
+                    },
+                );
+            }
+        }
+    });
+    if let Err(e) = watch {
+        log::error!("ui: render loop watch not started: {e}");
+    }
 }

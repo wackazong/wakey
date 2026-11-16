@@ -105,7 +105,7 @@ impl Target {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Open {
     buf: usize,
     range: Range<usize>,
@@ -165,17 +165,7 @@ impl PpaRotator {
             buf_seq: [0; NUM_BUFS],
             submitted: 0,
             open: heapless::Vec::new(),
-            recent: core::array::from_fn(|_| {
-                (
-                    0,
-                    Open {
-                        buf: 0,
-                        range: 0..0,
-                        first_line: 0,
-                        lines: 0,
-                    },
-                )
-            }),
+            recent: Default::default(),
             target: Target {
                 buf: ptr::null_mut(),
                 pic_w: 0,

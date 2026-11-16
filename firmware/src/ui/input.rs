@@ -13,6 +13,7 @@ use crate::board::i2c::{self, SharedI2c};
 use crate::board::ioexp::{IoExpanders, Pin};
 use crate::board::touch;
 use crate::display;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant};
@@ -44,31 +45,23 @@ const RESET_AFTER_ERRORS: u32 = 5;
 const ERROR_WINDOW: Duration = Duration::from_secs(1);
 
 /// True while the touch controller is being read (for the stall report).
-pub static READING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub static READING: AtomicBool = AtomicBool::new(false);
 
-/// When the last touch event was queued (ms since boot), for
-/// [`idle`].
-static LAST_EVENT_MS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// When the last touch was read (ms since boot), for [`idle`].
+static LAST_TOUCH_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Time since the last touch.
 pub fn idle() -> Duration {
-    let last = LAST_EVENT_MS.load(core::sync::atomic::Ordering::Relaxed);
+    let last = LAST_TOUCH_MS.load(Ordering::Relaxed);
     Duration::from_millis(u64::from(
         (Instant::now().as_millis() as u32).wrapping_sub(last),
     ))
 }
 
-/// Starts [`idle`] from now, as a touch would: the display woke by itself
-/// (daylight, an alarm), and its sleep timer counts from then.
+/// Starts [`idle`] from now. A touch does; so does the display waking by
+/// itself (daylight, an alarm), so its sleep timer counts from then.
 pub fn restart_idle() {
-    touched();
-}
-
-fn touched() {
-    LAST_EVENT_MS.store(
-        Instant::now().as_millis() as u32,
-        core::sync::atomic::Ordering::Relaxed,
-    );
+    LAST_TOUCH_MS.store(Instant::now().as_millis() as u32, Ordering::Relaxed);
 }
 
 pub static EVENTS: Channel<CriticalSectionRawMutex, TouchEvent, 32> = Channel::new();
@@ -138,13 +131,13 @@ fn poll(bus: SharedI2c, ioexp: IoExpanders) {
     // few empty readings in a row count as lifting the finger.
     let mut empty = 0u8;
     loop {
-        READING.store(true, core::sync::atomic::Ordering::Relaxed);
+        READING.store(true, Ordering::Relaxed);
         let read = touch::read_point(&mut i2c::lock(&bus));
-        READING.store(false, core::sync::atomic::Ordering::Relaxed);
+        READING.store(false, Ordering::Relaxed);
         match read {
             Ok(Some((px, py))) => {
                 empty = 0;
-                touched();
+                restart_idle();
                 let (x, y) = to_landscape(px, py);
                 let phase = if down { Phase::Move } else { Phase::Down };
                 if phase == Phase::Down || (x, y) != last {

@@ -64,7 +64,7 @@ impl AlarmClock {
         let nvs = EspNvs::new(nvs, NVS_NAMESPACE, true)
             .inspect_err(|e| log::error!("alarm: NVS: {e}; the state will not survive a reboot"))
             .ok();
-        let saved = nvs.as_ref().map(load).unwrap_or_default();
+        let saved = nvs.as_ref().map(load_state).unwrap_or_default();
         log::info!("alarm: {} alarms, {ring:?}, saved {saved:?}", alarms.len());
         for a in &alarms {
             log::info!("alarm: {a:?}");
@@ -209,7 +209,7 @@ impl AlarmClock {
         if self.previewing {
             log::info!(
                 "alarm: preview stopped (underruns so far: {})",
-                crate::audio::player::UNDERRUNS.load(std::sync::atomic::Ordering::Relaxed)
+                crate::audio::player::UNDERRUNS.load(Ordering::Relaxed)
             );
             self.previewing = false;
             if self.sounding.is_none() {
@@ -272,7 +272,7 @@ impl AlarmClock {
         if *state != self.saved {
             log::info!("alarm: {:?}", state.phase);
             if let Some(nvs) = &self.nvs {
-                save(nvs, state);
+                save_state(nvs, state);
             }
             self.saved = state.clone();
         }
@@ -305,7 +305,7 @@ impl AlarmClock {
     }
 }
 
-fn load(nvs: &EspNvs<NvsDefault>) -> State {
+fn load_state(nvs: &EspNvs<NvsDefault>) -> State {
     let mut buf = [0u8; 1024];
     match nvs.get_str(NVS_KEY, &mut buf) {
         Ok(Some(json)) => State::from_json(json).unwrap_or_else(|e| {
@@ -320,7 +320,7 @@ fn load(nvs: &EspNvs<NvsDefault>) -> State {
     }
 }
 
-fn save(nvs: &EspNvs<NvsDefault>, state: &State) {
+fn save_state(nvs: &EspNvs<NvsDefault>, state: &State) {
     if let Err(e) = nvs.set_str(NVS_KEY, &state.to_json()) {
         log::error!("alarm: saving the state: {e}");
     }

@@ -41,21 +41,9 @@ pub fn start(
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(500), move || {
         let Some(window) = weak.upgrade() else { return };
-        if ticks.is_multiple_of(10) {
-            let now = ina226::on_battery(&bus);
-            if now != on_battery {
-                log::info!("power: on {}", if now { "battery" } else { "USB power" });
-                on_battery = now;
-            }
-        }
         ticks = ticks.wrapping_add(1);
-        let allowed = match cfg.sleep_when {
-            SleepWhen::Never => false,
-            SleepWhen::Always => true,
-            SleepWhen::Dark | SleepWhen::Unknown => crate::ambient::night() || on_battery,
-        };
-        let ringing = matches!(alarm.borrow().view(), View::Ringing { .. });
         if cfg!(feature = "sleep-cycle-test") {
+            // Every 8 s.
             if ticks.is_multiple_of(16) {
                 if power::asleep() {
                     power::wake()
@@ -65,6 +53,20 @@ pub fn start(
             }
             return;
         }
+        // At the first tick, then every 5 s.
+        if ticks % 10 == 1 {
+            let now = ina226::on_battery(&bus);
+            if now != on_battery {
+                log::info!("power: on {}", if now { "battery" } else { "USB power" });
+                on_battery = now;
+            }
+        }
+        let allowed = match cfg.sleep_when {
+            SleepWhen::Never => false,
+            SleepWhen::Always => true,
+            SleepWhen::Dark | SleepWhen::Unknown => crate::ambient::night() || on_battery,
+        };
+        let ringing = matches!(alarm.borrow().view(), View::Ringing { .. });
         #[cfg(feature = "debug-overlay")]
         window.set_debug_text(debug_text(&cfg, allowed, ringing, window.get_page()).into());
         let soon = alarm
@@ -80,7 +82,11 @@ pub fn start(
             if ringing || !allowed {
                 log::info!(
                     "power: woken ({}), light {:.1}",
-                    if ringing { "ringing" } else { "no longer dark" },
+                    if ringing {
+                        "ringing"
+                    } else {
+                        "sleep no longer allowed"
+                    },
                     crate::ambient::last_light()
                 );
                 power::wake();
@@ -91,7 +97,7 @@ pub fn start(
         } else if allowed
             && !ringing
             && window.get_page() == Page::Clock
-            && input::idle().as_millis() >= u64::from(cfg.sleep_after_s) * 1000
+            && input::idle().as_secs() >= u64::from(cfg.sleep_after_s)
         {
             power::sleep();
         }
