@@ -332,10 +332,28 @@ impl Client {
     }
 
     /// Opens and sets up a new device. `Ok(false)`: not an audio device we
-    /// can use (closed again).
+    /// can use. Either way but `Ok(true)` the device is closed again.
     fn open(&mut self, address: u8) -> Result<bool, EspError> {
         let mut handle: sys::usb_device_handle_t = ptr::null_mut();
+        // SAFETY: plain driver call; `handle` is an out-parameter.
         unsafe { esp!(sys::usb_host_device_open(self.handle, address, &mut handle))? };
+        let result = self.set_up(address, handle);
+        if !matches!(result, Ok(true)) {
+            if self.device.is_some() {
+                self.teardown();
+            } else {
+                // SAFETY: opened above, nothing claimed.
+                unsafe { sys::usb_host_device_close(self.handle, handle) };
+            }
+        }
+        result
+    }
+
+    /// [`open`](Self::open) for the opened `handle`: claims the stream
+    /// interface (then `self.device` holds it) and sets the device up.
+    fn set_up(&mut self, address: u8, handle: sys::usb_device_handle_t) -> Result<bool, EspError> {
+        // SAFETY: the descriptors belong to the open device and stay valid
+        // while it is open; `wTotalLength` is the configuration's size.
         let f = unsafe {
             let mut dev_desc: *const sys::usb_device_desc_t = ptr::null();
             esp!(sys::usb_host_get_device_descriptor(handle, &mut dev_desc))?;
@@ -361,7 +379,6 @@ impl Client {
             .cloned()
         else {
             log::warn!("uac: device {address} has no 48 kHz / 16 bit / stereo output; ignored");
-            unsafe { sys::usb_host_device_close(self.handle, handle) };
             return Ok(false);
         };
         unsafe {
