@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    name: wakey-core
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wakey-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wakey-core
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  ui-preview:
+    name: ui-preview (renders every page, checks the list rows)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/ui-preview
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/ui-preview
+      - run: cargo fmt --check
+      - run: cargo clippy -- -D warnings
+      - run: cargo run --release -- "$RUNNER_TEMP/ui-preview"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: ${{ runner.temp }}/ui-preview
+
+  firmware-fmt:
+    name: firmware (format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml pins the nightly the ESP-IDF target needs.
+      - run: rustup show active-toolchain || rustup toolchain install
+        working-directory: firmware
+      - run: cargo fmt --check
+        working-directory: firmware
+
+  c6-stream:
+    name: C6 AirDrop stream decoder (host test, sanitizers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./fetch.sh
+        working-directory: firmware/c6/airdrop
+      - run: ./test/run.sh
+        working-directory: firmware/c6/airdrop
