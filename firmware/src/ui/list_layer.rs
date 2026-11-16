@@ -283,30 +283,9 @@ pub struct ListLayer<S: ListSource> {
     caps: Vec<(usize, Vec<u8>)>,
     /// This frame's copies came from the layer (the caps go on them).
     drew: bool,
-    /// Rows rendered and the time it took (logged every 32 rows).
-    rendered: (u32, Duration),
-    /// This scroll's frame timing (logged when it ends).
-    scroll_log: ScrollLog,
+    /// Logged for performance work.
+    timing: Timing,
 }
-
-/// Frame timing of one scroll: start-to-start gaps of the layer's frames
-/// and the render loop's own time in the frame before each late one.
-#[derive(Default)]
-struct ScrollLog {
-    since: Option<Instant>,
-    last_start: Option<Instant>,
-    /// The previous frame's time from `start` to the end of `finish`.
-    last_busy: Duration,
-    frames: u32,
-    late: u32,
-    /// Longest gap and the busy time of the frame before it.
-    worst: (Duration, Duration),
-    rows: u32,
-    rows_time: Duration,
-}
-
-/// A gap longer than this missed a panel refresh (15.2 ms at 66 Hz).
-const LATE: Duration = Duration::from_millis(20);
 
 impl<S: ListSource> ListLayer<S> {
     /// `row_window` must be the offscreen window of the row component
@@ -392,8 +371,7 @@ impl<S: ListSource> ListLayer<S> {
             shown: None,
             caps: layout.corners.map_or(Vec::new(), |(r, _)| caps(&layout, r)),
             drew: false,
-            rendered: (0, Duration::from_ticks(0)),
-            scroll_log: ScrollLog::default(),
+            timing: Timing::default(),
         }
     }
 
@@ -486,19 +464,7 @@ impl<S: ListSource> ListLayer<S> {
         let t = Instant::now();
         platform::render_offscreen(&self.row_window, rot, target);
         self.slot_row[i % slots] = Some((i, stamp));
-        self.rendered.0 += 1;
-        self.rendered.1 += t.elapsed();
-        if self.composing {
-            self.scroll_log.rows += 1;
-            self.scroll_log.rows_time += t.elapsed();
-        }
-        if self.rendered.0 == 32 {
-            log::info!(
-                "list layer: 32 rows rendered, {} µs each",
-                self.rendered.1.as_micros() / 32
-            );
-            self.rendered = (0, Duration::from_ticks(0));
-        }
+        self.timing.row_rendered(t.elapsed(), self.composing);
     }
 
     /// Next row near the view that is missing or stale, nearest first,
@@ -688,19 +654,7 @@ impl<S: ListSource> ListLayer<S> {
 
     /// Hands the list back to the page where it is.
     fn stop_composing(&mut self) {
-        let l = core::mem::take(&mut self.scroll_log);
-        if let Some(since) = l.since {
-            log::info!(
-                "list layer: scroll {} frames in {} ms, {} late (worst {} ms, busy {} ms before), {} rows rendered ({} ms)",
-                l.frames,
-                since.elapsed().as_millis(),
-                l.late,
-                l.worst.0.as_millis(),
-                l.worst.1.as_millis(),
-                l.rows,
-                l.rows_time.as_millis()
-            );
-        }
+        self.timing.scroll_ended();
         self.composing = false;
         self.touch = Touch::None;
         let offset = self
@@ -1024,20 +978,7 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
     fn start(&mut self, fb: Target, rot: &mut PpaRotator) {
         self.frame_start = Instant::now();
         if self.composing {
-            let l = &mut self.scroll_log;
-            let now = self.frame_start;
-            l.since.get_or_insert(now);
-            if let Some(last) = l.last_start {
-                let gap = now - last;
-                if gap > LATE {
-                    l.late += 1;
-                }
-                if gap > l.worst.0 {
-                    l.worst = (gap, l.last_busy);
-                }
-            }
-            l.last_start = Some(now);
-            l.frames += 1;
+            self.timing.scroll_frame(self.frame_start);
         }
         self.pending.clear();
         self.drew = false;
@@ -1085,7 +1026,7 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
         if self.drew && self.swipe.is_none() {
             self.apply_caps(self.fb.buf);
         }
-        self.scroll_log.last_busy = self.frame_start.elapsed();
+        self.timing.frame_busy = self.frame_start.elapsed();
     }
 
     fn overlaps(&mut self, x: Range<usize>, y: Range<usize>) -> bool {
@@ -1129,6 +1070,85 @@ fn caps(layout: &Layout, radius: usize) -> Vec<(usize, Vec<u8>)> {
         }
     }
     runs
+}
+
+/// Timing for performance work, logged at debug level: the render time
+/// per row (every 32 rows), and each scroll's frames when it ends.
+#[derive(Default)]
+struct Timing {
+    /// Rows rendered since the last log, and the time they took.
+    rows: (u32, Duration),
+    /// The last frame's time from `start` to the end of `finish`.
+    frame_busy: Duration,
+    scroll: ScrollTiming,
+}
+
+/// One scroll: start-to-start gaps of the layer's frames, and the layer's
+/// own time in the frame before the longest one.
+#[derive(Default)]
+struct ScrollTiming {
+    since: Option<Instant>,
+    last_start: Option<Instant>,
+    frames: u32,
+    late: u32,
+    /// Longest gap and the busy time of the frame before it.
+    worst: (Duration, Duration),
+    rows: u32,
+    rows_time: Duration,
+}
+
+/// A gap longer than this missed a panel refresh (15.2 ms at 66 Hz).
+const LATE: Duration = Duration::from_millis(20);
+
+impl Timing {
+    fn row_rendered(&mut self, took: Duration, scrolling: bool) {
+        if scrolling {
+            self.scroll.rows += 1;
+            self.scroll.rows_time += took;
+        }
+        self.rows.0 += 1;
+        self.rows.1 += took;
+        if self.rows.0 == 32 {
+            log::debug!(
+                "list layer: 32 rows rendered, {} µs each",
+                self.rows.1.as_micros() / 32
+            );
+            self.rows = Default::default();
+        }
+    }
+
+    /// A frame of a scroll starts at `now`.
+    fn scroll_frame(&mut self, now: Instant) {
+        let s = &mut self.scroll;
+        s.since.get_or_insert(now);
+        if let Some(last) = s.last_start {
+            let gap = now - last;
+            if gap > LATE {
+                s.late += 1;
+            }
+            if gap > s.worst.0 {
+                s.worst = (gap, self.frame_busy);
+            }
+        }
+        s.last_start = Some(now);
+        s.frames += 1;
+    }
+
+    fn scroll_ended(&mut self) {
+        let s = core::mem::take(&mut self.scroll);
+        if let Some(since) = s.since {
+            log::debug!(
+                "list layer: scroll {} frames in {} ms, {} late (worst {} ms, busy {} ms before), {} rows rendered ({} ms)",
+                s.frames,
+                since.elapsed().as_millis(),
+                s.late,
+                s.worst.0.as_millis(),
+                s.worst.1.as_millis(),
+                s.rows,
+                s.rows_time.as_millis()
+            );
+        }
+    }
 }
 
 /// Two list layers whose pages are never on screen together, sharing one
