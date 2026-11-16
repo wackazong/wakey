@@ -237,6 +237,19 @@ impl Preview {
         println!("         {}", path.display());
     }
 
+    /// Renders until the running animations (e.g. the tab bar's slide) have
+    /// ended, so the next shot shows the settled page.
+    fn settle(&self) {
+        let start = std::time::Instant::now();
+        loop {
+            self.frame();
+            if !self.window.has_active_animations() || start.elapsed().as_secs() >= 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    }
+
     fn shot(&self, name: &str) {
         if !self.wanted(name) {
             return;
@@ -657,6 +670,7 @@ fn main() {
     sp.set_shown_tab(SoundTab::Tidal);
     sp.set_tidal_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
     sp.set_tidal_empty("TIDAL ist noch nicht eingerichtet.".into());
+    p.settle();
     p.shot("3-sound-tidal");
     // TIDAL tracks: one selected, one downloading, one selected and
     // downloading (the selection must show next to the progress bar).
