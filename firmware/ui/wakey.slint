@@ -6,7 +6,8 @@
 // One font face only: Slint pre-renders every imported face at every pixel
 // size used in this program (ASCII plus the characters of string
 // literals), and the 280 px digits alone are about 2 MB of flash per face.
-// Sizes in use: 30, 40, 64, 280 px (see `wakey/theme.slint`); reuse them.
+// Sizes in use: 30, 40, 64, 72, 280 px (see `wakey/theme.slint`); reuse
+// them.
 
 import "fonts/Inter-24pt-Medium.ttf";
 import { Theme } from "wakey/theme.slint";
@@ -57,8 +58,8 @@ export component AppWindow inherits Window {
     // Never shown: makes the compiler embed glyphs that only appear in
     // strings set from Rust (dates, Wi-Fi errors, alarm names, file
     // names).
-    // Also typographic quotes and accented letters: titles from TIDAL
-    // ("Can’t") showed a blob for the right single quotation mark.
+    // Also typographic quotes and accented letters for titles from TIDAL
+    // ("Can’t"): a glyph not embedded draws as a blob.
     Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 30px; }
     Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 40px; }
 
@@ -85,7 +86,8 @@ export component AppWindow inherits Window {
             y: 4px;
             text: root.debug-text;
             color: white;
-            font-size: 20px;
+            // A size the pages use: one of its own would cost flash.
+            font-size: 30px;
         }
     }
     // At the window's origin (an element without x/y is centred).

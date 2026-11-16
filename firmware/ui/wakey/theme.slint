@@ -2,9 +2,9 @@
 // display is the room's night light, so no large bright areas. Flat: fills
 // mark controls, no outlines.
 //
-// Four font sizes in the whole program (every size costs flash, it is
+// Five font sizes in the whole program (every size costs flash, it is
 // pre-rendered): 30 px secondary text, 40 px primary text and buttons,
-// 64 px numbers, 280 px the clock face.
+// 64 px numbers, 72 px the alarm page's wheels, 280 px the clock face.
 
 export global Theme {
     out property <color> background: #0b0e12;
@@ -247,7 +247,7 @@ export component VolumeBars inherits Rectangle {
 }
 
 // A row of pills, one selected (`selected`). As high as a Button (88 px):
-// smaller targets were missed.
+// smaller targets get missed.
 export component Pills inherits Rectangle {
     in property <[string]> items;
     in property <int> selected;
@@ -274,8 +274,7 @@ export component Pills inherits Rectangle {
     }
 }
 
-// A horizontal slider, 0–100.
-// 0–100, or from `minimum`.
+// A horizontal slider, `minimum` (default 0) to 100.
 export component Slider inherits Rectangle {
     in-out property <int> value;
     in property <int> minimum: 0;
