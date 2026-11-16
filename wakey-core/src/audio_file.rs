@@ -1,6 +1,7 @@
 //! Audio files: WAV (RIFF/WAVE) and AIFF/AIFC, uncompressed, FLAC
 //! (decoded with `claxon`; TIDAL's lossless format), and AAC or ALAC in
-//! MP4/M4A (what iPhones send) and MP3, decoded with `symphonia`.
+//! MP4/M4A (what iPhones send), MP3 and ADTS AAC, decoded with
+//! `symphonia`.
 //!
 //! [`AudioFile::open`] reads the header; [`AudioFile::read`] returns
 //! interleaved **stereo i16** frames at the file's own sample rate: mono is
@@ -37,7 +38,7 @@ pub struct Format {
     pub sample_rate: u32,
     pub channels: u16,
     pub bits: u16,
-    /// Frames in the file.
+    /// Frames in the file (0 if unknown, e.g. MP3).
     pub frames: u64,
     big_endian: bool,
     /// 8-bit WAV is unsigned, 8-bit AIFF signed.
@@ -45,6 +46,17 @@ pub struct Format {
 }
 
 impl Format {
+    /// Rejects what [`AudioFile::read`] cannot turn into stereo i16.
+    fn check(&self) -> io::Result<()> {
+        if self.sample_rate == 0 {
+            return Err(bad("no sample rate"));
+        }
+        if self.channels == 0 || self.channels > 2 || !(8..=32).contains(&self.bits) {
+            return Err(bad("unsupported channels or bit depth"));
+        }
+        Ok(())
+    }
+
     fn bytes_per_sample(&self) -> usize {
         usize::from(self.bits).div_ceil(8)
     }
@@ -72,13 +84,19 @@ struct Locked<R>(Mutex<R>, Option<u64>);
 
 impl<R: Read> Read for Locked<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.get_mut().unwrap_or_else(|e| e.into_inner()).read(buf)
+        self.0
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .read(buf)
     }
 }
 
 impl<R: Seek> Seek for Locked<R> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.0.get_mut().unwrap_or_else(|e| e.into_inner()).seek(pos)
+        self.0
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .seek(pos)
     }
 }
 
@@ -118,6 +136,9 @@ enum Body<R: Read> {
         /// The last decoded packet as stereo frames, and the next one in it.
         pcm: Vec<i16>,
         pos: usize,
+        /// The decoder's interleaved output, kept to avoid an allocation
+        /// per packet.
+        scratch: Vec<i16>,
     },
 }
 
@@ -179,7 +200,7 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
         let codec = if &head[4..8] == b"ftyp" {
             Some((Container::Mp4, "m4a"))
         } else if &head[0..3] == b"ID3" || (head[0] == 0xFF && head[1] & 0xE6 == 0xE2) {
-            // An ID3 tag, or an MPEG audio frame (layer bits not 00).
+            // An ID3 tag, or an MPEG Layer III frame header.
             Some((Container::Mp3, "mp3"))
         } else if head[0] == 0xFF && head[1] & 0xF6 == 0xF0 {
             Some((Container::Adts, "aac"))
@@ -196,9 +217,7 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
             (b"FORM", b"AIFC") => Self::parse_aiff(&mut reader, true)?,
             _ => return Err(bad("not a WAV, AIFF, FLAC, M4A or MP3 file")),
         };
-        if format.channels == 0 || format.channels > 2 || !(8..=32).contains(&format.bits) {
-            return Err(bad("unsupported channels or bit depth"));
-        }
+        format.check()?;
         let remaining = format.frames;
         Ok(Self {
             format,
@@ -222,9 +241,7 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
             big_endian: false,
             unsigned8: false,
         };
-        if format.channels == 0 || format.channels > 2 || !(8..=32).contains(&format.bits) {
-            return Err(bad("unsupported channels or bit depth"));
-        }
+        format.check()?;
         Ok(Self {
             format,
             body: Body::Flac {
@@ -236,11 +253,18 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
         })
     }
 
-    fn open_codec(mut reader: R, container: Container, extension: &'static str) -> io::Result<Self> {
+    fn open_codec(
+        mut reader: R,
+        container: Container,
+        extension: &'static str,
+    ) -> io::Result<Self> {
         // Unknown for a file still being written (its end moves).
         let len = reader.seek(SeekFrom::End(0)).ok();
         reader.seek(SeekFrom::Start(0))?;
-        let source = MediaSourceStream::new(Box::new(Locked(Mutex::new(reader), len)), Default::default());
+        let source = MediaSourceStream::new(
+            Box::new(Locked(Mutex::new(reader), len)),
+            Default::default(),
+        );
         let reader = probe(source, extension)?;
         let track = reader
             .first_track_known_codec(TrackType::Audio)
@@ -257,7 +281,10 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
         }
         let format = Format {
             container,
-            sample_rate: params.sample_rate.ok_or_else(|| bad("no sample rate"))?,
+            sample_rate: params
+                .sample_rate
+                .filter(|&r| r != 0)
+                .ok_or_else(|| bad("no sample rate"))?,
             channels,
             bits: 16,
             frames: track.num_frames.unwrap_or(0),
@@ -274,6 +301,7 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                 decoder,
                 pcm: Vec::new(),
                 pos: 0,
+                scratch: Vec::new(),
             },
         })
     }
@@ -288,7 +316,9 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                     if len < 16 {
                         return Err(bad("WAV fmt chunk too short"));
                     }
-                    let mut f = vec![0u8; len as usize];
+                    // Only the first 16 bytes matter; the length comes
+                    // from the file and is not trusted for an allocation.
+                    let mut f = [0u8; 16];
                     r.read_exact(&mut f)?;
                     let tag = u16::from_le_bytes([f[0], f[1]]);
                     // 1 = PCM, 0xFFFE = extensible (assumed PCM sub-format).
@@ -299,9 +329,7 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                     let rate = u32::from_le_bytes(f[4..8].try_into().unwrap());
                     let bits = u16::from_le_bytes([f[14], f[15]]);
                     fmt = Some((channels, rate, bits));
-                    if len % 2 == 1 {
-                        r.seek_relative(1)?;
-                    }
+                    r.seek_relative((len - 16 + len % 2) as i64)?;
                 }
                 b"data" => {
                     let (channels, sample_rate, bits) =
@@ -331,14 +359,16 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                     if len < 18 {
                         return Err(bad("AIFF COMM chunk too short"));
                     }
-                    let mut c = vec![0u8; len as usize];
-                    r.read_exact(&mut c)?;
+                    // Up to the AIFC compression type; the rest is skipped.
+                    let mut c = [0u8; 22];
+                    let n = (len as usize).min(c.len());
+                    r.read_exact(&mut c[..n])?;
                     let channels = u16::from_be_bytes([c[0], c[1]]);
                     let frames = u32::from_be_bytes(c[2..6].try_into().unwrap());
                     let bits = u16::from_be_bytes([c[6], c[7]]);
                     let rate = extended_to_u32(c[8..18].try_into().unwrap());
                     // AIFC: 'NONE'/'twos' = big-endian PCM, 'sowt' = little-endian.
-                    let big_endian = if aifc && c.len() >= 22 {
+                    let big_endian = if aifc && n >= 22 {
                         match &c[18..22] {
                             b"NONE" | b"twos" => true,
                             b"sowt" => false,
@@ -348,9 +378,7 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                         true
                     };
                     comm = Some((channels, frames, bits, rate, big_endian));
-                    if len % 2 == 1 {
-                        r.seek_relative(1)?;
-                    }
+                    r.seek_relative((len - n as u64 + len % 2) as i64)?;
                 }
                 b"SSND" => {
                     let (channels, frames, bits, sample_rate, big_endian) =
@@ -437,18 +465,17 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                 let stereo = f.channels == 2;
                 let mut done = 0;
                 for dst in out.as_chunks_mut::<2>().0 {
-                    if *pos == *len {
-                        let Some(r) = reader.as_mut() else { break };
+                    while *pos == *len {
+                        let Some(r) = reader.as_mut() else {
+                            return Ok(done);
+                        };
                         match r.blocks().read_next_or_eof(core::mem::take(block)) {
                             Ok(Some(b)) => {
                                 *len = b.duration() as usize;
                                 *pos = 0;
                                 *block = b.into_buffer();
-                                if *len == 0 {
-                                    continue;
-                                }
                             }
-                            Ok(None) => break,
+                            Ok(None) => return Ok(done),
                             Err(e) => return Err(flac_error(e)),
                         }
                     }
@@ -466,13 +493,16 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                 track,
                 pcm,
                 pos,
+                scratch,
                 ..
             } => {
-                let Some(reader) = reader.as_mut() else { return Ok(0) };
+                let Some(reader) = reader.as_mut() else {
+                    return Ok(0);
+                };
                 let mut done = 0;
                 for dst in out.as_chunks_mut::<2>().0 {
                     while *pos == pcm.len() {
-                        if !next_packet(reader.as_mut(), decoder.as_mut(), *track, pcm)? {
+                        if !next_packet(reader.as_mut(), decoder.as_mut(), *track, pcm, scratch)? {
                             return Ok(done);
                         }
                         *pos = 0;
@@ -518,7 +548,10 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
                 // Opened afresh: symphonia 0.6.1's MP4 reader, sought back
                 // to 0 after its end, fails the next read ("no atom
                 // pending read").
-                let mut source = reader.take().ok_or_else(|| bad("reader lost"))?.into_inner();
+                let mut source = reader
+                    .take()
+                    .ok_or_else(|| bad("reader lost"))?
+                    .into_inner();
                 source.seek(SeekFrom::Start(0))?;
                 *reader = Some(probe(source, extension)?);
                 decoder.reset();
@@ -535,24 +568,32 @@ fn probe(source: MediaSourceStream<'static>, extension: &str) -> io::Result<Box<
     let mut hint = Hint::new();
     hint.with_extension(extension);
     symphonia::default::get_probe()
-        .probe(&hint, source, FormatOptions::default(), MetadataOptions::default())
+        .probe(
+            &hint,
+            source,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
         .map_err(codec_error)
 }
 
 /// Decodes the next packet of `track` into `pcm` as stereo i16 (mono
 /// doubled, channels beyond two dropped). False at the end. A damaged
-/// packet is skipped.
+/// packet is skipped. `scratch` takes the decoder's interleaved samples.
 fn next_packet(
     reader: &mut dyn FormatReader,
     decoder: &mut dyn AudioDecoder,
     track: u32,
     pcm: &mut Vec<i16>,
+    scratch: &mut Vec<i16>,
 ) -> io::Result<bool> {
     loop {
         let packet = match reader.next_packet() {
             Ok(Some(p)) => p,
             Ok(None) => return Ok(false),
-            Err(SymphoniaError::IoError(e)) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+            Err(SymphoniaError::IoError(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                return Ok(false);
+            }
             Err(SymphoniaError::ResetRequired) => {
                 decoder.reset();
                 continue;
@@ -571,10 +612,9 @@ fn next_packet(
         if decoded.frames() == 0 || channels == 0 {
             continue;
         }
-        let mut samples: Vec<i16> = Vec::new();
-        decoded.copy_to_vec_interleaved(&mut samples);
+        decoded.copy_to_vec_interleaved(scratch);
         pcm.clear();
-        for frame in samples.chunks_exact(channels) {
+        for frame in scratch.chunks_exact(channels) {
             let l = frame[0];
             let r = if channels >= 2 { frame[1] } else { l };
             pcm.extend_from_slice(&[l, r]);
@@ -771,7 +811,11 @@ mod tests {
         let n = 2 * expected;
         let decoded = &samples[2 * PRIMING..2 * PRIMING + n];
         let energy: f64 = wav.iter().map(|&v| f64::from(v).powi(2)).sum();
-        let error: f64 = decoded.iter().zip(&wav).map(|(&a, &b)| f64::from(a - b).powi(2)).sum();
+        let error: f64 = decoded
+            .iter()
+            .zip(&wav)
+            .map(|(&a, &b)| f64::from(a - b).powi(2))
+            .sum();
         assert!(error < 0.1 * energy, "error {error:.0}, energy {energy:.0}");
     }
 
@@ -784,6 +828,33 @@ mod tests {
         assert_eq!(f.container, Container::Mp3);
         assert!((samples.len() / 2).abs_diff(wav.len() / 2) <= 4096);
         assert!(samples.iter().any(|&s| s.unsigned_abs() > 1000));
+    }
+
+    #[test]
+    fn header_chunk_lengths_are_not_trusted() {
+        // A longer fmt chunk (WAVE_FORMAT_EXTENSIBLE style): the extra
+        // bytes are skipped.
+        let mut v = wav(2, 16, 48_000, &[1, 0, 2, 0]);
+        let fmt = v.windows(4).position(|w| w == b"fmt ").unwrap();
+        v[fmt + 4..fmt + 8].copy_from_slice(&18u32.to_le_bytes());
+        v.splice(fmt + 24..fmt + 24, [0, 0]);
+        let mut f = AudioFile::from_reader(Cursor::new(v.clone())).unwrap();
+        let mut out = [0i16; 2];
+        assert_eq!(f.read(&mut out).unwrap(), 1);
+        assert_eq!(out, [1, 2]);
+        // A length of ~4 GB fails at the end of the file, without
+        // allocating it.
+        v[fmt + 4..fmt + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(AudioFile::from_reader(Cursor::new(v)).is_err());
+        let mut a = aiff(2, 16, 1, &[0; 4]);
+        let comm = a.windows(4).position(|w| w == b"COMM").unwrap();
+        a[comm + 4..comm + 8].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(AudioFile::from_reader(Cursor::new(a)).is_err());
+    }
+
+    #[test]
+    fn rejects_a_zero_sample_rate() {
+        assert!(AudioFile::from_reader(Cursor::new(wav(2, 16, 0, &[0; 4]))).is_err());
     }
 
     #[test]
