@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Alexander Walter
+# SPDX-License-Identifier: MIT OR Apache-2.0
 idf_component_register(SRCS "rescue.c"
                        PRIV_REQUIRES esp-serial-flasher esp_driver_i2c esp_driver_gpio esp_rom
                        EMBED_FILES "${CMAKE_CURRENT_LIST_DIR}/../../esp_hosted_slave-2.13.1-esp32c6.bin")

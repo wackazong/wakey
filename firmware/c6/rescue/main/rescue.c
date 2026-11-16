@@ -1,4 +1,7 @@
-/* c6-rescue: reflash the Tab5's ESP32-C6 with esp_hosted from the P4, over SDIO.
+/* SPDX-FileCopyrightText: 2026 Alexander Walter
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ *
+ * c6-rescue: reflash the Tab5's ESP32-C6 with esp_hosted from the P4, over SDIO.
  *
  * For a C6 that no longer runs esp_hosted, so that esp_hosted's own OTA cannot reach it.
  * The C6's ROM loader speaks SDIO in download mode (joint download boot). The P4 drives
@@ -7,7 +10,8 @@
  *
  * 1. C6 power on (IO expander B, P0), then reset into the ROM loader until it answers
  *    (it does once the bridge is in place).
- * 2. Read the C6's partition table and what each app slot holds (logged).
+ * 2. Read the C6's partition table and what each app slot holds (logged). A blank
+ *    table means the standard layout; an unreadable one stops the tool.
  * 3. Write esp_hosted 2.13.1 (firmware/c6/) into the slot the bootloader starts when
  *    otadata is blank (factory, else ota_0), verified by MD5; then erase otadata.
  * 4. Wait for the bridge to be removed and let the C6 boot.
@@ -91,7 +95,14 @@ static int read_partitions(esp_loader_t *loader, struct Part *out, int max) {
   int n = 0;
   for (size_t at = 0; at + 32 <= sizeof table && n < max; at += 32) {
     const uint8_t *e = table + at;
-    if (e[0] != 0xAA || e[1] != 0x50) break; /* 0xEBEB: the MD5 entry; 0xFFFF: end */
+    if (e[0] != 0xAA || e[1] != 0x50) {
+      /* 0xEBEB: the MD5 entry; 0xFFFF: the end, or a blank table at the start */
+      if (at == 0 && !(e[0] == 0xFF && e[1] == 0xFF)) {
+        ESP_LOGW(TAG, "no partition table at 0x8000 (%02x %02x)", e[0], e[1]);
+        return -1;
+      }
+      break;
+    }
     struct Part *p = &out[n++];
     p->type = e[2];
     p->subtype = e[3];
@@ -103,7 +114,7 @@ static int read_partitions(esp_loader_t *loader, struct Part *out, int max) {
   return n;
 }
 
-/* What an app slot holds: "network_adapter 2.13.1", "wakey_airdrop_c6 0.1.0", or empty. */
+/* What an app slot holds: "network_adapter 2.13.1", "wakey_airdrop_c6 1.1.0", or empty. */
 static void describe_app(esp_loader_t *loader, uint32_t offset, char *out, size_t cap) {
   uint8_t head[APP_DESC_OFFSET + 112];
   if (esp_loader_flash_read(loader, head, offset, sizeof head) != ESP_LOADER_SUCCESS) {
@@ -142,7 +153,10 @@ static void write_image(esp_loader_t *loader, uint32_t offset, const uint8_t *im
 void app_main(void) {
   const uint32_t hosted_len = (uint32_t)(hosted_end - hosted_start);
   ESP_LOGI(TAG, "c6-rescue: esp_hosted image %" PRIu32 " bytes", hosted_len);
-  if (hosted_len < 256 || memcmp(hosted_start + APP_DESC_OFFSET + 48, "network_adapter", 16) != 0)
+  uint32_t magic = 0;
+  if (hosted_len >= APP_DESC_OFFSET + 4) memcpy(&magic, hosted_start + APP_DESC_OFFSET, 4);
+  if (hosted_len < 256 || hosted_start[0] != 0xE9 || magic != APP_DESC_MAGIC ||
+      memcmp(hosted_start + APP_DESC_OFFSET + 48, "network_adapter", 16) != 0)
     halt("the embedded image is not esp_hosted's network_adapter");
 
   c6_power_on();
@@ -183,6 +197,9 @@ void app_main(void) {
   /* 2. What is there. */
   struct Part parts[16];
   int n = read_partitions(&loader, parts, 16);
+  /* Unreadable: writing at a guessed offset could destroy what is there. Blank
+     (n == 0): nothing to lose, and the standard layout is the best guess. */
+  if (n < 0) halt("the C6's partition table cannot be read");
   uint32_t otadata_off = 0xD000, otadata_size = 0x2000, app_off = 0x10000, app_size = 0;
   if (n > 0) {
     int factory = -1, ota0 = -1, otadata = -1;
