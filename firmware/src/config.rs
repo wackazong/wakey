@@ -17,9 +17,8 @@ pub const FILE: &str = "config.json";
 
 /// Reads the configuration; a missing file gives the defaults (first
 /// setup). A file that cannot be read is an error (in words, for the
-/// screen): the clock must not run on defaults and overwrite it later. An
-/// old `alarm` section is migrated and settings missing from the file are
-/// added to it.
+/// screen): the clock must not run on defaults and overwrite it later.
+/// Settings missing from the file are added to it.
 pub fn load() -> Result<Config, String> {
     let path = sd::path(FILE);
     let mut cfg = match std::fs::read_to_string(&path) {

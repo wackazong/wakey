@@ -14,7 +14,7 @@ The Tab5 ships with M5Stack's slave 1.4.1. It works with the host, but logs warn
 
 ## Updating a Tab5's C6
 
-Nothing to do: after the first Wi-Fi session of a boot the firmware installs its own esp_hosted and the AirDrop receiver if the C6 lacks them, in the background (~35 s), also over the factory 1.4.1. The log says `airdrop: the C6 is set up for AirDrop`.
+Nothing to do: after the first Wi-Fi session of a boot the firmware installs its own esp_hosted and the AirDrop receiver if the C6 lacks them, in the background (~35 s), also over the factory 1.4.1. Wakey's esp_hosted is also replaced when its version differs from the image in the partition. The log says `c6: set up for AirDrop`.
 
 A failed install leaves the C6 on its old firmware. The C6 has no rollback: if it does not answer after an update, reflash it by cable through header J1 "C6_ISP" (`docs/hardware.md`): 3.3 V USB-UART adapter, IO9 to GND during reset, then `esptool --chip esp32c6 write_flash 0x10000 <image>` (or M5Stack's factory image through M5Burner). Without an adapter: bridge only G9 to GND there and let the P4 reflash the C6 over SDIO with [`rescue/`](airdrop/README.md#recovery).
 
@@ -23,7 +23,7 @@ A failed install leaves the C6 on its old firmware. The C6 has no rollback: if i
 For AirDrop the C6 holds two images in its two app slots (how it switches: [architecture.md](../../docs/architecture.md#airdrop)). Both go into the P4's flash partition `c6` ([`pack.py`](pack.py), written by `scripts/flash.sh`, which takes the partition's offset and size from `partitions.csv`); the firmware installs them on the C6 by esp_hosted's OTA when they are missing, in the background after the first Wi-Fi session of a boot.
 
 - `esp_hosted_slave-2.13.1-wakey2-esp32c6.bin`: esp_hosted 2.13.1 with Wakey's addition ([`hosted/wakey_switch.c`](hosted/wakey_switch.c), [`hosted/wakey.patch`](hosted/wakey.patch)): two peer-data messages, what the other slot holds (and which esp_hosted runs) and boot it. Version string "2.13.1-wakey2" (the suffix is set in `wakey.patch`); its RPC version is 2.13.1, as the stock image's. 1,230,576 bytes.
-- `wakey_airdrop_c6-1.1.0.bin`: the AirDrop receiver ([`airdrop/`](airdrop/main/main.cpp): ESP32Drop with Wakey's eight patches (`airdrop/patches`) and its streaming decoder, frames to the P4 on IO2, `airdrop/main/link.h`). 990,560 bytes of the 1,920 KiB app slot. `src/airdrop.rs` installs the receiver again when the version in the partition differs from the C6's, so every change needs a new `PROJECT_VER` (`airdrop/CMakeLists.txt`).
+- `wakey_airdrop_c6-1.1.0.bin`: the AirDrop receiver ([`airdrop/`](airdrop/main/main.cpp): ESP32Drop with Wakey's eight patches (`airdrop/patches`) and its streaming decoder, frames to the P4 on IO2, `airdrop/main/link.h`). 990,560 bytes of the 1,920 KiB app slot. `src/c6/mod.rs` installs the receiver again when the version in the partition differs from the C6's, so every change needs a new `PROJECT_VER` (`airdrop/CMakeLists.txt`).
 
 Packed, the partition's contents are 3.1 MB (the receiver's slot starts at 2 MiB).
 
@@ -34,7 +34,7 @@ The images are built with the firmware's own ESP-IDF 5.5.5 (`firmware/.embuild/e
 - esp_hosted: [`hosted/build.sh`](hosted/build.sh) builds Wakey's image, `hosted/build.sh --stock` the stock one. It takes the slave's sources from the esp_hosted component the firmware fetched (so build the firmware first), checks them against the hash in `firmware/components_esp32p4.lock`, pins the slave's own registry components with `hosted/dependencies.lock`, and writes `esp_hosted_slave-<version>-esp32c6.bin` here. Keep DIO flash mode (the default): QIO images of slaves 2.1–2.8 refuse later OTAs.
 - The receiver: [`airdrop/README.md`](airdrop/README.md#build-and-test).
 
-After a change: a new version (esp_hosted: the suffix in `hosted/wakey.patch`; the receiver: `PROJECT_VER`), the image here under its new name, the old one removed, the names in `pack.py` (and for the stock image in `rescue/`), the SHA-256 values above. When the host component is updated, build all three, and update `net::C6_FIRMWARE`.
+After a change: a new version (esp_hosted: the suffix in `hosted/wakey.patch`; the receiver: `PROJECT_VER`), the image here under its new name, the old one removed, the names in `pack.py` (and for the stock image in `rescue/`), the SHA-256 values above. When the host component is updated, build all three, and update `c6::C6_FIRMWARE`.
 
 Recovery if a receiver crashes before it makes esp_hosted the next boot: [`rescue/`](airdrop/README.md#recovery) (G9 bridged to GND, no adapter).
 
