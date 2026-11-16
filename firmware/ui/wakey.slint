@@ -115,6 +115,15 @@ export component AppWindow inherits Window {
         highlighted: root.list-row-highlighted;
         underlay: root.list-row-underlay;
     }
+    // The offscreen sound row's second line scrolls (`Marquee`, same font
+    // and box): only then does the row look different at another time.
+    sound-row-sub := Text {
+        visible: false;
+        text: root.sound-row.sub;
+        font-size: 30px;
+    }
+    out property <bool> sound-row-scrolls: root.sound-row.sub != "" && root.sound-row.kind != 4
+        && sound-row-sub.preferred-width > SoundListLayout.width - SoundListLayout.text-x(root.sound-row.kind, root.sound-row-tab) - 96px;
     if root.page == 7: SoundRowItem {
         x: 0;
         y: 0;

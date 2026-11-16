@@ -108,9 +108,10 @@ pub trait ListSource {
     /// The layer took over (a scroll or a swipe): drop any touch feedback
     /// on the page (a highlight).
     fn layer_started(&mut self);
-    /// When a scroll starts, render the visible rows again (they show
-    /// something that moved on the page meanwhile, e.g. scrolling text).
-    fn render_visible_on_scroll(&self) -> bool {
+    /// When a scroll starts, render visible row `i` again: it shows
+    /// something that moved on the page meanwhile (e.g. scrolling text).
+    /// Each such row costs the scroll's first frame its render time.
+    fn changes_on_scroll(&mut self, _i: usize) -> bool {
         false
     }
     /// The list stopped at `offset` (whole pixels): the page draws it there.
@@ -287,7 +288,28 @@ pub struct ListLayer<S: ListSource> {
     drew: bool,
     /// Rows rendered and the time it took (logged every 32 rows).
     rendered: (u32, Duration),
+    /// This scroll's frame timing (logged when it ends).
+    scroll_log: ScrollLog,
 }
+
+/// Frame timing of one scroll: start-to-start gaps of the layer's frames
+/// and the render loop's own time in the frame before each late one.
+#[derive(Default)]
+struct ScrollLog {
+    since: Option<Instant>,
+    last_start: Option<Instant>,
+    /// The previous frame's time from `start` to the end of `finish`.
+    last_busy: Duration,
+    frames: u32,
+    late: u32,
+    /// Longest gap and the busy time of the frame before it.
+    worst: (Duration, Duration),
+    rows: u32,
+    rows_time: Duration,
+}
+
+/// A gap longer than this missed a panel refresh (15.2 ms at 66 Hz).
+const LATE: Duration = Duration::from_millis(20);
 
 impl<S: ListSource> ListLayer<S> {
     /// `row_window` must be the offscreen window of the row component
@@ -398,6 +420,7 @@ impl<S: ListSource> ListLayer<S> {
             caps: layout.corners.map_or(Vec::new(), |(r, _)| caps(&layout, r)),
             drew: false,
             rendered: (0, Duration::from_ticks(0)),
+            scroll_log: ScrollLog::default(),
         }
     }
 
@@ -496,6 +519,10 @@ impl<S: ListSource> ListLayer<S> {
         self.slot_row[i % slots] = Some((i, stamp));
         self.rendered.0 += 1;
         self.rendered.1 += t.elapsed();
+        if self.composing {
+            self.scroll_log.rows += 1;
+            self.scroll_log.rows_time += t.elapsed();
+        }
         if self.rendered.0 == 32 {
             log::info!(
                 "list layer: 32 rows rendered, {} µs each",
@@ -613,11 +640,11 @@ impl<S: ListSource> ListLayer<S> {
             self.composing = true;
             self.shown = None;
             self.source.layer_started();
-            if self.source.render_visible_on_scroll()
-                && let Some((first, last)) = self.visible_rows(self.offset())
-            {
+            if let Some((first, last)) = self.visible_rows(self.offset()) {
                 for i in first..=last {
-                    self.slot_row[i % self.layout.slots] = None;
+                    if self.source.changes_on_scroll(i) {
+                        self.slot_row[i % self.layout.slots] = None;
+                    }
                 }
             }
         }
@@ -674,6 +701,19 @@ impl<S: ListSource> ListLayer<S> {
 
     /// Hands the list back to the page where it is.
     fn stop_composing(&mut self) {
+        let l = core::mem::take(&mut self.scroll_log);
+        if let Some(since) = l.since {
+            log::info!(
+                "list layer: scroll {} frames in {} ms, {} late (worst {} ms, busy {} ms before), {} rows rendered ({} ms)",
+                l.frames,
+                since.elapsed().as_millis(),
+                l.late,
+                l.worst.0.as_millis(),
+                l.worst.1.as_millis(),
+                l.rows,
+                l.rows_time.as_millis()
+            );
+        }
         self.composing = false;
         self.touch = Touch::None;
         let offset = self
@@ -1004,6 +1044,22 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
 
     fn start(&mut self, fb: Target, rot: &mut PpaRotator) {
         self.frame_start = Instant::now();
+        if self.composing {
+            let l = &mut self.scroll_log;
+            let now = self.frame_start;
+            l.since.get_or_insert(now);
+            if let Some(last) = l.last_start {
+                let gap = now - last;
+                if gap > LATE {
+                    l.late += 1;
+                }
+                if gap > l.worst.0 {
+                    l.worst = (gap, l.last_busy);
+                }
+            }
+            l.last_start = Some(now);
+            l.frames += 1;
+        }
         self.pending.clear();
         self.drew = false;
         if self.swipe.is_some() {
@@ -1055,6 +1111,7 @@ impl<S: ListSource> FrameHook for ListLayer<S> {
         if self.drew && self.swipe.is_none() {
             self.apply_caps(self.pending_fb);
         }
+        self.scroll_log.last_busy = self.frame_start.elapsed();
     }
 
     fn overlaps(&mut self, x: Range<usize>, y: Range<usize>) -> bool {

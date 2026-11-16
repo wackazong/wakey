@@ -160,6 +160,10 @@ export global SoundListLayout {
     out property <length> pitch: 112px;
     // How far a finger moves before the touch counts as a scroll.
     out property <length> slop: 12px;
+    // Where a row's texts start (`SoundRowItem`; kind and tab as there).
+    public pure function text-x(kind: int, tab: int) -> length {
+        kind == 3 || (kind == 1 && tab == 1) ? 132px : kind == 1 ? 96px : 32px
+    }
 }
 
 // One row of the sound list, as the page draws it and as the list layer
@@ -223,7 +227,7 @@ export component SoundRowItem inherits Rectangle {
         }
     }
     if root.item.kind != 4: Text {
-        x: root.item.kind == 3 || (root.item.kind == 1 && root.tab == 1) ? 132px : root.item.kind == 1 ? 96px : 32px;
+        x: SoundListLayout.text-x(root.item.kind, root.tab);
         y: root.item.sub != "" ? 10px : 0;
         height: root.item.sub != "" ? 54px : 112px;
         width: parent.width - self.x - 96px;
@@ -235,7 +239,7 @@ export component SoundRowItem inherits Rectangle {
     }
     // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
     if root.item.sub != "" && root.item.kind != 4: Marquee {
-        x: root.item.kind == 3 || (root.item.kind == 1 && root.tab == 1) ? 132px : root.item.kind == 1 ? 96px : 32px;
+        x: SoundListLayout.text-x(root.item.kind, root.tab);
         y: 62px;
         height: 40px;
         width: parent.width - self.x - 96px;

@@ -389,12 +389,31 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
     } else if tab == TAB_TIDAL && picker.get_tidal_scroll() > max {
         picker.set_tidal_scroll(max);
     }
-    let rows = ModelRc::new(VecModel::from(rows));
     if tab == TAB_FILES {
         *ctx.sound_choices.borrow_mut() = sounds;
-        picker.set_rows(rows);
     } else {
         *ctx.tidal_choices.borrow_mut() = sounds;
+    }
+    // As many rows as shown: only the rows that differ, in place. A new
+    // model makes Slint repaint the whole list, ~40 ms under the list layer
+    // while it scrolls (TIDAL's sync every 5 s, AirDrop's state).
+    let model = if tab == TAB_FILES {
+        picker.get_rows()
+    } else {
+        picker.get_tidal_rows()
+    };
+    if model.row_count() == rows.len() && !rows.is_empty() {
+        for (i, row) in rows.into_iter().enumerate() {
+            if model.row_data(i).as_ref() != Some(&row) {
+                model.set_row_data(i, row);
+            }
+        }
+        return;
+    }
+    let rows = ModelRc::new(VecModel::from(rows));
+    if tab == TAB_FILES {
+        picker.set_rows(rows);
+    } else {
         picker.set_tidal_rows(rows);
     }
 }
@@ -663,8 +682,8 @@ impl ListSource for SoundRows {
     }
 
     fn layer_started(&mut self) {
-        // Rows in view are rendered again with the scrolling texts where
-        // the page shows them now (`render_visible_on_scroll`).
+        // Rows in view with scrolling text are rendered again with it where
+        // the page shows it now (`changes_on_scroll`).
         if let Some(ms) = self.with_picker(|p| {
             p.set_layer_active(true);
             p.get_marquee_ms()
@@ -673,8 +692,12 @@ impl ListSource for SoundRows {
         }
     }
 
-    fn render_visible_on_scroll(&self) -> bool {
-        true
+    fn changes_on_scroll(&mut self, i: usize) -> bool {
+        // Only a row whose second line scrolls; the others look the same at
+        // any time (re-rendering all visible rows cost the first frame
+        // ~20 ms, a visible bump at the start of every scroll).
+        self.prepare(i);
+        self.view.get_sound_row_scrolls()
     }
 
     fn scroll_ended(&mut self, offset: f32) {
