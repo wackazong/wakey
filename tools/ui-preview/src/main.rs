@@ -3,12 +3,17 @@
 //! software renderer, same RGB565 pixels as on the Tab5, so layout, fonts
 //! and missing glyphs show up here first.
 //!
-//! `cargo run --release -- [--by-line] [output dir] [scene name filter]`
+//! `cargo run --release -- [--by-line] [output dir] [scene name …]`
 //!
-//! The output dir defaults to `target/ui-preview`. `--by-line` renders line
+//! The output dir defaults to `target/ui-preview`. Without scene names every
+//! scene is saved; with names only those (exact names such as `1-list`, or a
+//! prefix ending in `*` such as `0-clock-sky-*`). `--by-line` renders line
 //! by line through a `LineBufferProvider`, as the firmware does, instead of
-//! into one buffer (same pixels; the timing then follows the device's
-//! code path).
+//! into one buffer (same pixels; the timing then follows the device's code
+//! path).
+//!
+//! Links Slint, which is GPL-3.0, Slint Royalty-free or commercially
+//! licensed; this tool is for development only and not distributed.
 
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel};
 use slint::platform::{PointerEventButton, WindowAdapter, WindowEvent};
@@ -18,6 +23,7 @@ use slint::{
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
+use wakey_core::alarm::{self, AlarmConfig};
 
 slint::include_modules!();
 
@@ -50,11 +56,21 @@ struct Preview {
     row_window: Rc<MinimalSoftwareWindow>,
     row_view: AppWindow,
     out: PathBuf,
-    filter: Option<String>,
+    /// Scenes to save; all if empty.
+    names: Vec<String>,
     by_line: bool,
 }
 
 impl Preview {
+    /// True if scene `name` is to be saved.
+    fn wanted(&self, name: &str) -> bool {
+        self.names.is_empty()
+            || self.names.iter().any(|n| match n.strip_suffix('*') {
+                Some(prefix) => name.starts_with(prefix),
+                None => name == n,
+            })
+    }
+
     /// Lets timers and animations run for `ms` (in 16 ms steps).
     fn run(&self, ms: u64) {
         for _ in 0..ms / 16 {
@@ -108,7 +124,6 @@ impl Preview {
         self.window.dispatch_event(WindowEvent::PointerExited);
     }
 
-    /// Renders the main window into a new buffer.
     /// Renders a frame; returns the screen.
     fn render(&self) -> Vec<Rgb565Pixel> {
         self.frame();
@@ -116,8 +131,8 @@ impl Preview {
     }
 
     /// Checks that every row fully in view on the list page has the same
-    /// pixels as the list layer's rendering of it (a second `AppWindow` showing one row), so the
-    /// hand-over between them does not show.
+    /// pixels as the list layer's rendering of it (a second `AppWindow`
+    /// showing one row), so the hand-over between them does not show.
     fn check_rows(&self, what: &str) {
         let screen = self.render();
         let layout = self.ui.global::<AlarmListLayout>();
@@ -191,11 +206,7 @@ impl Preview {
     /// swiped `d` px left: its content picture (corners on red) moved left,
     /// the delete button picture in the gap.
     fn shot_swipe(&self, name: &str, i: usize, d: usize) {
-        if self
-            .filter
-            .as_ref()
-            .is_some_and(|f| !name.contains(f.as_str()))
-        {
+        if !self.wanted(name) {
             return;
         }
         let mut screen = self.render();
@@ -227,11 +238,7 @@ impl Preview {
     }
 
     fn shot(&self, name: &str) {
-        if self
-            .filter
-            .as_ref()
-            .is_some_and(|f| !name.contains(f.as_str()))
-        {
+        if !self.wanted(name) {
             return;
         }
         let ms = self.frame().unwrap_or(0.0);
@@ -282,18 +289,32 @@ fn days(d: [u8; 7]) -> ModelRc<bool> {
     ))
 }
 
-fn row(id: i32, time: &str, name: &str, d: [u8; 7], enabled: bool, next: bool) -> AlarmRow {
-    AlarmRow {
+fn alarm_cfg(
+    id: u32,
+    hour: u8,
+    minute: u8,
+    name: &str,
+    weekdays: [u8; 7],
+    enabled: bool,
+) -> AlarmConfig {
+    AlarmConfig {
         id,
-        time: time.into(),
         name: name.into(),
-        // Bit i for weekday i, as `AlarmConfig::weekday_bits`.
-        days: d
-            .iter()
-            .enumerate()
-            .filter(|&(_, &x)| x != 0)
-            .fold(0, |bits, (i, _)| bits | 1 << i),
         enabled,
+        hour,
+        minute,
+        weekdays,
+        ..AlarmConfig::default()
+    }
+}
+
+fn row(a: &AlarmConfig, next: bool) -> AlarmRow {
+    AlarmRow {
+        id: a.id as i32,
+        time: format!("{:02}:{:02}", a.hour, a.minute).into(),
+        name: a.name.as_str().into(),
+        days: i32::from(a.weekday_bits()),
+        enabled: a.enabled,
         next,
     }
 }
@@ -312,13 +333,17 @@ fn sound(title: &str, sub: &str, selected: bool, kind: i32) -> SoundRow {
 
 /// A TIDAL track row with a sample cover (a two-colour gradient).
 fn track(title: &str, artist: &str, selected: bool, a: [u8; 3], b: [u8; 3]) -> SoundRow {
-    let px = 88u32;
+    let px = wakey_core::tidal::sync::COVER_PX;
     let mut buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(px, px);
     for (i, p) in buf.make_mut_slice().iter_mut().enumerate() {
         let (x, y) = (i as u32 % px, i as u32 / px);
         let f = (x + y) as f32 / (2 * px) as f32;
         let mix = |c0: u8, c1: u8| (f32::from(c0) * (1.0 - f) + f32::from(c1) * f) as u8;
-        *p = slint::Rgb8Pixel { r: mix(a[0], b[0]), g: mix(a[1], b[1]), b: mix(a[2], b[2]) };
+        *p = slint::Rgb8Pixel {
+            r: mix(a[0], b[0]),
+            g: mix(a[1], b[1]),
+            b: mix(a[2], b[2]),
+        };
     }
     let mut row = sound(title, artist, selected, 3);
     row.cover = slint::Image::from_rgb8(buf);
@@ -351,9 +376,17 @@ fn set_corner_caps(ui: &AppWindow) {
         let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(r as u32, r as u32);
         for (k, p) in buf.make_mut_slice().iter_mut().enumerate() {
             let (x, y) = (k % r, k / r);
-            let (i, j) = (if mx { r - 1 - x } else { x }, if my { r - 1 - y } else { y });
+            let (i, j) = (
+                if mx { r - 1 - x } else { x },
+                if my { r - 1 - y } else { y },
+            );
             let a = alpha[j * r + i];
-            *p = slint::Rgba8Pixel { r: bg.red(), g: bg.green(), b: bg.blue(), a: ((u32::from(a) * 255 + 8) / 16) as u8 };
+            *p = slint::Rgba8Pixel {
+                r: bg.red(),
+                g: bg.green(),
+                b: bg.blue(),
+                a: ((u32::from(a) * 255 + 8) / 16) as u8,
+            };
         }
         slint::Image::from_rgba8(buf)
     };
@@ -370,7 +403,7 @@ fn main() {
     args.retain(|a| a != "--by-line");
     let mut args = args.into_iter();
     let out = PathBuf::from(args.next().unwrap_or_else(|| "target/ui-preview".into()));
-    let filter = args.next();
+    let names: Vec<String> = args.collect();
     std::fs::create_dir_all(&out).expect("output dir");
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
@@ -402,7 +435,7 @@ fn main() {
         ]),
         front: std::cell::Cell::new(0),
         out,
-        filter,
+        names,
         by_line,
     };
     let ui = &p.ui;
@@ -480,35 +513,26 @@ fn main() {
 
     // Alarm list.
     let list = ui.global::<AlarmList>();
-    list.set_rows(ModelRc::new(VecModel::from(vec![
-        row(1, "06:30", "Arbeit", [1, 1, 0, 0, 0, 0, 0], true, true),
-        row(2, "07:15", "", [0, 0, 1, 1, 1, 0, 0], true, false),
-        row(3, "16:45", "Yoga", [1, 0, 0, 0, 0, 0, 0], true, false),
-        row(
-            4,
-            "08:30",
-            "Wochenende",
-            [0, 0, 0, 0, 0, 1, 1],
-            false,
-            false,
-        ),
-        row(
-            5,
-            "22:00",
-            "Medikamente",
-            [1, 1, 1, 1, 1, 1, 1],
-            true,
-            false,
-        ),
-    ])));
+    let alarms = [
+        alarm_cfg(1, 6, 30, "Arbeit", [1, 1, 0, 0, 0, 0, 0], true),
+        alarm_cfg(2, 7, 15, "", [0, 0, 1, 1, 1, 0, 0], true),
+        alarm_cfg(3, 16, 45, "Yoga", [1, 0, 0, 0, 0, 0, 0], true),
+        alarm_cfg(4, 8, 30, "Wochenende", [0, 0, 0, 0, 0, 1, 1], false),
+        alarm_cfg(5, 22, 0, "Medikamente", [1; 7], true),
+    ];
+    // In the list's order, as the firmware shows it.
+    let rows: Vec<AlarmRow> = alarm::sorted(&alarms)
+        .iter()
+        .map(|a| row(a, a.id == 1))
+        .collect();
+    list.set_rows(ModelRc::new(VecModel::from(rows)));
     ui.set_page(1);
     p.shot("1-list");
     p.check_rows("still list");
     list.on_delete(|id| println!("delete {id}"));
     list.on_open(|id| println!("open {id}"));
     list.on_toggle(|id, on| println!("toggle {id} {on}"));
-    // The first press after opening the page: the row lights up in place
-    // (it once slid in from the left, from the open-row offset).
+    // The first press after opening the page: the row lights up in place.
     ui.set_page(0);
     p.render();
     ui.set_page(1);
@@ -592,7 +616,7 @@ fn main() {
 
     // Sound page.
     let sp = ui.global::<SoundPicker>();
-    set_corner_caps(&ui);
+    set_corner_caps(ui);
     sp.set_rows(ModelRc::new(VecModel::from(vec![
         sound("Zufällig", "wechselt jeden Tag", false, 1),
         sound("Morgenlicht", "", true, 2),
@@ -627,37 +651,91 @@ fn main() {
     p.shot("3-sound-tidal");
     // TIDAL tracks: one selected, one downloading, one selected and
     // downloading (the selection must show next to the progress bar).
-    let mut loading = track("Point and Kill", "Little Simz · wird geladen", false, [40, 40, 40], [200, 60, 50]);
+    let mut loading = track(
+        "Paper Lanterns",
+        "Juno Hale · wird geladen",
+        false,
+        [40, 40, 40],
+        [200, 60, 50],
+    );
     loading.progress = 0.45;
-    let mut both = sound("Sunrise", "Norah Jones · wird geladen", true, 3);
+    let mut both = sound("Slow Sunrise", "Ada Lindqvist · wird geladen", true, 3);
     both.progress = 0.7;
-    let mut failed_row = track("Morning Song", "Nicht mehr in der Playlist · The Lumineers", false, [120, 90, 60], [30, 50, 40]);
+    let mut failed_row = track(
+        "Morning Tide",
+        "Nicht mehr in der Playlist · Elin Moor",
+        false,
+        [120, 90, 60],
+        [30, 50, 40],
+    );
     failed_row.failed = true;
     sp.set_tidal_empty("".into());
     sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
         sound("Zufällig", "wechselt jeden Tag", false, 1),
-        track("Here Comes the Sun", "The Beatles", true, [240, 200, 80], [200, 90, 40]),
+        track(
+            "Kaffee am Fenster",
+            "Die Frühaufsteher",
+            true,
+            [240, 200, 80],
+            [200, 90, 40],
+        ),
         failed_row,
         loading,
         both,
-        track("Golden Hour", "Nicht mehr in der Playlist · JVKE", false, [250, 170, 60], [90, 40, 120]),
+        track(
+            "Golden Fields",
+            "Nicht mehr in der Playlist · The Harbour Lights",
+            false,
+            [250, 170, 60],
+            [90, 40, 120],
+        ),
     ])));
     p.shot("3-sound-tidal-list");
     // The alarm's track failed to download: still selected (the alarm rings
     // the built-in tone), shown failed.
-    let mut picked_failed = track("Morning Song", "The Lumineers", true, [120, 90, 60], [30, 50, 40]);
+    let mut picked_failed = track(
+        "Morning Tide",
+        "Elin Moor",
+        true,
+        [120, 90, 60],
+        [30, 50, 40],
+    );
     picked_failed.failed = true;
     sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
         sound("Zufällig", "wechselt jeden Tag", false, 1),
-        track("Here Comes the Sun", "The Beatles", false, [240, 200, 80], [200, 90, 40]),
+        track(
+            "Kaffee am Fenster",
+            "Die Frühaufsteher",
+            false,
+            [240, 200, 80],
+            [200, 90, 40],
+        ),
         picked_failed,
-        track("Golden Hour", "JVKE", false, [250, 170, 60], [90, 40, 120]),
+        track(
+            "Golden Fields",
+            "The Harbour Lights",
+            false,
+            [250, 170, 60],
+            [90, 40, 120],
+        ),
     ])));
     p.shot("3-sound-tidal-picked-failed");
     // The selected row at the top of the card: its corners stay round.
     sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
-        track("Here Comes the Sun", "The Beatles", true, [240, 200, 80], [200, 90, 40]),
-        track("Golden Hour", "JVKE", false, [250, 170, 60], [90, 40, 120]),
+        track(
+            "Kaffee am Fenster",
+            "Die Frühaufsteher",
+            true,
+            [240, 200, 80],
+            [200, 90, 40],
+        ),
+        track(
+            "Golden Fields",
+            "The Harbour Lights",
+            false,
+            [250, 170, 60],
+            [90, 40, 120],
+        ),
     ])));
     p.shot("3-sound-tidal-corners");
 

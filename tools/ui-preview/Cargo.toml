@@ -2,8 +2,13 @@
 name = "ui-preview"
 version = "0.1.0"
 edition = "2024"
+# Slint 1.18.
+rust-version = "1.92"
 publish = false
-description = "Renders the firmware's Slint pages on the host to PNG, with sample data"
+license = "MIT OR Apache-2.0"
+authors = ["Alexander Walter"]
+repository = "https://github.com/wackazong/wakey"
+description = "Renders the firmware's Slint pages on the host to PNG, with sample data (links Slint: GPL-3.0, Slint Royalty-free or commercial)"
 
 [dependencies]
 slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "std"] }
