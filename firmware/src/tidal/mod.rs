@@ -42,7 +42,7 @@ pub use session::Problem;
 pub use store::{cover_rgb, downloaded, track_file, track_title};
 
 use crate::config::{self, TidalConfig};
-use crate::net::Wifi;
+use crate::net::{Unavailable, Wifi};
 use session::Error;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -201,6 +201,18 @@ impl Inner {
     }
 }
 
+/// What a TIDAL job does in its Wi-Fi session, before
+/// [`Tidal::keep_up`].
+type Work = Box<dyn FnOnce(&Tidal, Result<(), Unavailable>) + Send>;
+
+/// Why [`Tidal::keep_up`] ended.
+#[derive(PartialEq, Eq)]
+enum Ended {
+    Done,
+    /// AirDrop wants the C6: the Wi-Fi session ends early.
+    ForAirDrop,
+}
+
 /// Handle on the TIDAL state. Cheap to clone.
 #[derive(Clone)]
 pub struct Tidal {
@@ -316,14 +328,11 @@ impl Tidal {
         }
         inner.busy = true;
         drop(inner);
-        let this = self.clone();
-        self.wifi.run(Box::new(move |net| {
-            match net {
-                Ok(()) => this.keep_up(),
-                Err(e) => log::warn!("tidal: downloads: {e}"),
+        self.run_job(|_, net| {
+            if let Err(e) = net {
+                log::warn!("tidal: downloads: {e}");
             }
-            this.lock().busy = false;
-        }));
+        });
     }
 
     /// The TIDAL tab opened: logs in if there is no session, else syncs the
@@ -350,16 +359,11 @@ impl Tidal {
             State::Connecting
         };
         drop(inner);
-        let this = self.clone();
-        self.wifi.run(Box::new(move |net| {
-            match net {
-                Ok(()) if sync => this.sync_or_login(),
-                Ok(()) => this.login_and_sync(),
-                Err(e) => this.lock().state = State::Failed(Problem::Network(e)),
-            }
-            this.keep_up();
-            this.lock().busy = false;
-        }));
+        self.run_job(move |this, net| match net {
+            Ok(()) if sync => this.sync_or_login(),
+            Ok(()) => this.login_and_sync(),
+            Err(e) => this.lock().state = State::Failed(Problem::Network(e)),
+        });
     }
 
     /// The alarm page opened: a Wi-Fi session now, and the playlist synced,
@@ -374,15 +378,10 @@ impl Tidal {
         inner.busy = true;
         inner.state = State::Syncing;
         drop(inner);
-        let this = self.clone();
-        self.wifi.run(Box::new(move |net| {
-            match net {
-                Ok(()) => this.sync_or_login(),
-                Err(e) => this.lock().state = State::Failed(Problem::Network(e)),
-            }
-            this.keep_up();
-            this.lock().busy = false;
-        }));
+        self.run_job(|this, net| match net {
+            Ok(()) => this.sync_or_login(),
+            Err(e) => this.lock().state = State::Failed(Problem::Network(e)),
+        });
     }
 
     /// The TIDAL tab closed (another tab, or the page left).
@@ -417,6 +416,33 @@ impl Tidal {
     /// The download under way and how far (0–1), for the progress bar.
     pub fn progress(&self) -> Option<(u64, f32)> {
         self.lock().downloading
+    }
+
+    /// Runs `work` in a Wi-Fi session (with the reason if there is no
+    /// connection), then [`Self::keep_up`]; `busy` until both are done.
+    /// When AirDrop ends the session, the rest is queued again: the `wifi`
+    /// thread holds jobs while AirDrop has the C6 and runs them after.
+    fn run_job(&self, work: impl FnOnce(&Tidal, Result<(), Unavailable>) + Send + 'static) {
+        self.queue_job(Box::new(work));
+    }
+
+    fn queue_job(&self, work: Work) {
+        let this = self.clone();
+        self.wifi.run(Box::new(move |net| {
+            let connected = net.is_ok();
+            work(&this, net);
+            if connected && this.keep_up() == Ended::ForAirDrop {
+                log::info!("tidal: AirDrop takes the C6; going on after it");
+                // The tab may have opened meanwhile: synced at once then.
+                this.queue_job(Box::new(|this, net| match net {
+                    Ok(()) if this.lock().wanted => this.sync_or_login(),
+                    Ok(()) => {}
+                    Err(e) => log::warn!("tidal: downloads: {e}"),
+                }));
+            } else {
+                this.lock().busy = false;
+            }
+        }));
     }
 
     /// In a session: syncs; if TIDAL rejects the session (401), drops it
@@ -487,14 +513,16 @@ impl Tidal {
 
     /// After a sync: downloads what the card lacks, and while the tab is
     /// open reads the playlist again every [`WATCH`]. Ends when the tab is
-    /// closed and nothing is left to download (or on an error).
-    fn keep_up(&self) {
+    /// closed and nothing is left to download, on an error, or when AirDrop
+    /// wants the C6.
+    fn keep_up(&self) -> Ended {
         let mut last_sync = Instant::now();
         loop {
-            // AirDrop takes the C6: the session ends; the next one, after
-            // it, starts again where this stopped.
-            if self.lock().state != State::LoggedIn || crate::airdrop::wanted() {
-                return;
+            if crate::airdrop::wanted() {
+                return Ended::ForAirDrop;
+            }
+            if self.lock().state != State::LoggedIn {
+                return Ended::Done;
             }
             let wanted = self.lock().wanted;
             let due = wanted && last_sync.elapsed() >= WATCH;
@@ -516,7 +544,7 @@ impl Tidal {
                         // the next login.
                         log::warn!("tidal: download {}: {e}", track.id);
                         self.lock().state = State::Failed(e.problem());
-                        return;
+                        return Ended::Done;
                     }
                     Err(e) => {
                         log::warn!("tidal: download {}: {e}", track.id);
@@ -527,7 +555,7 @@ impl Tidal {
                 continue;
             }
             if !wanted && !EDITING.load(Ordering::Relaxed) {
-                return;
+                return Ended::Done;
             }
             if !wanted {
                 // Settings pages open, the tab not: the session waits for
@@ -554,7 +582,7 @@ impl Tidal {
             if let Err(e) = self.sync() {
                 log::warn!("tidal: watch: {e}");
                 self.lock().state = State::Failed(e.problem());
-                return;
+                return Ended::Done;
             }
         }
     }
