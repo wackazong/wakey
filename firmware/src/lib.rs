@@ -14,7 +14,7 @@
 //!   [`display`] (panel, frame buffers, PPA, 2D-DMA) and [`c6`] (the Wi-Fi
 //!   co-processor: power, esp_hosted's transport, its images).
 //! - Support: [`runtime`] (threads, the Embassy executor), [`psram`]
-//!   (DMA buffers), [`taskstats`] and [`profiler`] (performance work).
+//!   (DMA buffers), [`taskstats`] (CPU time per task).
 //!
 //! Pure logic (dates, file formats, resampling, descriptors, config model,
 //! TIDAL's protocol, scroll physics) is in the `wakey_core` crate and
@@ -32,7 +32,6 @@ pub mod config;
 pub mod display;
 pub mod http;
 pub mod net;
-pub mod profiler;
 pub mod psram;
 pub mod runtime;
 pub mod sounds;

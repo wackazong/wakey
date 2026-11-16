@@ -15,43 +15,6 @@ use wakey::ui::{platform, render_loop, stats};
 
 include!(concat!(env!("OUT_DIR"), "/ui_bench.rs"));
 
-/// Inject a synthetic swipe through the touch event queue.
-const SELF_TEST_SWIPE: bool = false;
-
-#[embassy_executor::task]
-async fn swipe() {
-    use embassy_time::{Duration, Timer};
-    use wakey::ui::input::{EVENTS, Phase, TouchEvent};
-    let ev = |phase, y: f32| TouchEvent {
-        phase,
-        x: 960.0,
-        y,
-        at: Instant::now(),
-    };
-    Timer::after(Duration::from_secs(4)).await;
-    // 1. Pull 400 px past the top, hold, release: rubber band, spring back.
-    log::info!("self-test: pull down at the top");
-    EVENTS.send(ev(Phase::Down, 100.0)).await;
-    for k in 1..=20 {
-        Timer::after(Duration::from_millis(10)).await;
-        EVENTS.send(ev(Phase::Move, 100.0 + 20.0 * k as f32)).await;
-    }
-    Timer::after(Duration::from_millis(150)).await;
-    EVENTS.send(ev(Phase::Up, 500.0)).await;
-    Timer::after(Duration::from_secs(2)).await;
-    // 2. Hard fling up from the top.
-    log::info!("self-test: fling");
-    EVENTS.send(ev(Phase::Down, 600.0)).await;
-    for k in 1..=5 {
-        Timer::after(Duration::from_millis(10)).await;
-        EVENTS.send(ev(Phase::Move, 600.0 - 60.0 * k as f32)).await;
-    }
-    EVENTS.send(ev(Phase::Up, 300.0)).await;
-}
-
-/// Run the sampling profiler for 8 s and log the hottest addresses.
-const PROFILE: bool = false;
-
 const ROWS: usize = 300;
 const ROW_H: usize = 96;
 
@@ -101,11 +64,11 @@ impl ListSource for Tracks {
 }
 
 fn main() -> ! {
-    wakey::runtime::start(|spawner| spawner.spawn(app(spawner).unwrap()))
+    wakey::runtime::start(|spawner| spawner.spawn(app().unwrap()))
 }
 
 #[embassy_executor::task]
-async fn app(spawner: embassy_executor::Spawner) {
+async fn app() {
     let Board {
         display,
         mut backlight,
@@ -126,8 +89,6 @@ async fn app(spawner: embassy_executor::Spawner) {
     let row_window = platform::offscreen_window(640, ROW_H as u32);
     let row = TrackRow::new().expect("Slint row");
     row.show().expect("show row");
-    // #141a20, the list area's background in the .slint file, as RGB565.
-    const LIST_BACKGROUND: u16 = (0x14 >> 3) << 11 | (0x1a >> 2) << 5 | (0x20 >> 3);
     let layout = Layout {
         x: 640,
         y: 0,
@@ -136,7 +97,8 @@ async fn app(spawner: embassy_executor::Spawner) {
         row_h: ROW_H,
         slots: 64,
         slop: 12.0,
-        background: LIST_BACKGROUND,
+        // The list area's background in `ui_bench.slint`.
+        background: wakey::ui::rgb565(Color::from_rgb_u8(0x14, 0x1a, 0x20)),
         page_draws_still: false,
         // The layer has every touch: it only scrolls.
         swipe: false,
@@ -171,24 +133,6 @@ async fn app(spawner: embassy_executor::Spawner) {
             )));
         },
     );
-
-    // Sampling profiler: resolve the log with `scripts/profile.sh`.
-    let profile_end = Timer::default();
-    if PROFILE {
-        wakey::profiler::start();
-        profile_end.start(
-            TimerMode::SingleShot,
-            core::time::Duration::from_secs(11),
-            || {
-                wakey::profiler::report(400);
-            },
-        );
-    }
-
-    // Self-test: a synthetic swipe up in the list 4 s after start.
-    if SELF_TEST_SWIPE {
-        spawner.spawn(swipe().unwrap());
-    }
 
     backlight.set_percent(100).expect("backlight");
     render_loop::run(window, display, &mut rot, Some(&mut list)).await

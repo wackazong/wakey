@@ -76,11 +76,8 @@ fn dispatch(window: &MinimalSoftwareWindow, ev: &TouchEvent) {
     }
 }
 
-/// Log every touch event and where it went.
-const DEBUG_TOUCH: bool = false;
-
-/// Log the dirty rectangles of frames that take longer than 35 ms.
-const DEBUG_SLOW_FRAMES: bool = true;
+/// A Slint render longer than this logs its dirty rectangles.
+const SLOW_FRAME: Duration = Duration::from_millis(35);
 
 /// Where the render loop is, for the stall report ([`stage`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -252,14 +249,12 @@ pub async fn run(
                 continue;
             }
             let route = hook.as_mut().map_or(Route::Slint, |h| h.pointer(&ev));
-            if DEBUG_TOUCH {
-                log::info!(
-                    "touch event {:?} ({:.0}, {:.0}) → {route:?}",
-                    ev.phase,
-                    ev.x,
-                    ev.y
-                );
-            }
+            log::trace!(
+                "touch event {:?} ({:.0}, {:.0}) → {route:?}",
+                ev.phase,
+                ev.x,
+                ev.y
+            );
             match route {
                 Route::Slint => {
                     dispatch(&window, &ev);
@@ -340,7 +335,7 @@ pub async fn run(
             if size.width > 0 && size.height > 0 {
                 slint_box = Some((o.x, o.y, size.width, size.height));
             }
-            if DEBUG_SLOW_FRAMES && t0.elapsed() > Duration::from_millis(35) {
+            if t0.elapsed() > SLOW_FRAME {
                 let rects: Vec<_> = region
                     .iter()
                     .map(|(p, s)| (p.x, p.y, s.width, s.height))
