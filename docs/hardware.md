@@ -1,15 +1,15 @@
 # Hardware reference
 
-M5Stack Tab5 Kit (ESP32-P4 + ESP32-C6, 5" 720×1280 touch panel, NP-F550 battery), plus a Creative Pebble V3 USB speaker. From M5Stack's [schematic](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1132/Tab5_Schematics_PDF.pdf), M5Stack's M5Unified/M5GFX sources and measurements on the unit here.
+M5Stack Tab5 Kit (ESP32-P4 + ESP32-C6, 5" 720×1280 touch panel, NP-F550 battery), plus a Creative Pebble V3 USB speaker. From M5Stack's [schematic](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1132/Tab5_Schematics_PDF.pdf), M5Stack's M5Unified/M5GFX sources and measurements on the development unit.
 
-## The unit here
+## The development unit
 
 | | |
 | --- | --- |
 | ESP32-P4 | rev **v1.3** (`espflash board-info`), 360 MHz, 32 MB PSRAM (hex, 200 MHz), 16 MB flash |
 | Panel | **ST7123** TDDI (display and touch in one chip), touch firmware 3 |
 | USB | USB-C: P4's USB Serial/JTAG at `/dev/cu.usbmodem2101` (flashing, console) |
-| C6 firmware | esp_hosted slave 2.13.1 with Wakey's addition ("2.13.1-wakey1") in one app slot, the AirDrop receiver in the other, both installed by the firmware after the first Wi-Fi session, also over the factory firmware (see [`firmware/c6/`](../firmware/c6/README.md)); factory: M5Stack's slave 1.4.1, whose startup event carries no version and shows as 0.0.0. Recovery: header J1 "C6_ISP" (3V3, TXD, RXD, RST, IO9, GND), IO9 low during reset for download mode |
+| C6 firmware | factory: M5Stack's esp_hosted slave 1.4.1, whose startup event carries no version and shows as 0.0.0. The firmware replaces it after the first Wi-Fi session: esp_hosted slave 2.13.1 with Wakey's addition ("2.13.1-wakey2") in one app slot, the AirDrop receiver in the other (see [`firmware/c6/`](../firmware/c6/README.md)). Recovery: header J1 "C6_ISP" (3V3, TXD, RXD, RST, IO9, GND), IO9 low during reset for download mode |
 | Battery | not connected |
 
 Three panel variants exist across production runs; the firmware detects them from the touch controller: ST712x at 0x55 with firmware 3 → ST7123, 1 → ST7121; GT911 (0x14/0x5D) → ILI9881C. Only the ST712x touch is implemented.
@@ -19,7 +19,7 @@ Three panel variants exist across production runs; the firmware detects them fro
 | Function | GPIO | Note |
 | --- | --- | --- |
 | System I2C SDA / SCL | 31 / 32 | 400 kHz; expanders, RTC, INA226, touch, codec, IMU |
-| Touch interrupt `TP_INT` | 23 | active low, 5.1 kΩ pull-up (R92); not an LP-GPIO (no deep-sleep wake). Not used yet (touch is polled) |
+| Touch interrupt `TP_INT` | 23 | active low, 5.1 kΩ pull-up (R92); not an LP-GPIO (no deep-sleep wake). Not used (touch is polled) |
 | Backlight `LCD_BL` | 22 | enable of the ME2212 boost; LEDC PWM 4 kHz, 14 bit (finer steps at the dark end) |
 | MIPI-DSI | dedicated | 2 lanes; PHY supply `VDD_MIPI_DPHY` = on-chip LDO 3 at 2.5 V |
 | microSD (SDMMC slot 0) CLK / CMD / D0–D3 | 43 / 44 / 39–42 | IO_MUX pins, 4 bit; pin supply = on-chip LDO 4 at 3.3 V |
@@ -42,9 +42,9 @@ LP-GPIOs 0–15 are all taken (bus/header, SDIO to the C6, C6 reset/IO2).
 | --- | --- | --- |
 | PI4IOE5V6408 expander A | 0x43 | resets, speaker amp, EXT5V |
 | PI4IOE5V6408 expander B | 0x44 | Wi-Fi power, USB-A 5 V, power-off, charging |
-| RX8130CE RTC | 0x32 | UTC time; alarm registers (not armed yet) |
+| RX8130CE RTC | 0x32 | UTC time; alarm registers not used |
 | ST7123 touch | 0x55 | polled every 10 ms (16-bit registers) |
-| INA226 | 0x41 | battery voltage/current (5 mΩ shunt); unused |
+| INA226 | 0x41 | battery current (5 mΩ shunt): more than 30 mA means the clock runs on battery (display sleep) |
 | SC202CS camera (SC2356) | 0x36 | chip ID 0xEB52 at 0x3107; MIPI-CSI one lane, 24 MHz from oscillator X2; used as light meter |
 | ES8388 | 0x10 | built-in speaker codec (DAC only, values from M5Unified) |
 | ES7210, BMI270 | – | unused |
@@ -75,7 +75,7 @@ Registers ([`board/rtc.rs`](../firmware/src/board/rtc.rs), data sheet, M5Unified
 
 ## Power
 
-- USB-C path: `USB_5VIN` (FU1 2 A) → U34 MAX40200 (**1 A**) → `SYS_5VBUS` → U23 LPW5209 (≈ 2.4 A) → `SYS_INT5V` → U27 MT9700 (≈ 1.33 A) → USB-A. All 5 V outputs sit behind U34. Budget for the Pebble ≈ 0.5 A (gain switch "L", limited USB volume; not measured yet, see below).
+- USB-C path: `USB_5VIN` (FU1 2 A) → U34 MAX40200 (**1 A**) → `SYS_5VBUS` → U23 LPW5209 (≈ 2.4 A) → `SYS_INT5V` → U27 MT9700 (≈ 1.33 A) → USB-A. All 5 V outputs sit behind U34. Budget for the Pebble ≈ 0.5 A (gain switch "L", limited USB volume; not measured, see below).
 - Battery path locked out in hardware when external power is present.
 - Power-off: `PWROFF_PULSE` → PMS150G (U28) → `MPWR_EN` = 0 → main switch and battery buck off. `VDD_STBY` keeps PMS150, RTC and IMU alive.
 - Power-on sources: power button, RTC `nIRQ`, IMU INT1 (all via the PMS150).
@@ -91,34 +91,24 @@ Registers ([`board/rtc.rs`](../firmware/src/board/rtc.rs), data sheet, M5Unified
 
 ### Power states
 
-Two states, decided 2026-11-11; the second is a display sleep, not chip light sleep (decided 2026-11-12, see below):
+Two states; the second is a display sleep, not chip light sleep (see below):
 
 | State | Display | Wi-Fi | USB-A 5 V | Wakes on |
 | --- | --- | --- | --- | --- |
-| On | on, brightness from the room's light | only for a sync session | only on the alarm pages and from 60 s before something rings | – |
+| On | on, brightness from the room's light | only for a session (clock sync, TIDAL) or AirDrop | only on the settings pages and from 60 s before something rings | – |
 | Display sleep | backlight off, panel at 33 Hz | as above | as above | any touch, alarm, daylight |
 
 Display sleep starts after `power.sleep_after_s` (60 s) without a touch on the clock page, when `power.sleep_when` allows it: `"dark"` (default) in a dark room (the light meter's night mode) or on battery; `"always"`; `"never"`. It ends on a touch (which only wakes), when an alarm rings, and when the condition ends (daylight on USB power).
 
-Implemented: backlight off, nothing drawn, light meter running ([`app/power.rs`](../firmware/src/app/power.rs), `ui::power`); the panel streams at 33 Hz instead of 66 Hz (the display link is rebuilt for it, 0.45 s each way); USB-A is off except on the alarm pages and from 60 s before something rings (the Pebble is ready ~1 s after USB-A comes on, well within that lead). The panel is not put into sleep mode: the ST7123's touch stops scanning then. Measured at the USB-C input (5 V, Pebble switched on): screen on 237–242 mA, display sleep before these changes 237 mA, USB-A off −80 mA, 33 Hz −21 mA; ~138 mA asleep; the built-in speaker's codec and I2S off while silent: 132 mA (dipping to ~99 mA now and then).
+In display sleep: backlight off, nothing drawn, light meter running ([`app/power.rs`](../firmware/src/app/power.rs), `ui::power`); the panel streams at 33 Hz instead of 66 Hz (the display link is rebuilt for it, 0.45 s each way); USB-A is off except on the settings pages and from 60 s before something rings (the Pebble is ready ~1 s after USB-A comes on, well within that lead); the built-in speaker's codec and I2S are off while silent. The panel is not put into sleep mode: the ST7123's touch stops scanning then. Measured at the USB-C input (5 V, Pebble switched on): screen on 237–242 mA; backlight off alone 237 mA; USB-A off −80 mA and 33 Hz −21 mA: ~138 mA; with the codec and I2S off 132 mA asleep (dipping to ~99 mA now and then).
 
-**Not chip light sleep:** a single tap must wake the clock, and in light sleep it cannot (spike `chip_sleep`, 2026-11-12): the ST7123 senses touches only while the P4 streams video, which light sleep stops; in its "Smart Wake Up" mode it keeps sensing but reports only gestures (double tap, long press), never a single tap. A double-tap wake from light sleep works (with `gpio_sleep_sel_dis(23)` and the whole display link rebuilt after waking) and would save roughly another 0.1–0.2 W (estimated).
+**Not chip light sleep:** a single tap must wake the clock, and from light sleep it cannot: the ST7123 senses touches only while the P4 streams video, which light sleep stops; in its "Smart Wake Up" mode it keeps sensing but reports only gestures (double tap, long press), never a single tap. A double-tap wake from light sleep works (with `gpio_sleep_sel_dis(23)` and the whole display link rebuilt after waking) and would save an estimated 0.1–0.2 W more (details in [pitfalls.md](pitfalls.md#touch-and-i2c)).
 
 ### Open power measurements
 
-- Pebble current at gain "L" and the planned volume cap (target ≤ 0.5 A); `SYS_USB5V` under load (≥ 4.75 V, no reset).
+- Pebble current at gain "L" and the device volume cap (target ≤ 0.5 A); `SYS_USB5V` under load (≥ 4.75 V, no reset).
 - The periodic ~20–35 mA dip in display sleep.
 
 ## Creative Pebble V3 (USB)
 
 VID 041e / PID 3272, USB 1.1 full speed, UAC 1.0. Control interface 1 with feature unit 9 (mute; volume −60…0 dB in 0.6 dB steps, persists across power cycles). Streaming interface 2, alt 1: PCM 16 bit stereo, **48 kHz only**, isochronous OUT endpoint 0x02, 192 bytes per 1 ms, sample-rate control on the endpoint. Interface 3: HID (volume buttons), ignored. LED: solid green = USB audio, flashing green = Bluetooth pairing (USB set-up failed).
-
-## Schematic pages
-
-| File | Content |
-| --- | --- |
-| `tab5-sch-1-power.png` | power supply, PMS150, RTC, load switches |
-| `tab5-sch-2-esp32p4-c6-ioexpander.png` | P4, C6, flash, expanders |
-| `tab5-sch-3-display-touch-sd-imu-camera.png` | display, touch, SD, IMU, camera |
-| `tab5-sch-4-audio-codec.png` | ES8388, ES7210, NS4150B |
-| `tab5-sch-5-usb-bus-rf-rs485.png` | USB-C, USB-A, M5-Bus, 2×5 header, RF, RS-485 |
