@@ -66,18 +66,19 @@ fn depth(page: i32) -> i32 {
 }
 
 /// Shows `page`, sliding it in: the alarm pages come up over the clock and
-/// go down again; within them deeper pages come from the right.
-fn show_page(window: &screens::AppWindow, page: i32) {
+/// go down again; within them deeper pages come from the right. Leaving the
+/// sound page ends what it runs (TIDAL, AirDrop, a preview), whatever made
+/// it go: its buttons, the idle timeout, an alarm ringing.
+fn show_page(window: &screens::AppWindow, ctx: &Ctx, page: i32) {
     use transition::Direction;
     // A Wi-Fi session for TIDAL stays up while an alarm is edited.
     crate::tidal::set_editing(matches!(page, PAGE_ALARM | PAGE_SOUND | PAGE_NAME));
-    // AirDrop only on the sound page (its Files tab, `sound_page`).
-    if page != PAGE_SOUND {
-        crate::airdrop::set_wanted(false);
-    }
     let from = window.get_page();
     if from == page {
         return;
+    }
+    if from == PAGE_SOUND {
+        sound_page::leave(window, ctx);
     }
     let direction = if from == PAGE_CLOCK {
         Direction::Up
@@ -287,7 +288,7 @@ async fn app(
         i2c.clone(),
         speaker.clone(),
     );
-    let _ticker = clock_screen::start(&ui, speaker, wifi, alarm);
+    let _ticker = clock_screen::start(&ui, &ctx, speaker, wifi);
 
     // The light meter owns the backlight: full at first, then the room's.
     let screen = crate::ambient::Screen {
@@ -353,12 +354,11 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
                 && !ctx.tidal.logging_in()
                 && !matches!(crate::airdrop::state(), crate::airdrop::State::Receiving(_))
             {
-                ctx.tidal.close();
                 log::info!(
                     "ui: back to the clock after {} s without a touch",
                     limit.as_secs()
                 );
-                show_page(window, PAGE_CLOCK);
+                show_page(window, ctx, PAGE_CLOCK);
             } else if page == PAGE_ALARM {
                 alarm_page::fill(window, ctx);
                 // Keeps the speaker on while the wheels are shown.

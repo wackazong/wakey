@@ -55,7 +55,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     fill_rows(window, ctx);
     tidal_tab(window, ctx, tab == TAB_TIDAL);
     files_tab(window, tab == TAB_FILES);
-    show_page(window, PAGE_SOUND);
+    show_page(window, ctx, PAGE_SOUND);
 }
 
 thread_local! {
@@ -66,6 +66,14 @@ thread_local! {
     // (`Timer::default` is not a const fn).
     #[allow(clippy::missing_const_for_thread_local)]
     static AIRDROP_SHOWN: RefCell<Option<(airdrop::State, u32)>> = const { RefCell::new(None) };
+}
+
+/// The page is left (`super::show_page`): TIDAL's tab and AirDrop close,
+/// a preview stops.
+pub fn leave(window: &AppWindow, ctx: &Ctx) {
+    tidal_tab(window, ctx, false);
+    files_tab(window, false);
+    ctx.alarm.borrow_mut().stop_preview();
 }
 
 /// The Files tab opened or closed: AirDrop on or off, and followed.
@@ -453,11 +461,8 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     let picker = window.global::<SoundPicker>();
 
     picker.on_back(ctx.with(|window, ctx| {
-        tidal_tab(window, ctx, false);
-        files_tab(window, false);
-        ctx.alarm.borrow_mut().stop_preview();
         alarm_page::fill(window, ctx);
-        show_page(window, PAGE_ALARM);
+        show_page(window, ctx, PAGE_ALARM);
     }));
     picker.on_select_tab(ctx.with_arg(|window, ctx, tab: i32| {
         // The highlight slides now; the list changes when it has arrived
@@ -539,12 +544,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         }
         update_can_save(window, ctx);
     }));
-    picker.on_save(ctx.with(|window, ctx| {
-        tidal_tab(window, ctx, false);
-        files_tab(window, false);
-        ctx.alarm.borrow_mut().stop_preview();
-        alarm_page::save(window, ctx);
-    }));
+    picker.on_save(ctx.with(alarm_page::save));
     picker.on_preview(ctx.with(|window, ctx| {
         let previewing = ctx.alarm.borrow().is_previewing();
         if previewing {

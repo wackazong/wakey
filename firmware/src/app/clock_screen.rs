@@ -6,14 +6,13 @@
 //! those (a seconds tick dirties ~110 panel rows). The ringing controls are
 //! on this screen too.
 
-use super::alarm::{AlarmClock, View};
+use super::alarm::View;
 use super::screens::{AppWindow, Clock};
-use super::{PAGE_CLOCK, show_page};
+use super::{Ctx, PAGE_CLOCK, show_page};
 use crate::audio::uac::UsbAudio;
 use crate::clock;
 use crate::net::{Status, Wifi};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use wakey_core::alarm::Input;
@@ -29,20 +28,15 @@ pub struct Ticker {
 }
 
 /// Fills the screen now and then every second, and connects the ringing
-/// controls to `alarm`. When the alarm rings, the clock page is shown.
-pub fn start(
-    window: &AppWindow,
-    speaker: UsbAudio,
-    wifi: Wifi,
-    alarm: Rc<RefCell<AlarmClock>>,
-) -> Ticker {
-    let weak = window.as_weak();
+/// controls to the alarm. When the alarm rings, the clock page is shown.
+pub fn start(window: &AppWindow, ctx: &Rc<Ctx>, speaker: UsbAudio, wifi: Wifi) -> Ticker {
+    let alarm = ctx.alarm.clone();
     let face = Face::new(window);
     let refresh = {
-        let alarm = alarm.clone();
+        let ctx = ctx.clone();
         Rc::new(move || {
-            if let Some(window) = weak.upgrade() {
-                update(&window, &face, &speaker, &wifi, &alarm.borrow());
+            if let Some(window) = ctx.window.upgrade() {
+                update(&window, &ctx, &face, &speaker, &wifi);
             }
         })
     };
@@ -181,7 +175,7 @@ fn set_chars(model: &VecModel<SharedString>, text: &str) {
     }
 }
 
-fn update(window: &AppWindow, face: &Face, speaker: &UsbAudio, wifi: &Wifi, alarm: &AlarmClock) {
+fn update(window: &AppWindow, ctx: &Ctx, face: &Face, speaker: &UsbAudio, wifi: &Wifi) {
     let screen = window.global::<Clock>();
     fn set_text(current: SharedString, new: String, set: impl Fn(SharedString)) {
         if current.as_str() != new {
@@ -199,14 +193,14 @@ fn update(window: &AppWindow, face: &Face, speaker: &UsbAudio, wifi: &Wifi, alar
     set_chars(&face.seconds, &format!("{:02}", t.second));
     set_text(screen.get_date(), t.date_de(), |v| screen.set_date(v));
 
-    let view = alarm.view();
+    let view = ctx.alarm.borrow().view();
     if !cfg!(feature = "sky-demo") {
         set_text(screen.get_alarm(), alarm_line(&view, &t), |v| {
             screen.set_alarm(v)
         });
     }
     if matches!(view, View::Ringing { .. }) && window.get_page() != PAGE_CLOCK {
-        show_page(window, PAGE_CLOCK);
+        show_page(window, ctx, PAGE_CLOCK);
     }
     let (phase, snoozes_left) = match view {
         View::Idle { .. } => (0, 0),

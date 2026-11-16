@@ -64,9 +64,9 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         .on_open_alarm(ctx.with(|window, ctx| {
             refresh(window, &ctx.alarm.borrow());
             window.global::<AlarmList>().set_scroll(0.0);
-            show_page(window, PAGE_LIST);
+            show_page(window, ctx, PAGE_LIST);
         }));
-    list.on_back(ctx.with(|window, _| show_page(window, PAGE_CLOCK)));
+    list.on_back(ctx.with(|window, ctx| show_page(window, ctx, PAGE_CLOCK)));
     list.on_add(ctx.with(|window, ctx| {
         alarm_page::open(window, ctx, AlarmConfig::default());
     }));

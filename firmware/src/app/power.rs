@@ -10,9 +10,9 @@
 //! rings (it needs a few seconds to boot and enumerate) and on the alarm
 //! pages (sound previews). Not on the clock page, awake or not.
 
+use super::PAGE_CLOCK;
 use super::alarm::{AlarmClock, View};
 use super::screens::AppWindow;
-use super::{PAGE_CLOCK, show_page};
 use crate::audio::uac::UsbAudio;
 use crate::board::i2c::SharedI2c;
 use crate::board::ina226;
@@ -95,8 +95,6 @@ pub fn start(
             && input::idle().as_millis() >= u64::from(cfg.sleep_after_s) * 1000
         {
             power::sleep();
-        } else if ringing && window.get_page() != PAGE_CLOCK {
-            show_page(&window, PAGE_CLOCK);
         }
     });
     timer

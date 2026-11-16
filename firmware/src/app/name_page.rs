@@ -16,7 +16,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     editor.set_numbers(false);
     editor.set_text(name.as_str().into());
     *ctx.name.borrow_mut() = name;
-    show_page(window, PAGE_NAME);
+    show_page(window, ctx, PAGE_NAME);
 }
 
 fn show(window: &AppWindow, text: &str, shift: bool) {
@@ -50,7 +50,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         let name = ctx.name.borrow().trim().to_string();
         ctx.draft.borrow_mut().name = name;
         alarm_page::fill(window, ctx);
-        show_page(window, PAGE_ALARM);
+        show_page(window, ctx, PAGE_ALARM);
     }));
-    editor.on_cancel(ctx.with(|window, _| show_page(window, PAGE_ALARM)));
+    editor.on_cancel(ctx.with(|window, ctx| show_page(window, ctx, PAGE_ALARM)));
 }

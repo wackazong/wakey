@@ -28,7 +28,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
     *ctx.original.borrow_mut() = (cfg.id != 0).then(|| cfg.clone());
     *ctx.draft.borrow_mut() = cfg;
     fill(window, ctx);
-    show_page(window, PAGE_ALARM);
+    show_page(window, ctx, PAGE_ALARM);
 }
 
 /// Everything derived from the draft: name, sound, volume, "Klingelt in".
@@ -73,7 +73,7 @@ pub fn save(window: &AppWindow, ctx: &Ctx) {
     match result {
         Ok(()) => {
             alarm_list::refresh(window, &ctx.alarm.borrow());
-            show_page(window, PAGE_LIST);
+            show_page(window, ctx, PAGE_LIST);
         }
         Err(e) => {
             log::error!("alarm page: saving: {e}");
@@ -81,7 +81,7 @@ pub fn save(window: &AppWindow, ctx: &Ctx) {
             window
                 .global::<AlarmEditor>()
                 .set_error("Speichern fehlgeschlagen – SD-Karte prüfen".into());
-            show_page(window, PAGE_ALARM);
+            show_page(window, ctx, PAGE_ALARM);
         }
     }
 }
@@ -111,7 +111,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     }));
     editor.on_edit_name(ctx.with(name_page::open));
     editor.on_open_sound(ctx.with(sound_page::open));
-    editor.on_cancel(ctx.with(|window, _| show_page(window, PAGE_LIST)));
+    editor.on_cancel(ctx.with(|window, ctx| show_page(window, ctx, PAGE_LIST)));
     editor.on_save(ctx.with(save));
 }
 
