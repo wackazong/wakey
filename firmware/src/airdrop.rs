@@ -180,11 +180,12 @@ pub(crate) fn run(link: &mut Link, power: &Switch, stop_transport: &dyn Fn()) {
     set_state(State::Off);
 }
 
-/// Set by [`check`] when the C6 lacks our esp_hosted or the receiver.
+/// Set by [`check`] when the C6 lacks our current esp_hosted or the
+/// receiver.
 static NEEDS_SETUP: AtomicBool = AtomicBool::new(false);
 
 /// In a Wi-Fi session (the transport up), once per boot: whether the C6
-/// has our esp_hosted and the current receiver. If not, [`setup`] installs
+/// runs our current esp_hosted and holds the current receiver. If not, [`setup`] installs
 /// them after the session.
 pub(crate) fn check() {
     static DONE: AtomicBool = AtomicBool::new(false);
@@ -192,7 +193,7 @@ pub(crate) fn check() {
         return;
     }
     let ready = match query() {
-        Ok(Some(info)) => info.holds_receiver(),
+        Ok(Some(info)) => info.runs_current_hosted() && info.holds_receiver(),
         Ok(None) => false,
         Err(e) => {
             log::warn!("airdrop: the C6 not asked: {e}");
@@ -223,7 +224,7 @@ pub(crate) fn setup(power: &Switch, stop_transport: &dyn Fn()) {
 /// (`boot`) the receiver booted. The C6 is powered on here; the transport
 /// is down again when this returns.
 fn prepare(power: &Switch, stop_transport: &dyn Fn(), boot: bool) -> anyhow::Result<()> {
-    let receiver_version = receiver_version();
+    let receiver_version = image_version(C6Image::Receiver);
     for _ in 0..3 {
         power(true)?;
         std::thread::sleep(Duration::from_millis(500));
@@ -249,6 +250,15 @@ fn prepare(power: &Switch, stop_transport: &dyn Fn(), boot: bool) -> anyhow::Res
                 install(C6Image::Hosted, version.is_none_or(|v| v >= ACTIVATE_MIN))?;
                 return Ok(false);
             };
+            if !info.runs_current_hosted() {
+                log::info!(
+                    "airdrop: updating the C6's esp_hosted {} to {}",
+                    info.own_version,
+                    image_version(C6Image::Hosted)
+                );
+                install(C6Image::Hosted, true)?;
+                return Ok(false);
+            }
             if !info.holds_receiver() {
                 log::info!(
                     "airdrop: installing the receiver {receiver_version} into {} (held '{}' {})",
@@ -287,24 +297,35 @@ fn prepare(power: &Switch, stop_transport: &dyn Fn(), boot: bool) -> anyhow::Res
     anyhow::bail!("the C6 did not get ready for AirDrop")
 }
 
-/// What the other slot holds, or `None` if esp_hosted does not answer (an
-/// esp_hosted without Wakey's addition).
+/// Our esp_hosted's answer: its own version and what the other slot holds.
 struct SlotInfo {
+    /// Empty from the first version of Wakey's addition, which did not
+    /// send it.
+    own_version: String,
     other_label: String,
     other_project: String,
     other_version: String,
 }
 
 impl SlotInfo {
+    /// The esp_hosted running is the one in the c6 partition.
+    fn runs_current_hosted(&self) -> bool {
+        let current = image_version(C6Image::Hosted);
+        // An unreadable image is no reason to replace what runs.
+        current.is_empty() || self.own_version == current
+    }
+
     fn holds_receiver(&self) -> bool {
-        self.other_project == RECEIVER_PROJECT && self.other_version == receiver_version()
+        self.other_project == RECEIVER_PROJECT
+            && self.other_version == image_version(C6Image::Receiver)
     }
 }
 
-/// The version of the receiver in the c6 partition.
-fn receiver_version() -> String {
+/// The version of an image in the c6 partition (its app description),
+/// empty if it cannot be read.
+fn image_version(which: C6Image) -> String {
     let read = || -> anyhow::Result<String> {
-        let (part, at, _) = image(C6Image::Receiver)?;
+        let (part, at, _) = image(which)?;
         let mut head = [0u8; 112];
         read_part(part, at, &mut head)?;
         app_desc(&head)
@@ -327,8 +348,9 @@ fn query() -> anyhow::Result<Option<SlotInfo>> {
     let Some(reply) = request(WK_QUERY, WK_INFO)? else {
         return Ok(None);
     };
+    // A field the reply is too short for is empty.
     let field = |r: std::ops::Range<usize>| {
-        let b = reply.get(r).unwrap_or_default();
+        let b = &reply[r.start.min(reply.len())..r.end.min(reply.len())];
         let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
         String::from_utf8_lossy(&b[..end]).into_owned()
     };
@@ -336,6 +358,7 @@ fn query() -> anyhow::Result<Option<SlotInfo>> {
         other_label: field(1..18),
         other_project: field(18..50),
         other_version: field(50..82),
+        own_version: field(82..114),
     }))
 }
 
