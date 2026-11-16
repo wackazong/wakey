@@ -66,7 +66,11 @@ impl FrameReader {
         loop {
             let Some(start) = find_magic(&self.buf[at..]).map(|i| at + i) else {
                 // Keep a trailing 0xA5: it may start the next magic.
-                at = if self.buf.last() == Some(&MAGIC[0]) { self.buf.len() - 1 } else { self.buf.len() };
+                at = if self.buf.last() == Some(&MAGIC[0]) {
+                    self.buf.len() - 1
+                } else {
+                    self.buf.len()
+                };
                 break;
             };
             let head = &self.buf[start..];
@@ -86,7 +90,10 @@ impl FrameReader {
             }
             let body = &head[2..5 + len];
             let crc = u32::from_le_bytes(head[5 + len..9 + len].try_into().unwrap());
-            match (crc32(body) == crc).then(|| parse(head[2], &head[5..5 + len])).flatten() {
+            match (crc32(body) == crc)
+                .then(|| parse(head[2], &head[5..5 + len]))
+                .flatten()
+            {
                 Some(frame) => {
                     frames.push(frame);
                     at = start + 9 + len;
@@ -111,14 +118,31 @@ fn text(b: &[u8]) -> String {
 }
 
 fn parse(kind: u8, p: &[u8]) -> Option<Frame> {
-    let u32_at = |i: usize| p.get(i..i + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let u32_at = |i: usize| {
+        p.get(i..i + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
     Some(match kind {
         1 => Frame::Hello(text(p)),
-        2 => Frame::Status { ready: *p.first()? != 0, peers: *p.get(1)? },
-        3 => Frame::Begin { size: u32_at(0)?, name: text(&p[4..]) },
-        4 => Frame::Data { offset: u32_at(0)?, bytes: p[4..].to_vec() },
-        5 => Frame::End { complete: *p.first()? != 0 },
-        6 => Frame::Done { ok: *p.first()? != 0, why: text(&p[1..]) },
+        2 => Frame::Status {
+            ready: *p.first()? != 0,
+            peers: *p.get(1)?,
+        },
+        3 => Frame::Begin {
+            size: u32_at(0)?,
+            name: text(&p[4..]),
+        },
+        4 => Frame::Data {
+            offset: u32_at(0)?,
+            bytes: p[4..].to_vec(),
+        },
+        5 => Frame::End {
+            complete: *p.first()? != 0,
+        },
+        6 => Frame::Done {
+            ok: *p.first()? != 0,
+            why: text(&p[1..]),
+        },
         7 => Frame::Log(text(p)),
         _ => return None,
     })
@@ -126,7 +150,7 @@ fn parse(kind: u8, p: &[u8]) -> Option<Frame> {
 
 /// CRC-32 (IEEE 802.3, as zlib's and the ESP ROM's `esp_rom_crc32_le`
 /// with 0 as start).
-pub fn crc32(data: &[u8]) -> u32 {
+fn crc32(data: &[u8]) -> u32 {
     let mut crc = !0u32;
     for &b in data {
         crc ^= u32::from(b);
@@ -137,8 +161,9 @@ pub fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-/// Encodes a frame as the C6 does (for tests and tools).
-pub fn encode(kind: u8, payload: &[u8]) -> Vec<u8> {
+/// Encodes a frame as the C6 does.
+#[cfg(test)]
+fn encode(kind: u8, payload: &[u8]) -> Vec<u8> {
     let mut f = MAGIC.to_vec();
     f.push(kind);
     f.extend_from_slice(&(payload.len() as u16).to_le_bytes());
@@ -148,8 +173,8 @@ pub fn encode(kind: u8, payload: &[u8]) -> Vec<u8> {
     f
 }
 
-/// File types kept: what the clock plays (`wakey_core::audio_file`, FLAC,
-/// and AAC/ALAC in .m4a, MP3).
+/// File types kept: what [`crate::audio_file`] plays (WAV, AIFF, FLAC,
+/// MP3, AAC/ALAC in .m4a, ADTS .aac).
 pub const SOUND_EXTENSIONS: [&str; 8] = ["wav", "aif", "aiff", "aifc", "flac", "m4a", "mp3", "aac"];
 
 /// The name to store a received file under, or `None` to skip it:
@@ -161,13 +186,23 @@ pub const SOUND_EXTENSIONS: [&str; 8] = ["wav", "aif", "aiff", "aifc", "flac", "
 pub fn sound_name(received: &str) -> Option<String> {
     use unicode_normalization::UnicodeNormalization;
     let received: String = received.nfc().collect();
-    let base = received.rsplit(['/', '\\']).next().unwrap_or(&received).trim();
+    let base = received
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(&received)
+        .trim();
     if base.starts_with('.') {
         return None;
     }
     let cleaned: String = base
         .chars()
-        .map(|c| if c.is_control() || "<>:\"|?*".contains(c) { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || "<>:\"|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let (stem, ext) = cleaned.rsplit_once('.')?;
     let ext = ext.to_ascii_lowercase();
@@ -197,7 +232,13 @@ pub fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
     }
     let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
     (2..)
-        .map(|n| if ext.is_empty() { format!("{stem} {n}") } else { format!("{stem} {n}.{ext}") })
+        .map(|n| {
+            if ext.is_empty() {
+                format!("{stem} {n}")
+            } else {
+                format!("{stem} {n}.{ext}")
+            }
+        })
         .find(|candidate| !taken(candidate))
         .expect("some number is free")
 }
@@ -237,7 +278,10 @@ pub enum Event {
     /// A file is being received (also on each data frame).
     Progress(Progress),
     /// A transfer ended; the files kept (their names), and why not all.
-    Finished { kept: Vec<String>, error: Option<String> },
+    Finished {
+        kept: Vec<String>,
+        error: Option<String>,
+    },
 }
 
 impl fmt::Display for Progress {
@@ -262,11 +306,19 @@ pub struct Receiver<S: Store> {
     done: Vec<String>,
     /// Set when something went wrong here (a gap, a write error).
     error: Option<String>,
+    /// Between a transfer's first `Begin` and its `Done`.
+    in_transfer: bool,
 }
 
 impl<S: Store> Receiver<S> {
     pub fn new(store: S) -> Self {
-        Self { store, current: None, done: Vec::new(), error: None }
+        Self {
+            store,
+            current: None,
+            done: Vec::new(),
+            error: None,
+            in_transfer: false,
+        }
     }
 
     pub fn store(&self) -> &S {
@@ -284,18 +336,26 @@ impl<S: Store> Receiver<S> {
         }
     }
 
+    /// Closes the current file; it joins the transfer only if all its
+    /// bytes came (a `Begin` or `Done` may cut it short).
     fn close_current(&mut self) {
-        if let Some(cur) = self.current.take()
-            && let Some((name, file)) = cur.file
-        {
-            match self.store.close(file) {
-                Ok(()) => self.done.push(name),
-                Err(e) => {
-                    self.store.discard(&name);
-                    self.fail(format!("{name}: {e}"));
-                }
+        let Some(Current {
+            file: Some((name, file)),
+            progress,
+        }) = self.current.take()
+        else {
+            return;
+        };
+        let why = match self.store.close(file) {
+            Ok(()) if progress.got == progress.size => {
+                self.done.push(name);
+                return;
             }
-        }
+            Ok(()) => format!("{name}: incomplete"),
+            Err(e) => format!("{name}: {e}"),
+        };
+        self.store.discard(&name);
+        self.fail(why);
     }
 
     /// Drops what is unfinished (the C6 restarted or the link ended).
@@ -305,6 +365,7 @@ impl<S: Store> Receiver<S> {
             self.store.discard(&name);
         }
         self.error = None;
+        self.in_transfer = false;
     }
 
     pub fn frame(&mut self, frame: Frame) -> Event {
@@ -316,10 +377,17 @@ impl<S: Store> Receiver<S> {
             Frame::Status { ready, .. } => Event::Status { ready },
             Frame::Log(_) => Event::None,
             Frame::Begin { size, name } => {
+                if !self.in_transfer {
+                    // Stray data before it is not part of this transfer.
+                    self.in_transfer = true;
+                    self.error = None;
+                }
                 self.close_current();
                 let file = match sound_name(&name) {
                     Some(n) => {
-                        let n = unique_name(&n, |c| self.store.exists(c) || self.done.iter().any(|d| d == c));
+                        let n = unique_name(&n, |c| {
+                            self.store.exists(c) || self.done.iter().any(|d| d == c)
+                        });
                         match self.store.create(&n, size) {
                             Ok(f) => Some((n, f)),
                             Err(e) => {
@@ -331,11 +399,19 @@ impl<S: Store> Receiver<S> {
                     None => None,
                 };
                 let shown = file.as_ref().map_or(name, |(n, _)| n.clone());
-                let progress = Progress { name: shown, got: 0, size };
+                let progress = Progress {
+                    name: shown,
+                    got: 0,
+                    size,
+                };
                 let event = Event::Progress(progress.clone());
                 self.current = Some(Current { file, progress });
                 // Skipped files (companions, other types) are not shown.
-                if self.current.as_ref().is_some_and(|c| c.file.is_some()) { event } else { Event::None }
+                if self.current.as_ref().is_some_and(|c| c.file.is_some()) {
+                    event
+                } else {
+                    Event::None
+                }
             }
             Frame::Data { offset, bytes } => {
                 let Some(cur) = self.current.as_mut() else {
@@ -343,12 +419,17 @@ impl<S: Store> Receiver<S> {
                     return Event::None;
                 };
                 if offset != cur.progress.got {
-                    let why = format!("{}: gap at {} (expected {})", cur.progress.name, offset, cur.progress.got);
+                    let why = format!(
+                        "{}: gap at {} (expected {})",
+                        cur.progress.name, offset, cur.progress.got
+                    );
                     self.fail(why);
                     return Event::None;
                 }
                 cur.progress.got += bytes.len() as u32;
-                let Some((_, file)) = cur.file.as_mut() else { return Event::None };
+                let Some((_, file)) = cur.file.as_mut() else {
+                    return Event::None;
+                };
                 if let Err(e) = self.store.write(file, &bytes) {
                     let why = format!("{}: {e}", cur.progress.name);
                     let (name, file) = cur.file.take().unwrap();
@@ -360,9 +441,9 @@ impl<S: Store> Receiver<S> {
                 Event::Progress(cur.progress.clone())
             }
             Frame::End { complete } => {
-                if let Some(cur) = &self.current
+                if !complete
+                    && let Some(cur) = &self.current
                     && cur.file.is_some()
-                    && (!complete || cur.progress.got != cur.progress.size)
                 {
                     let why = format!("{}: incomplete", cur.progress.name);
                     self.fail(why);
@@ -372,7 +453,12 @@ impl<S: Store> Receiver<S> {
             }
             Frame::Done { ok, why } => {
                 self.close_current();
-                let error = if ok { self.error.take() } else { Some(self.error.take().unwrap_or(why)) };
+                self.in_transfer = false;
+                let error = if ok {
+                    self.error.take()
+                } else {
+                    Some(self.error.take().unwrap_or(why))
+                };
                 let mut kept = Vec::new();
                 for name in self.done.drain(..) {
                     if error.is_none() {
@@ -419,8 +505,14 @@ mod tests {
             frames,
             vec![
                 Frame::Hello("1.0.0".into()),
-                Frame::Status { ready: true, peers: 3 },
-                Frame::Data { offset: 0, bytes: vec![9, 8, 7] },
+                Frame::Status {
+                    ready: true,
+                    peers: 3
+                },
+                Frame::Data {
+                    offset: 0,
+                    bytes: vec![9, 8, 7]
+                },
             ]
         );
         assert_eq!(r.damaged(), 1);
@@ -428,17 +520,29 @@ mod tests {
 
     #[test]
     fn names() {
-        assert_eq!(sound_name("Tintenfischsong.m4a").as_deref(), Some("Tintenfischsong.m4a"));
+        assert_eq!(
+            sound_name("Tintenfischsong.m4a").as_deref(),
+            Some("Tintenfischsong.m4a")
+        );
         assert_eq!(sound_name("._Tintenfischsong.m4a"), None);
         assert_eq!(sound_name("Foto.HEIC"), None);
-        assert_eq!(sound_name("dir/Weck: mich?.MP3").as_deref(), Some("Weck_ mich_.mp3"));
+        assert_eq!(
+            sound_name("dir/Weck: mich?.MP3").as_deref(),
+            Some("Weck_ mich_.mp3")
+        );
         assert_eq!(sound_name("noext"), None);
         // NFD from iOS → NFC.
-        assert_eq!(sound_name("Schneeglo\u{308}ckchen.m4a").as_deref(), Some("Schneegl\u{f6}ckchen.m4a"));
+        assert_eq!(
+            sound_name("Schneeglo\u{308}ckchen.m4a").as_deref(),
+            Some("Schneegl\u{f6}ckchen.m4a")
+        );
         let long = format!("{}.wav", "ä".repeat(80));
         let n = sound_name(&long).unwrap();
         assert!(n.len() <= 104 && n.ends_with(".wav"), "{n}");
-        assert_eq!(unique_name("a.m4a", |n| n == "a.m4a" || n == "a 2.m4a"), "a 3.m4a");
+        assert_eq!(
+            unique_name("a.m4a", |n| n == "a.m4a" || n == "a 2.m4a"),
+            "a 3.m4a"
+        );
     }
 
     /// Part files and sound files in memory.
@@ -475,44 +579,80 @@ mod tests {
     }
 
     fn data(offset: u32, bytes: &[u8]) -> Frame {
-        Frame::Data { offset, bytes: bytes.to_vec() }
+        Frame::Data {
+            offset,
+            bytes: bytes.to_vec(),
+        }
     }
 
     fn transfer(rx: &mut Receiver<Mem>, ok: bool) -> Event {
-        rx.frame(Frame::Begin { size: 4, name: "a.m4a".into() });
+        rx.frame(Frame::Begin {
+            size: 4,
+            name: "a.m4a".into(),
+        });
         rx.frame(data(0, b"ab"));
         rx.frame(data(2, b"cd"));
         rx.frame(Frame::End { complete: true });
-        rx.frame(Frame::Begin { size: 2, name: "._a.m4a".into() });
+        rx.frame(Frame::Begin {
+            size: 2,
+            name: "._a.m4a".into(),
+        });
         rx.frame(data(0, b"xx"));
         rx.frame(Frame::End { complete: true });
-        rx.frame(Frame::Done { ok, why: if ok { "ok".into() } else { "bad record".into() } })
+        rx.frame(Frame::Done {
+            ok,
+            why: if ok { "ok".into() } else { "bad record".into() },
+        })
     }
 
     #[test]
     fn a_whole_transfer_is_kept_and_companions_skipped() {
         let mut rx = Receiver::new(Mem::default());
         let ev = transfer(&mut rx, true);
-        assert_eq!(ev, Event::Finished { kept: vec!["a.m4a".into()], error: None });
+        assert_eq!(
+            ev,
+            Event::Finished {
+                kept: vec!["a.m4a".into()],
+                error: None
+            }
+        );
         assert_eq!(rx.store().files.get("a.m4a").unwrap(), b"abcd");
         assert!(rx.store().parts.is_empty());
         // The same name again: kept beside the first.
         let ev = transfer(&mut rx, true);
-        assert_eq!(ev, Event::Finished { kept: vec!["a 2.m4a".into()], error: None });
+        assert_eq!(
+            ev,
+            Event::Finished {
+                kept: vec!["a 2.m4a".into()],
+                error: None
+            }
+        );
     }
 
     #[test]
     fn a_failed_or_gappy_transfer_keeps_nothing() {
         let mut rx = Receiver::new(Mem::default());
         let ev = transfer(&mut rx, false);
-        assert_eq!(ev, Event::Finished { kept: vec![], error: Some("bad record".into()) });
+        assert_eq!(
+            ev,
+            Event::Finished {
+                kept: vec![],
+                error: Some("bad record".into())
+            }
+        );
         assert!(rx.store().files.is_empty() && rx.store().parts.is_empty());
 
-        rx.frame(Frame::Begin { size: 4, name: "b.wav".into() });
+        rx.frame(Frame::Begin {
+            size: 4,
+            name: "b.wav".into(),
+        });
         rx.frame(data(0, b"ab"));
         rx.frame(data(3, b"d")); // a frame was lost
         rx.frame(Frame::End { complete: true });
-        let Event::Finished { kept, error } = rx.frame(Frame::Done { ok: true, why: "ok".into() }) else {
+        let Event::Finished { kept, error } = rx.frame(Frame::Done {
+            ok: true,
+            why: "ok".into(),
+        }) else {
             panic!()
         };
         assert!(kept.is_empty() && error.unwrap().contains("gap"));
@@ -520,9 +660,67 @@ mod tests {
     }
 
     #[test]
+    fn a_file_cut_short_by_the_next_begin_or_done_is_not_kept() {
+        let mut rx = Receiver::new(Mem::default());
+        rx.frame(Frame::Begin {
+            size: 4,
+            name: "a.m4a".into(),
+        });
+        rx.frame(data(0, b"ab"));
+        rx.frame(Frame::Begin {
+            size: 2,
+            name: "b.m4a".into(),
+        });
+        rx.frame(data(0, b"cd"));
+        rx.frame(Frame::End { complete: true });
+        let ev = rx.frame(Frame::Done {
+            ok: true,
+            why: "ok".into(),
+        });
+        assert_eq!(
+            ev,
+            Event::Finished {
+                kept: vec![],
+                error: Some("a.m4a: incomplete".into())
+            }
+        );
+
+        rx.frame(Frame::Begin {
+            size: 4,
+            name: "c.m4a".into(),
+        });
+        rx.frame(data(0, b"ab"));
+        let Event::Finished { kept, error } = rx.frame(Frame::Done {
+            ok: true,
+            why: "ok".into(),
+        }) else {
+            panic!()
+        };
+        assert!(kept.is_empty() && error.unwrap().contains("incomplete"));
+        assert!(rx.store().files.is_empty() && rx.store().parts.is_empty());
+    }
+
+    #[test]
+    fn stray_data_does_not_spoil_the_next_transfer() {
+        let mut rx = Receiver::new(Mem::default());
+        rx.frame(data(0, b"zz"));
+        let ev = transfer(&mut rx, true);
+        assert_eq!(
+            ev,
+            Event::Finished {
+                kept: vec!["a.m4a".into()],
+                error: None
+            }
+        );
+    }
+
+    #[test]
     fn a_restart_of_the_c6_drops_the_unfinished() {
         let mut rx = Receiver::new(Mem::default());
-        rx.frame(Frame::Begin { size: 4, name: "c.flac".into() });
+        rx.frame(Frame::Begin {
+            size: 4,
+            name: "c.flac".into(),
+        });
         rx.frame(data(0, b"ab"));
         assert_eq!(rx.progress().map(|p| p.got), Some(2));
         rx.frame(Frame::Hello("1.0.0".into()));
