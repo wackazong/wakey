@@ -14,13 +14,10 @@
 //!   "tidal": { "client_id": "…", "client_secret": "…", "playlist": "Wecker" }
 //! }
 //! ```
-//!
-//! Files from before several alarms have one `alarm` section; it becomes
-//! the first entry of `alarms` (and its snooze settings `ringing`).
 
 use crate::alarm::{self, AlarmConfig, RingConfig};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -117,7 +114,7 @@ impl PowerConfig {
 }
 
 /// The `tidal` section: the app credentials the device login uses (copied
-/// in by hand, see `spikes/tidal-download`), the playlist the alarms take
+/// into `config.json` by hand), the playlist the alarms take
 /// their songs from, and the session the clock writes after logging in.
 /// Anyone with the SD card can use the session: it is the account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,16 +166,10 @@ pub struct WifiConfig {
     pub password: String,
 }
 
-/// Fields of the old `alarm` section that moved to `ringing`.
-const RINGING_FIELDS: [&str; 3] = ["snooze_min", "max_snoozes", "ring_timeout_min"];
-
 impl Config {
-    /// Parses (migrating an old `alarm` section) and brings out-of-range
-    /// values into range.
+    /// Parses and brings out-of-range values into range.
     pub fn parse(json: &str) -> Result<Self, serde_json::Error> {
-        let mut value: Value = serde_json::from_str(json)?;
-        migrate(&mut value);
-        Self::from_value(value)
+        Self::from_value(serde_json::from_str(json)?)
     }
 
     fn from_value(value: Value) -> Result<Self, serde_json::Error> {
@@ -192,16 +183,20 @@ impl Config {
     }
 
     /// Parses the file's text. Also returns the text to write back when it
-    /// changed: an old `alarm` section migrated, missing settings added at
-    /// their defaults (values already there, unknown fields included, stay).
+    /// changed: missing settings added at their defaults (values already
+    /// there, unknown fields included, stay).
     pub fn load(json: &str) -> Result<(Self, Option<String>), serde_json::Error> {
         let mut value: Value = serde_json::from_str(json)?;
-        let mut changed = migrate(&mut value);
+        let mut changed = false;
         if value.is_object() {
             let defaults = serde_json::to_value(Self::default()).expect("config JSON");
             changed |= merge(&mut value, defaults);
             if let Some(Value::Array(list)) = value.get_mut("alarms") {
-                let defaults = serde_json::to_value(AlarmConfig::default()).expect("alarm JSON");
+                let mut defaults =
+                    serde_json::to_value(AlarmConfig::default()).expect("alarm JSON");
+                // Ids are given by `sanitize_list`; a written 0 would not be
+                // unique.
+                defaults.as_object_mut().expect("alarm object").remove("id");
                 for a in list {
                     changed |= merge(a, defaults.clone());
                 }
@@ -216,32 +211,25 @@ impl Config {
     /// file; text that is not a JSON object is replaced by the defaults
     /// plus `alarms`.
     pub fn with_alarms(json: Option<&str>, alarms: &[AlarmConfig]) -> String {
-        let mut value = json
-            .and_then(|t| serde_json::from_str::<Value>(t).ok())
-            .filter(Value::is_object)
-            .unwrap_or_else(|| serde_json::to_value(Self::default()).expect("config JSON"));
-        migrate(&mut value);
+        let mut value = object_or_default(json);
         value["alarms"] = serde_json::to_value(alarms).expect("alarms JSON");
         pretty(&value)
     }
-}
 
-impl Config {
     /// `json` with the TIDAL session replaced (`None`: logged out), the
-    /// rest of the file kept.
+    /// rest of the file kept (as [`Self::with_alarms`]).
     pub fn with_tidal_session(json: Option<&str>, session: Option<&TidalSession>) -> String {
-        let mut value = json
-            .and_then(|t| serde_json::from_str::<Value>(t).ok())
-            .filter(Value::is_object)
-            .unwrap_or_else(|| serde_json::to_value(Self::default()).expect("config JSON"));
-        migrate(&mut value);
+        let mut value = object_or_default(json);
         if !value["tidal"].is_object() {
             value["tidal"] = serde_json::to_value(TidalConfig::default()).expect("tidal JSON");
         }
         let tidal = value["tidal"].as_object_mut().expect("tidal object");
         match session {
             Some(s) => {
-                tidal.insert("session".into(), serde_json::to_value(s).expect("session JSON"));
+                tidal.insert(
+                    "session".into(),
+                    serde_json::to_value(s).expect("session JSON"),
+                );
             }
             None => {
                 tidal.remove("session");
@@ -249,6 +237,14 @@ impl Config {
         }
         pretty(&value)
     }
+}
+
+/// The file's text as a JSON object; the defaults if there is no file or
+/// it is not an object.
+fn object_or_default(json: Option<&str>) -> Value {
+    json.and_then(|t| serde_json::from_str::<Value>(t).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| serde_json::to_value(Config::default()).expect("config JSON"))
 }
 
 fn pretty(value: &Value) -> String {
@@ -276,38 +272,9 @@ fn merge(into: &mut Value, defaults: Value) -> bool {
     changed
 }
 
-/// Turns an old `alarm` section into `alarms` + `ringing`. True if it did.
-fn migrate(value: &mut Value) -> bool {
-    let Some(obj) = value.as_object_mut() else {
-        return false;
-    };
-    let Some(Value::Object(mut old)) = obj.remove("alarm") else {
-        return false;
-    };
-    if obj.contains_key("alarms") {
-        return true; // both: the list wins, the old section goes
-    }
-    let mut ringing = Map::new();
-    for key in RINGING_FIELDS {
-        if let Some(v) = old.remove(key) {
-            ringing.insert(key.into(), v);
-        }
-    }
-    old.insert("id".into(), 1.into());
-    // The old section defaulted to off.
-    old.entry("enabled").or_insert(false.into());
-    if old.get("sound").is_some_and(Value::is_null) {
-        old.remove("sound");
-    }
-    obj.insert("alarms".into(), Value::Array(vec![Value::Object(old)]));
-    obj.entry("ringing").or_insert(Value::Object(ringing));
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alarm::Sound;
 
     #[test]
     fn display_and_power_sections() {
@@ -372,45 +339,6 @@ mod tests {
     }
 
     #[test]
-    fn old_alarm_section_is_migrated() {
-        let text = r#"{ "wifi": { "ssid": "Netz" },
-            "alarm": { "enabled": true, "hour": 6, "minute": 45, "weekdays": [1,1,1,1,1,0,0],
-                       "sound": "sounds/a.wav", "volume": 40, "fade_in_s": 20,
-                       "snooze_min": 5, "max_snoozes": 2, "ring_timeout_min": 15 },
-            "future": 1 }"#;
-        let (c, written) = Config::load(text).unwrap();
-        let a = &c.alarms[0];
-        assert_eq!(
-            (a.id, a.enabled, a.hour, a.minute, a.volume),
-            (1, true, 6, 45, 40)
-        );
-        assert_eq!(a.sound, Sound::File("sounds/a.wav".into()));
-        assert_eq!(
-            c.ringing,
-            RingConfig {
-                snooze_min: 5,
-                max_snoozes: 2,
-                ring_timeout_min: 15
-            }
-        );
-        let written = written.unwrap();
-        let v: Value = serde_json::from_str(&written).unwrap();
-        assert!(v.get("alarm").is_none());
-        assert_eq!(v["future"], 1);
-        assert_eq!(Config::parse(&written).unwrap(), c);
-        assert_eq!(
-            Config::load(&written).unwrap().1,
-            None,
-            "stable once written"
-        );
-
-        // An old section without "enabled" or with "sound": null.
-        let c = Config::parse(r#"{ "alarm": { "hour": 6, "sound": null } }"#).unwrap();
-        assert!(!c.alarms[0].enabled);
-        assert_eq!(c.alarms[0].sound, Sound::RandomFile);
-    }
-
-    #[test]
     fn defaults_written_back() {
         let text =
             r#"{ "wifi": { "ssid": "Netz" }, "alarms": [ { "id": 1, "hour": 7 } ], "future": 1 }"#;
@@ -427,6 +355,11 @@ mod tests {
         // Complete files stay untouched.
         assert_eq!(Config::load(&filled).unwrap().1, None);
         assert!(Config::load("not json").is_err());
+        // No id invented for an alarm without one (a 0 would clash).
+        let (c, written) = Config::load(r#"{ "alarms": [ { "hour": 7 } ] }"#).unwrap();
+        let v: Value = serde_json::from_str(&written.unwrap()).unwrap();
+        assert!(v["alarms"][0].get("id").is_none());
+        assert_eq!(c.alarms[0].id, 1);
     }
 
     #[test]
@@ -438,7 +371,7 @@ mod tests {
             weekdays: [0, 0, 0, 0, 0, 1, 1],
             ..AlarmConfig::default()
         }];
-        let text = r#"{ "wifi": { "ssid": "Netz" }, "alarm": { "snooze_min": 4 }, "x": [1] }"#;
+        let text = r#"{ "wifi": { "ssid": "Netz" }, "ringing": { "snooze_min": 4 }, "x": [1] }"#;
         let session = TidalSession {
             access_token: "a".into(),
             refresh_token: "r".into(),
