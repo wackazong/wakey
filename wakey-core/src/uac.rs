@@ -25,10 +25,28 @@ pub struct StreamAlt {
     /// Bytes per sample in the stream (2 = 16 bit).
     pub subframe_bytes: u8,
     pub bits: u8,
-    /// Discrete sample rates, or the lower and upper bound of a range.
-    pub rates: Vec<u32>,
+    pub rates: Rates,
     /// The endpoint accepts SET_CUR SAMPLING_FREQ.
     pub freq_control: bool,
+}
+
+/// The sample rates of a stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rates {
+    Discrete(Vec<u32>),
+    /// Any rate from the lower to the upper bound (inclusive).
+    Range(u32, u32),
+}
+
+impl Rates {
+    /// True if `rate` is offered; also when none are listed (some devices
+    /// leave the format descriptor's table empty).
+    pub fn contains(&self, rate: u32) -> bool {
+        match self {
+            Rates::Discrete(r) => r.is_empty() || r.contains(&rate),
+            Rates::Range(lo, hi) => (*lo..=*hi).contains(&rate),
+        }
+    }
 }
 
 /// What a device offers for playback.
@@ -53,7 +71,7 @@ impl AudioFunction {
         self.outputs.iter().find(|o| {
             o.channels == channels
                 && o.subframe_bytes == subframe_bytes
-                && (o.rates.contains(&rate) || o.rates.is_empty())
+                && o.rates.contains(rate)
                 && usize::from(o.max_packet) >= packet_bytes
         })
     }
@@ -99,7 +117,7 @@ pub fn parse(config: &[u8]) -> AudioFunction {
                         channels: 0,
                         subframe_bytes: 0,
                         bits: 0,
-                        rates: Vec::new(),
+                        rates: Rates::Discrete(Vec::new()),
                         freq_control: false,
                     });
                 }
@@ -115,22 +133,27 @@ pub fn parse(config: &[u8]) -> AudioFunction {
                         a.bits = d[6];
                         let n = usize::from(d[7]);
                         let rate = |o: usize| u32::from_le_bytes([d[o], d[o + 1], d[o + 2], 0]);
-                        if n == 0 && len >= 14 {
-                            // Continuous range: lower and upper bound.
-                            a.rates.extend([rate(8), rate(11)]);
-                        }
-                        for k in 0..n {
-                            if 8 + 3 * k + 3 <= len {
-                                a.rates.push(rate(8 + 3 * k));
-                            }
-                        }
+                        a.rates = if n == 0 && len >= 14 {
+                            Rates::Range(rate(8), rate(11))
+                        } else {
+                            Rates::Discrete(
+                                (0..n)
+                                    .map(|k| 8 + 3 * k)
+                                    .take_while(|o| o + 3 <= len)
+                                    .map(rate)
+                                    .collect(),
+                            )
+                        };
                     }
                 }
                 _ => {}
             },
             DESC_ENDPOINT if len >= 7 => {
+                // OUT only: an async device follows its data endpoint with
+                // an isochronous feedback IN endpoint.
                 if let Some(a) = alt.as_mut()
                     && d[3] & 0x03 == EP_ISOCHRONOUS
+                    && d[2] & 0x80 == 0
                 {
                     a.endpoint = d[2];
                     a.max_packet = u16::from_le_bytes([d[4], d[5]]) & 0x7FF;
@@ -192,6 +215,41 @@ mod tests {
         assert!(o.freq_control);
         assert!(f.find_output(2, 2, 44_100, 192).is_none());
         assert!(f.find_output(2, 2, 48_000, 193).is_none());
+    }
+
+    #[test]
+    fn async_output_with_feedback_endpoint() {
+        let mut d = pebble();
+        // After the OUT endpoint (async, 0x05) and its CS endpoint: the
+        // isochronous feedback IN endpoint 0x81.
+        let at = d
+            .windows(4)
+            .position(|w| w == [9, 0x05, 0x02, 0x09])
+            .unwrap();
+        d[at + 3] = 0x05;
+        let cs = at + 9 + 7;
+        d.splice(cs..cs, [9, 0x05, 0x81, 0x11, 3, 0, 1, 3, 0]);
+        let f = parse(&d);
+        let o = f.find_output(2, 2, 48_000, 192).expect("async output");
+        assert_eq!((o.endpoint, o.max_packet), (0x02, 192));
+    }
+
+    #[test]
+    fn continuous_rate_range() {
+        let mut d = pebble();
+        // Format with bSamFreqType 0: 8 kHz to 96 kHz.
+        let at = d.windows(4).position(|w| w == [11, 0x24, 2, 1]).unwrap();
+        d.splice(
+            at..at + 11,
+            [
+                14, 0x24, 2, 1, 2, 2, 16, 0, 0x40, 0x1F, 0x00, 0x00, 0x77, 0x01,
+            ],
+        );
+        let f = parse(&d);
+        assert_eq!(f.outputs[0].rates, Rates::Range(8_000, 96_000));
+        assert!(f.find_output(2, 2, 48_000, 192).is_some());
+        assert!(f.find_output(2, 2, 44_100, 192).is_some());
+        assert!(f.find_output(2, 2, 192_000, 192).is_none());
     }
 
     #[test]
