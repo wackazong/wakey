@@ -4,6 +4,7 @@
 //! [`super::sync`]). The device only reads the file into an image.
 
 use super::sync::COVER_PX;
+use super::{Result, ensure, err};
 use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
 use zune_core::options::DecoderOptions;
@@ -18,14 +19,15 @@ pub const COVER_BYTES: usize = (COVER_PX * COVER_PX * 3) as usize;
 
 /// Decodes `jpeg`, crops it to a centred square and shrinks it to
 /// [`COVER_PX`] × [`COVER_PX`]; RGB888, row by row.
-pub fn decode(jpeg: &[u8]) -> Result<Vec<u8>, String> {
+pub fn decode(jpeg: &[u8]) -> Result<Vec<u8>> {
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
     let mut decoder = JpegDecoder::new_with_options(ZCursor::new(jpeg), options);
-    let pixels = decoder.decode().map_err(|e| format!("cover: {e:?}"))?;
-    let (w, h) = decoder.dimensions().ok_or("cover: no size")?;
-    if w == 0 || h == 0 || pixels.len() < w * h * 3 {
-        return Err("cover: empty image".into());
-    }
+    let pixels = decoder.decode().map_err(|e| err(format!("cover: {e:?}")))?;
+    let (w, h) = decoder.dimensions().ok_or_else(|| err("cover: no size"))?;
+    ensure!(
+        w > 0 && h > 0 && pixels.len() >= w * h * 3,
+        "cover: empty image"
+    );
     Ok(shrink(&pixels, w, h, COVER_PX as usize))
 }
 
@@ -61,7 +63,7 @@ fn shrink(rgb: &[u8], w: usize, h: usize, px: usize) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    const JPEG: &[u8] = include_bytes!("../../tests/data/cover-160x200.jpg");
+    const JPEG: &[u8] = include_bytes!("../../testdata/cover-160x200.jpg");
 
     fn pixel(rgb: &[u8], x: usize, y: usize) -> [u8; 3] {
         let i = (y * COVER_PX as usize + x) * 3;
@@ -79,7 +81,11 @@ mod tests {
         let rgb = decode(JPEG).unwrap();
         assert_eq!(rgb.len(), COVER_BYTES);
         let last = COVER_PX as usize - 1;
-        assert!(near(pixel(&rgb, 2, 2), [0xd0, 0x20, 0x20]), "{:?}", pixel(&rgb, 2, 2));
+        assert!(
+            near(pixel(&rgb, 2, 2), [0xd0, 0x20, 0x20]),
+            "{:?}",
+            pixel(&rgb, 2, 2)
+        );
         assert!(near(pixel(&rgb, last - 2, last - 2), [0x20, 0x40, 0xd0]));
     }
 
@@ -98,6 +104,9 @@ mod tests {
             9, 9, 9, 1, 1, 1, 3, 3, 3, 9, 9, 9, //
             9, 9, 9, 1, 1, 1, 3, 3, 3, 9, 9, 9,
         ];
-        assert_eq!(shrink(&wide, 4, 2, 2), vec![1, 1, 1, 3, 3, 3, 1, 1, 1, 3, 3, 3]);
+        assert_eq!(
+            shrink(&wide, 4, 2, 2),
+            vec![1, 1, 1, 3, 3, 3, 1, 1, 1, 3, 3, 3]
+        );
     }
 }

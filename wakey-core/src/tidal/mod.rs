@@ -1,11 +1,11 @@
-//! TIDAL, the songs the alarms play (V2): the user picks them in a playlist
-//! in the TIDAL app; the clock logs in with a device code, syncs that
-//! playlist and downloads the tracks as FLAC to the SD card.
+//! TIDAL, the songs the alarms play: the user picks them in a playlist in
+//! the TIDAL app; the clock logs in with a device code, syncs that playlist
+//! and downloads the tracks as FLAC to the SD card.
 //!
 //! This module does no I/O. It describes each HTTP request ([`Request`])
 //! and reads the responses (status and body); the firmware sends them over
-//! Wi-Fi. The protocol is the one of TIDAL's apps, unofficial (from the
-//! `tidlers` crate and `spikes/tidal-download`):
+//! Wi-Fi. The protocol is the one of TIDAL's apps; it is unofficial and
+//! undocumented (see the `tidlers` crate):
 //!
 //! - [`auth`]: device code login, token refresh.
 //! - [`api`]: playlists, their tracks, covers, the stream manifest.
@@ -98,7 +98,7 @@ fn err(msg: impl Into<String>) -> Error {
 }
 
 /// An unexpected HTTP status, with a hint (no body: it may carry tokens).
-pub fn status_error(stage: &str, status: u16) -> Error {
+fn status_error(stage: &str, status: u16) -> Error {
     let hint = match status {
         401 => "not logged in (log in again)",
         403 => "not allowed for this account or quality",
@@ -116,7 +116,7 @@ fn json<T: serde::de::DeserializeOwned>(stage: &str, body: &[u8]) -> Result<T> {
 }
 
 /// Percent-encodes a form or query value (RFC 3986 unreserved kept).
-pub fn encode(value: &str) -> String {
+fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for b in value.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
@@ -131,7 +131,7 @@ pub fn encode(value: &str) -> String {
 fn form(fields: &[(&str, &str)]) -> String {
     fields
         .iter()
-        .map(|(k, v)| format!("{k}={}", encode(v)))
+        .map(|(k, v)| format!("{k}={}", percent_encode(v)))
         .collect::<Vec<_>>()
         .join("&")
 }

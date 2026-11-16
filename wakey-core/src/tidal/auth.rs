@@ -31,7 +31,9 @@ pub struct DeviceCode {
     pub user_code: String,
     /// The link with the code in it, with `https://`.
     pub url: String,
+    /// Seconds the code stays valid.
     pub expires_in: u64,
+    /// Seconds between polls.
     pub interval: u64,
 }
 
@@ -199,14 +201,6 @@ pub fn parse_refresh(
             .and_then(|u| u.country_code.clone())
             .unwrap_or_else(|| old.country_code.clone()),
     })
-}
-
-/// Ends the session at TIDAL (answer 204).
-pub fn logout(session: &TidalSession) -> Request {
-    let mut r = Request::post_form(format!("{}/logout", super::api::API), &[]);
-    r.headers
-        .push(("Authorization", format!("Bearer {}", session.access_token)));
-    r
 }
 
 #[cfg(test)]

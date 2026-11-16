@@ -1,5 +1,4 @@
-//! Stream manifests (ported from `spikes/tidal-download`, which handles
-//! more of DASH than `tidlers`):
+//! Stream manifests:
 //!
 //! - BTS (`application/vnd.tidal.bts`): JSON with mirror URLs of one
 //!   complete file (FLAC for lossless).
@@ -163,7 +162,7 @@ fn presentation_seconds(value: &str) -> Result<f64> {
 }
 
 /// The segment URLs of a static DASH manifest, initialization first.
-pub fn dash_urls(xml: &str, seconds: f64) -> Result<Vec<String>> {
+fn dash_urls(xml: &str, seconds: f64) -> Result<Vec<String>> {
     ensure!(
         seconds.is_finite() && seconds > 0.0 && seconds <= 86_400.0,
         "DASH: invalid track duration"

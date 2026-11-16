@@ -3,7 +3,7 @@
 //! manifest of a track.
 
 use super::manifest::{self, MediaPlan};
-use super::{Request, Result, encode, ensure, json, status_error};
+use super::{Request, Result, ensure, json, percent_encode, status_error};
 use crate::config::TidalSession;
 use serde::{Deserialize, Serialize};
 
@@ -42,7 +42,7 @@ pub fn playlists(session: &TidalSession, offset: u32) -> Request {
         format!(
             "{API}/users/{}/playlists?countryCode={}&limit={PLAYLISTS_PAGE}&offset={offset}",
             session.user_id,
-            encode(&session.country_code)
+            percent_encode(&session.country_code)
         ),
         session,
     )
@@ -64,7 +64,7 @@ pub fn parse_playlists(
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Page {
-        #[serde(default)]
+        /// Absent: this is the last page.
         total_number_of_items: Option<u32>,
         items: Vec<Item>,
     }
@@ -107,8 +107,8 @@ pub fn playlist(session: &TidalSession, uuid: &str) -> Request {
     authed(
         format!(
             "{API}/playlists/{}?countryCode={}",
-            encode(uuid),
-            encode(&session.country_code)
+            percent_encode(uuid),
+            percent_encode(&session.country_code)
         ),
         session,
     )
@@ -152,8 +152,8 @@ pub fn playlist_items(session: &TidalSession, uuid: &str, offset: u32) -> Reques
     authed(
         format!(
             "{API}/playlists/{}/items?countryCode={}&limit={TRACKS_PAGE}&offset={offset}&order=INDEX&orderDirection=ASC",
-            encode(uuid),
-            encode(&session.country_code)
+            percent_encode(uuid),
+            percent_encode(&session.country_code)
         ),
         session,
     )
@@ -183,7 +183,8 @@ pub fn parse_playlist_items(
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Page {
-        total_number_of_items: u32,
+        /// Absent: this is the last page.
+        total_number_of_items: Option<u32>,
         items: Vec<Entry>,
     }
     #[derive(Deserialize)]
@@ -255,10 +256,8 @@ pub fn parse_playlist_items(
             cover: i.album.and_then(|a| a.cover).filter(|c| !c.is_empty()),
         });
     }
-    Ok((
-        tracks,
-        (n > 0 && next < page.total_number_of_items).then_some(next),
-    ))
+    let more = n > 0 && page.total_number_of_items.is_some_and(|t| next < t);
+    Ok((tracks, more.then_some(next)))
 }
 
 /// A cover image (JPEG) of `px` × `px` (80, 160, 320, 640, 1280).
@@ -277,7 +276,7 @@ pub fn playback_info(session: &TidalSession, track: u64) -> Request {
     authed(
         format!(
             "{API}/tracks/{track}/playbackinfopostpaywall?countryCode={}&audioquality=LOSSLESS&playbackmode=STREAM&assetpresentation=FULL&immersiveaudio=false",
-            encode(&session.country_code)
+            percent_encode(&session.country_code)
         ),
         session,
     )
@@ -394,7 +393,10 @@ mod tests {
 
     #[test]
     fn session_check() {
-        assert_eq!(sessions(&session()).url, "https://api.tidal.com/v1/sessions");
+        assert_eq!(
+            sessions(&session()).url,
+            "https://api.tidal.com/v1/sessions"
+        );
         let body = br#"{"sessionId":"s","userId":42,"countryCode":"CH","channelId":1}"#;
         assert_eq!(parse_sessions(200, body).unwrap(), (42, "CH".into()));
         assert!(parse_sessions(401, b"{}").is_err());
@@ -403,7 +405,10 @@ mod tests {
     #[test]
     fn playback_info_asks_for_stereo() {
         let r = playback_info(&session(), 7);
-        assert!(r.url.contains("/tracks/7/playbackinfopostpaywall?countryCode=CH"));
+        assert!(
+            r.url
+                .contains("/tracks/7/playbackinfopostpaywall?countryCode=CH")
+        );
         assert!(r.url.contains("audioquality=LOSSLESS"));
         assert!(r.url.contains("immersiveaudio=false"));
     }

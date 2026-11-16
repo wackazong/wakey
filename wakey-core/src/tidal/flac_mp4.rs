@@ -257,8 +257,9 @@ mod tests {
     use crate::audio_file::AudioFile;
     use std::io::Cursor;
 
-    fn decode(flac: Vec<u8>) -> Vec<i16> {
-        let mut f = AudioFile::from_reader(Cursor::new(flac)).unwrap();
+    /// All of an audio file as stereo i16.
+    fn decode(bytes: Vec<u8>) -> Vec<i16> {
+        let mut f = AudioFile::from_reader(Cursor::new(bytes)).unwrap();
         let mut all = Vec::new();
         let mut buf = [0i16; 512];
         loop {
@@ -276,7 +277,7 @@ mod tests {
         // frag_keyframe+empty_moov+default_base_moof -frag_duration 50000
         let mp4 = include_bytes!("../../testdata/stereo16_frag.mp4");
         let wav = include_bytes!("../../testdata/stereo16.wav");
-        let want = decode_wav(wav);
+        let want = decode(wav.to_vec());
         for piece in [1, 7, 100, 4096, mp4.len()] {
             let mut u = Unpacker::new();
             let mut flac = Vec::new();
@@ -286,19 +287,6 @@ mod tests {
             u.finish().unwrap();
             assert_eq!(&flac[..4], b"fLaC");
             assert_eq!(decode(flac), want, "pieces of {piece}");
-        }
-    }
-
-    fn decode_wav(bytes: &[u8]) -> Vec<i16> {
-        let mut f = AudioFile::from_reader(Cursor::new(bytes.to_vec())).unwrap();
-        let mut all = Vec::new();
-        let mut buf = [0i16; 512];
-        loop {
-            let n = f.read(&mut buf).unwrap();
-            if n == 0 {
-                return all;
-            }
-            all.extend_from_slice(&buf[..2 * n]);
         }
     }
 
