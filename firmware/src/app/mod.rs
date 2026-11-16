@@ -40,27 +40,17 @@ mod screens {
     include!(concat!(env!("OUT_DIR"), "/wakey.rs"));
 }
 
-/// `AppWindow.page` values.
-const PAGE_CLOCK: i32 = 0;
-const PAGE_LIST: i32 = 1;
-const PAGE_ALARM: i32 = 2;
-const PAGE_SOUND: i32 = 3;
-const PAGE_NAME: i32 = 4;
-/// One alarm list row, for the list layer's offscreen window.
-const PAGE_LIST_ROW: i32 = 5;
-/// `config.json` cannot be read: the clock stops there.
-const PAGE_CONFIG_ERROR: i32 = 6;
-/// One sound list row, offscreen, for the list layer (`sound_page::layer`).
-const PAGE_SOUND_ROW: i32 = 7;
+use screens::Page;
 
 /// How deep a page is: going deeper slides the new page in from the
 /// right, going back from the left.
-fn depth(page: i32) -> i32 {
+fn depth(page: Page) -> u8 {
     match page {
-        PAGE_CLOCK => 0,
-        PAGE_LIST => 1,
-        PAGE_ALARM => 2,
-        _ => 3, // sound, name: below the alarm page
+        Page::Clock => 0,
+        Page::AlarmList => 1,
+        Page::Alarm => 2,
+        // Below the alarm page; the others are never shown by `show_page`.
+        _ => 3,
     }
 }
 
@@ -68,20 +58,20 @@ fn depth(page: i32) -> i32 {
 /// go down again; within them deeper pages come from the right. Leaving the
 /// sound page ends what it runs (TIDAL, AirDrop, a preview), whatever made
 /// it go: its buttons, the idle timeout, an alarm ringing.
-fn show_page(window: &screens::AppWindow, ctx: &Ctx, page: i32) {
+fn show_page(window: &screens::AppWindow, ctx: &Ctx, page: Page) {
     use transition::Direction;
     // A Wi-Fi session for TIDAL stays up while an alarm is edited.
-    crate::tidal::set_editing(matches!(page, PAGE_ALARM | PAGE_SOUND | PAGE_NAME));
+    crate::tidal::set_editing(matches!(page, Page::Alarm | Page::Sound | Page::Name));
     let from = window.get_page();
     if from == page {
         return;
     }
-    if from == PAGE_SOUND {
+    if from == Page::Sound {
         sound_page::leave(window, ctx);
     }
-    let direction = if from == PAGE_CLOCK {
+    let direction = if from == Page::Clock {
         Direction::Up
-    } else if page == PAGE_CLOCK {
+    } else if page == Page::Clock {
         Direction::Down
     } else if depth(page) > depth(from) {
         Direction::Forward
@@ -90,7 +80,7 @@ fn show_page(window: &screens::AppWindow, ctx: &Ctx, page: i32) {
     };
     // What fills the new page's part of the screen until it is rendered:
     // the clock's sky, or the settings pages' background.
-    let background = if page == PAGE_CLOCK {
+    let background = if page == Page::Clock {
         window.global::<screens::Clock>().get_sky_middle()
     } else {
         window.global::<screens::Theme>().get_background()
@@ -305,7 +295,7 @@ async fn config_error(
     let window = platform::init();
     let ui = screens::AppWindow::new().expect("UI");
     ui.set_error_text(error.into());
-    ui.set_page(PAGE_CONFIG_ERROR);
+    ui.set_page(Page::ConfigError);
     ui.show().expect("show");
     let _ = backlight.set_level(0.6);
     render_loop::run(window, display, &mut rot, None).await
@@ -321,13 +311,13 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
         Duration::from_secs(5),
         ctx.with(|window, ctx| {
             let page = window.get_page();
-            if page == PAGE_CLOCK {
+            if page == Page::Clock {
                 return;
             }
             // Not while a preview plays, nor while a TIDAL login waits for
             // the user (the QR code on the sound page), nor while a file
             // arrives by AirDrop.
-            let limit = if page == PAGE_SOUND {
+            let limit = if page == Page::Sound {
                 IDLE_CLOSE_SOUND
             } else {
                 IDLE_CLOSE
@@ -341,8 +331,8 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
                     "ui: back to the clock after {} s without a touch",
                     limit.as_secs()
                 );
-                show_page(window, ctx, PAGE_CLOCK);
-            } else if page == PAGE_ALARM {
+                show_page(window, ctx, Page::Clock);
+            } else if page == Page::Alarm {
                 alarm_page::fill(window, ctx);
                 // Keeps the speaker on while the wheels are shown.
                 ctx.click.wake();

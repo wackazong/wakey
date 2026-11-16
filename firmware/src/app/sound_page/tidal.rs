@@ -2,9 +2,9 @@
 //! code of the device code link), then the playlist's tracks, followed
 //! while the tab is open.
 
-use super::{SoundRow, TAB_TIDAL, fill_list, row};
+use super::{fill_list, row};
 use crate::app::Ctx;
-use crate::app::screens::{AppWindow, SoundPicker};
+use crate::app::screens::{AppWindow, SoundPicker, SoundRow, SoundRowKind, SoundTab, TidalView};
 use crate::tidal::{State, TrackStatus};
 use slint::{ComponentHandle, Image, Model, Rgb8Pixel, SharedPixelBuffer, TimerMode};
 use std::time::Duration;
@@ -27,7 +27,7 @@ pub(super) fn tab(window: &AppWindow, ctx: &Ctx, open: bool) {
         let Some(window) = weak.upgrade() else { return };
         let picker = window.global::<SoundPicker>();
         let now = (tidal.state(), tidal.version());
-        if picker.get_tab() != TAB_TIDAL {
+        if picker.get_tab() != SoundTab::Tidal {
             return;
         }
         if now != seen {
@@ -40,8 +40,8 @@ pub(super) fn tab(window: &AppWindow, ctx: &Ctx, open: bool) {
 
 /// TIDAL's state changed: the tab filled again.
 pub(super) fn refresh(window: &AppWindow, ctx: &Ctx) {
-    if window.global::<SoundPicker>().get_tab() == TAB_TIDAL {
-        fill_list(window, ctx, TAB_TIDAL);
+    if window.global::<SoundPicker>().get_tab() == SoundTab::Tidal {
+        fill_list(window, ctx, SoundTab::Tidal);
         show_state(window, &ctx.tidal.state());
     }
 }
@@ -80,7 +80,13 @@ pub(super) fn choices(ctx: &Ctx, selected: &Sound) -> Vec<(SoundRow, Sound)> {
     if tracks.len() > 1 || (tracks.len() == 1 && *selected == Sound::TidalRandom) {
         let sound = Sound::TidalRandom;
         choices.push((
-            row("Zufällig", "wechselt jeden Tag", &sound, selected, 1),
+            row(
+                "Zufällig",
+                "wechselt jeden Tag",
+                &sound,
+                selected,
+                SoundRowKind::Random,
+            ),
             sound,
         ));
     }
@@ -99,7 +105,7 @@ pub(super) fn choices(ctx: &Ctx, selected: &Sound) -> Vec<(SoundRow, Sound)> {
         } else {
             sub
         };
-        let mut r = row(&t.title, &sub, &sound, selected, 3);
+        let mut r = row(&t.title, &sub, &sound, selected, SoundRowKind::TidalTrack);
         r.failed = status == TrackStatus::Failed;
         if let Some((id, fraction)) = progress
             && id == t.id
@@ -131,7 +137,7 @@ fn show_state(window: &AppWindow, state: &State) {
                 }
                 picker.set_tidal_code(code.as_str().into());
             }
-            picker.set_tidal_view(1);
+            picker.set_tidal_view(TidalView::Login);
             picker.set_tidal_empty("".into());
             return;
         }
@@ -140,13 +146,13 @@ fn show_state(window: &AppWindow, state: &State) {
         State::LoggedIn if has_rows => "",
         State::LoggedIn => "Die Playlist ist leer.",
         State::Failed(e) => {
-            picker.set_tidal_view(0);
+            picker.set_tidal_view(TidalView::List);
             let why = crate::app::texts::tidal_problem(e);
             picker.set_tidal_empty(format!("{why} Zum Wiederholen den Tab erneut öffnen.").into());
             return;
         }
     };
-    picker.set_tidal_view(0);
+    picker.set_tidal_view(TidalView::List);
     picker.set_tidal_code("".into());
     picker.set_tidal_empty(note.into());
 }

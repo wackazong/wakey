@@ -10,9 +10,8 @@
 //! rings (it needs a few seconds to boot and enumerate) and on the alarm
 //! pages (sound previews). Not on the clock page, awake or not.
 
-use super::PAGE_CLOCK;
 use super::alarm::{AlarmClock, View};
-use super::screens::AppWindow;
+use super::screens::{AppWindow, Page};
 use crate::audio::uac::UsbAudio;
 use crate::board::i2c::SharedI2c;
 use crate::board::ina226;
@@ -72,7 +71,7 @@ pub fn start(
             .borrow()
             .secs_to_ring()
             .is_some_and(|s| s <= USB_LEAD_S);
-        let usb_wanted = soon || window.get_page() != PAGE_CLOCK;
+        let usb_wanted = soon || window.get_page() != Page::Clock;
         if usb_wanted != usb_on {
             usb.set_power(usb_wanted);
             usb_on = usb_wanted;
@@ -91,7 +90,7 @@ pub fn start(
             }
         } else if allowed
             && !ringing
-            && window.get_page() == PAGE_CLOCK
+            && window.get_page() == Page::Clock
             && input::idle().as_millis() >= u64::from(cfg.sleep_after_s) * 1000
         {
             power::sleep();
@@ -103,7 +102,7 @@ pub fn start(
 /// The debug overlay's text: brightness, light, and when the display
 /// sleeps (or why not).
 #[cfg(feature = "debug-overlay")]
-fn debug_text(cfg: &PowerConfig, allowed: bool, ringing: bool, page: i32) -> String {
+fn debug_text(cfg: &PowerConfig, allowed: bool, ringing: bool, page: Page) -> String {
     let dim = u32::from(crate::ui::dim::factor()) * 100 / u32::from(crate::ui::dim::FULL);
     let backlight = crate::ambient::backlight_level() * 100.0;
     let light = crate::ambient::last_light();
@@ -121,7 +120,7 @@ fn debug_text(cfg: &PowerConfig, allowed: bool, ringing: bool, page: i32) -> Str
         }
     } else if ringing {
         "no sleep: ringing".to_string()
-    } else if page != PAGE_CLOCK {
+    } else if page != Page::Clock {
         "no sleep: not the clock page".to_string()
     } else {
         let idle = input::idle().as_secs();

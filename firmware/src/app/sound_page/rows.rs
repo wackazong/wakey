@@ -2,9 +2,9 @@
 //! rendered one at a time by an offscreen `AppWindow`, in a card whose
 //! rounded corners the page and the layer cap alike.
 
-use super::TAB_TIDAL;
-use crate::app::PAGE_SOUND_ROW;
-use crate::app::screens::{AppWindow, SoundListLayout, SoundPicker, SoundRow, Theme};
+use crate::app::screens::{
+    AppWindow, Page, SoundListLayout, SoundPicker, SoundRow, SoundTab, Theme, TidalView,
+};
 use crate::ui::list_layer::{Buffers, Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
 use crate::ui::platform;
 use slint::{ComponentHandle, Image, Model, ModelRc, SharedPixelBuffer, Weak};
@@ -73,7 +73,7 @@ pub fn layer(window: &AppWindow, shared: Buffers) -> ListLayer<SoundRows> {
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
     let view = AppWindow::new().expect("sound row view");
-    view.set_page(PAGE_SOUND_ROW);
+    view.set_page(Page::SoundListRow);
     view.show().expect("show sound row view");
     let rows = SoundRows {
         window: window.as_weak(),
@@ -95,10 +95,10 @@ impl SoundRows {
     }
 
     /// The tab shown and its rows.
-    fn list(&self) -> Option<(i32, ModelRc<SoundRow>)> {
+    fn list(&self) -> Option<(SoundTab, ModelRc<SoundRow>)> {
         self.with_picker(|p| {
             let tab = p.get_shown_tab();
-            let rows = if tab == TAB_TIDAL {
+            let rows = if tab == SoundTab::Tidal {
                 p.get_tidal_rows()
             } else {
                 p.get_rows()
@@ -107,7 +107,7 @@ impl SoundRows {
         })
     }
 
-    fn row(&self, i: usize) -> Option<(i32, SoundRow)> {
+    fn row(&self, i: usize) -> Option<(SoundTab, SoundRow)> {
         let (tab, rows) = self.list()?;
         rows.row_data(i).map(|r| (tab, r))
     }
@@ -118,8 +118,8 @@ impl ListSource for SoundRows {
         self.window.upgrade().is_some_and(|w| {
             let p = w.global::<SoundPicker>();
             // Not while the TIDAL tab shows the login.
-            w.get_page() == crate::app::PAGE_SOUND
-                && !(p.get_shown_tab() == TAB_TIDAL && p.get_tidal_view() == 1)
+            w.get_page() == Page::Sound
+                && !(p.get_shown_tab() == SoundTab::Tidal && p.get_tidal_view() == TidalView::Login)
         })
     }
 
@@ -133,12 +133,13 @@ impl ListSource for SoundRows {
         };
         let mut h = std::hash::DefaultHasher::new();
         let cover = r.cover.size();
+        // Slint's enums are not `Hash`: their discriminants are.
         (
-            tab,
+            tab as u8,
             r.title.as_str(),
             r.sub.as_str(),
             r.selected,
-            r.kind,
+            r.kind as u8,
             r.failed,
             (r.progress * 1000.0) as i32,
             cover.width,
@@ -159,7 +160,7 @@ impl ListSource for SoundRows {
 
     fn offset(&self) -> f32 {
         self.with_picker(|p| {
-            if p.get_shown_tab() == TAB_TIDAL {
+            if p.get_shown_tab() == SoundTab::Tidal {
                 p.get_tidal_scroll()
             } else {
                 p.get_files_scroll()
@@ -189,7 +190,7 @@ impl ListSource for SoundRows {
 
     fn scroll_ended(&mut self, offset: f32) {
         self.with_picker(|p| {
-            if p.get_shown_tab() == TAB_TIDAL {
+            if p.get_shown_tab() == SoundTab::Tidal {
                 p.set_tidal_scroll(offset);
             } else {
                 p.set_files_scroll(offset);

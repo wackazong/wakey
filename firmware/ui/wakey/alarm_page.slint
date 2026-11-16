@@ -9,7 +9,7 @@
 // │ Klingelt in 9 Std.   │              ▮▮▮  < 10 s   › │
 // └───────────────────────────────────────────────────────┘
 
-import { Theme, Button, Chip, Icon, VolumeBars } from "theme.slint";
+import { Theme, Button, ButtonKind, Chip, Icon, IconKind, VolumeBars } from "theme.slint";
 import { Wheel } from "wheel.slint";
 
 // The values being edited; filled from Rust when the page opens
@@ -64,7 +64,7 @@ component CardRow inherits Rectangle {
         vertical-alignment: center;
     }
     Icon {
-        kind: 1;
+        kind: IconKind.forward;
         x: parent.width - 64px;
         y: (parent.height - self.height) / 2;
         width: 32px;
@@ -93,7 +93,7 @@ export component AlarmPage inherits Rectangle {
         x: 24px;
         y: 20px;
         width: 240px;
-        kind: 2;
+        kind: ButtonKind.ghost;
         text: "Abbrechen";
         on-press: true;
         clicked => { AlarmEditor.cancel(); }
@@ -102,7 +102,7 @@ export component AlarmPage inherits Rectangle {
         x: parent.width - 264px;
         y: 20px;
         width: 240px;
-        kind: 1;
+        kind: ButtonKind.primary;
         text: "Sichern";
         on-press: true;
         enabled: AlarmEditor.any-day && AlarmEditor.changed;
@@ -250,7 +250,7 @@ export component AlarmPage inherits Rectangle {
                 Rectangle {
                     width: 36px;
                     Icon {
-                        kind: 9;
+                        kind: IconKind.fade-in;
                         y: (parent.height - self.height) / 2;
                         width: 36px;
                         height: 36px;

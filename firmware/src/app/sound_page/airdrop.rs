@@ -2,10 +2,10 @@
 //! receiver ([`crate::airdrop`]). Its note ends the list, a file arriving
 //! is a row above it, and a file received fills the list again.
 
-use super::{SoundRow, TAB_FILES, fill_list};
+use super::fill_list;
 use crate::airdrop::{self, State};
 use crate::app::Ctx;
-use crate::app::screens::{AppWindow, SoundPicker};
+use crate::app::screens::{AppWindow, SoundPicker, SoundRow, SoundRowKind, SoundTab};
 use crate::sounds;
 use slint::{ComponentHandle, Image, Model, TimerMode};
 use std::time::Duration;
@@ -49,11 +49,16 @@ pub(super) fn rows(ctx: &Ctx) -> Vec<SoundRow> {
         rows.push(row(
             p.name.clone(),
             "wird empfangen …".into(),
-            5,
+            SoundRowKind::AirdropFile,
             fraction(p),
         ));
     }
-    rows.push(row(note.into(), String::new(), 4, -1.0));
+    rows.push(row(
+        note.into(),
+        String::new(),
+        SoundRowKind::AirdropNote,
+        -1.0,
+    ));
     *ctx.sound.airdrop_shown.borrow_mut() = Some((state, airdrop::files_version()));
     rows
 }
@@ -87,7 +92,7 @@ pub(super) fn tick(window: &AppWindow, ctx: &Ctx) {
                 let i = rows.row_count().saturating_sub(2);
                 // As TIDAL's bar: only a visible step repaints the row.
                 if let Some(mut row) = rows.row_data(i)
-                    && row.kind == 5
+                    && row.kind == SoundRowKind::AirdropFile
                     && (row.progress - fraction(p)).abs() >= 0.005
                 {
                     row.progress = fraction(p);
@@ -98,8 +103,8 @@ pub(super) fn tick(window: &AppWindow, ctx: &Ctx) {
         }
         Some((_, f)) if f != files => {
             *ctx.sound.files.borrow_mut() = sounds::list();
-            fill_list(window, ctx, TAB_FILES);
+            fill_list(window, ctx, SoundTab::Files);
         }
-        _ => fill_list(window, ctx, TAB_FILES),
+        _ => fill_list(window, ctx, SoundTab::Files),
     }
 }

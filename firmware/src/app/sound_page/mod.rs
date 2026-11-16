@@ -13,8 +13,10 @@ mod airdrop;
 mod rows;
 mod tidal;
 
-use super::screens::{AppWindow, SoundListLayout, SoundPicker, SoundRow};
-use super::{Ctx, PAGE_ALARM, PAGE_SOUND, alarm_page, show_page};
+use super::screens::{
+    AppWindow, Page, SoundListLayout, SoundPicker, SoundRow, SoundRowKind, SoundTab,
+};
+use super::{Ctx, alarm_page, show_page};
 use crate::sounds::{self, SoundFile};
 use crate::tidal::TrackStatus;
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, VecModel};
@@ -28,9 +30,6 @@ pub use rows::layer;
 
 /// Fade-in choices (the pills), seconds.
 const FADES: [u16; 4] = [0, 10, 30, 60];
-
-const TAB_FILES: i32 = 0;
-const TAB_TIDAL: i32 = 1;
 
 /// What the sound page keeps (in [`Ctx`]).
 #[derive(Default)]
@@ -59,8 +58,8 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     let (tab, volume, fade) = {
         let cfg = ctx.draft.borrow();
         let tab = match cfg.sound {
-            Sound::TidalTrack(_) | Sound::TidalRandom => TAB_TIDAL,
-            _ => TAB_FILES,
+            Sound::TidalTrack(_) | Sound::TidalRandom => SoundTab::Tidal,
+            _ => SoundTab::Files,
         };
         let fade = FADES
             .iter()
@@ -79,9 +78,9 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     picker.set_previewing(false);
     select_tidal(ctx);
     fill_rows(window, ctx);
-    tidal::tab(window, ctx, tab == TAB_TIDAL);
-    airdrop::files_tab(window, ctx, tab == TAB_FILES);
-    show_page(window, ctx, PAGE_SOUND);
+    tidal::tab(window, ctx, tab == SoundTab::Tidal);
+    airdrop::files_tab(window, ctx, tab == SoundTab::Files);
+    show_page(window, ctx, Page::Sound);
 }
 
 /// The page is left (`super::show_page`): TIDAL's tab and AirDrop close,
@@ -127,12 +126,12 @@ fn update_can_save(window: &AppWindow, ctx: &Ctx) {
 /// Fills both tabs' lists (both ready when the tab changes).
 fn fill_rows(window: &AppWindow, ctx: &Ctx) {
     update_can_save(window, ctx);
-    fill_list(window, ctx, TAB_FILES);
-    fill_list(window, ctx, TAB_TIDAL);
+    fill_list(window, ctx, SoundTab::Files);
+    fill_list(window, ctx, SoundTab::Tidal);
 }
 
 /// A row of the list for `sound`, as chosen or not in the draft.
-fn row(title: &str, sub: &str, sound: &Sound, selected: &Sound, kind: i32) -> SoundRow {
+fn row(title: &str, sub: &str, sound: &Sound, selected: &Sound, kind: SoundRowKind) -> SoundRow {
     SoundRow {
         title: title.into(),
         sub: sub.into(),
@@ -155,40 +154,49 @@ fn file_choices(ctx: &Ctx, selected: &Sound) -> Vec<(SoundRow, Sound)> {
     if files.len() > 1 || (files.len() == 1 && *selected == Sound::RandomFile) {
         let sound = Sound::RandomFile;
         choices.push((
-            row("Zufällig", "wechselt jeden Tag", &sound, selected, 1),
+            row(
+                "Zufällig",
+                "wechselt jeden Tag",
+                &sound,
+                selected,
+                SoundRowKind::Random,
+            ),
             sound,
         ));
     }
     choices.extend(files.iter().map(|f| {
         let sound = Sound::File(f.path.clone());
-        (row(&f.title, "", &sound, selected, 2), sound)
+        (
+            row(&f.title, "", &sound, selected, SoundRowKind::File),
+            sound,
+        )
     }));
     choices
 }
 
 /// Fills one tab's list.
-fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
+fn fill_list(window: &AppWindow, ctx: &Ctx, tab: SoundTab) {
     let picker = window.global::<SoundPicker>();
     let selected = ctx.draft.borrow().sound.clone();
-    let choices = if tab == TAB_FILES {
+    let choices = if tab == SoundTab::Files {
         file_choices(ctx, &selected)
     } else {
         tidal::choices(ctx, &selected)
     };
     let (mut rows, sounds): (Vec<SoundRow>, Vec<Sound>) = choices.into_iter().unzip();
     // After the choices, so a row's index still finds its sound.
-    if tab == TAB_FILES {
+    if tab == SoundTab::Files {
         rows.extend(airdrop::rows(ctx));
     }
     // A shorter list may leave the view past its end.
     let layout = window.global::<SoundListLayout>();
     let max = (rows.len() as f32 * layout.get_pitch() - layout.get_height()).max(0.0);
-    if tab == TAB_FILES && picker.get_files_scroll() > max {
+    if tab == SoundTab::Files && picker.get_files_scroll() > max {
         picker.set_files_scroll(max);
-    } else if tab == TAB_TIDAL && picker.get_tidal_scroll() > max {
+    } else if tab == SoundTab::Tidal && picker.get_tidal_scroll() > max {
         picker.set_tidal_scroll(max);
     }
-    if tab == TAB_FILES {
+    if tab == SoundTab::Files {
         *ctx.sound.file_choices.borrow_mut() = sounds;
     } else {
         *ctx.sound.tidal_choices.borrow_mut() = sounds;
@@ -196,7 +204,7 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
     // As many rows as shown: only the rows that differ, in place. A new
     // model makes Slint repaint the whole list, ~40 ms under the list layer
     // while it scrolls (TIDAL's sync every 5 s, AirDrop's state).
-    let model = if tab == TAB_FILES {
+    let model = if tab == SoundTab::Files {
         picker.get_rows()
     } else {
         picker.get_tidal_rows()
@@ -210,7 +218,7 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
         return;
     }
     let rows = ModelRc::new(VecModel::from(rows));
-    if tab == TAB_FILES {
+    if tab == SoundTab::Files {
         picker.set_rows(rows);
     } else {
         picker.set_tidal_rows(rows);
@@ -219,7 +227,7 @@ fn fill_list(window: &AppWindow, ctx: &Ctx, tab: i32) {
 
 /// The sounds behind the rows of the list shown.
 fn choices<'a>(window: &AppWindow, ctx: &'a Ctx) -> Ref<'a, Vec<Sound>> {
-    if window.global::<SoundPicker>().get_shown_tab() == TAB_TIDAL {
+    if window.global::<SoundPicker>().get_shown_tab() == SoundTab::Tidal {
         ctx.sound.tidal_choices.borrow()
     } else {
         ctx.sound.file_choices.borrow()
@@ -233,14 +241,14 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
 
     picker.on_back(ctx.with(|window, ctx| {
         alarm_page::fill(window, ctx);
-        show_page(window, ctx, PAGE_ALARM);
+        show_page(window, ctx, Page::Alarm);
     }));
-    picker.on_select_tab(ctx.with_arg(|window, ctx, tab: i32| {
+    picker.on_select_tab(ctx.with_arg(|window, ctx, tab: SoundTab| {
         // The highlight slides now; the list changes when it has arrived
         // (its repaint would stall the slide). Both lists are filled.
         window.global::<SoundPicker>().set_tab(tab);
-        tidal::tab(window, ctx, tab == TAB_TIDAL);
-        airdrop::files_tab(window, ctx, tab == TAB_FILES);
+        tidal::tab(window, ctx, tab == SoundTab::Tidal);
+        airdrop::files_tab(window, ctx, tab == SoundTab::Files);
         let weak = window.as_weak();
         Timer::single_shot(Duration::from_millis(200), move || {
             if let Some(window) = weak.upgrade() {

@@ -2,8 +2,8 @@
 //! on-screen keyboard for the draft alarm's name. The keys only report;
 //! the text is edited here (Slint has no way to remove a character).
 
-use super::screens::{AppWindow, NameEditor};
-use super::{Ctx, PAGE_ALARM, PAGE_NAME, alarm_page, show_page};
+use super::screens::{AppWindow, NameEditor, Page};
+use super::{Ctx, alarm_page, show_page};
 use slint::ComponentHandle;
 use std::rc::Rc;
 use wakey_core::alarm::NAME_MAX;
@@ -16,7 +16,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     editor.set_numbers(false);
     editor.set_text(name.as_str().into());
     *ctx.name.borrow_mut() = name;
-    show_page(window, ctx, PAGE_NAME);
+    show_page(window, ctx, Page::Name);
 }
 
 fn show(window: &AppWindow, text: &str, shift: bool) {
@@ -50,7 +50,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         let name = ctx.name.borrow().trim().to_string();
         ctx.draft.borrow_mut().name = name;
         alarm_page::fill(window, ctx);
-        show_page(window, ctx, PAGE_ALARM);
+        show_page(window, ctx, Page::Alarm);
     }));
-    editor.on_cancel(ctx.with(|window, ctx| show_page(window, ctx, PAGE_ALARM)));
+    editor.on_cancel(ctx.with(|window, ctx| show_page(window, ctx, Page::Alarm)));
 }

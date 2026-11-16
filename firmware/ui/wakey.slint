@@ -10,13 +10,28 @@
 
 import "fonts/Inter-24pt-Medium.ttf";
 import { Theme } from "wakey/theme.slint";
-import { Clock, ClockPage } from "wakey/clock_page.slint";
+import { AlarmPhase, Clock, ClockPage } from "wakey/clock_page.slint";
 import { AlarmList, AlarmListLayout, AlarmRow, AlarmListPage, ListRowPage } from "wakey/alarm_list.slint";
 import { AlarmEditor, AlarmPage } from "wakey/alarm_page.slint";
-import { SoundPicker, SoundRow, SoundPage, SoundListLayout, SoundRowItem } from "wakey/sound_page.slint";
+import { SoundPicker, SoundRow, SoundRowKind, SoundTab, TidalView, SoundPage, SoundListLayout, SoundRowItem } from "wakey/sound_page.slint";
 import { NameEditor, NamePage } from "wakey/name_page.slint";
 
-export { Theme, Clock, AlarmList, AlarmListLayout, AlarmRow, AlarmEditor, SoundPicker, SoundRow, SoundListLayout, NameEditor }
+export { Theme, AlarmPhase, Clock, AlarmList, AlarmListLayout, AlarmRow, AlarmEditor, SoundPicker, SoundRow, SoundRowKind, SoundTab, TidalView, SoundListLayout, NameEditor }
+
+export enum Page {
+    clock,
+    alarm-list,
+    alarm,
+    sound,
+    name,
+    // `config.json` cannot be read (the parser's message: `error-text`).
+    config-error,
+    // One row for the list layers, shown by a second `AppWindow` in an
+    // offscreen window (`list-row`, `sound-row`): a window component of its
+    // own would embed every font again.
+    alarm-list-row,
+    sound-list-row,
+}
 
 export component AppWindow inherits Window {
     width: 1280px;
@@ -24,10 +39,7 @@ export component AppWindow inherits Window {
     background: Theme.background;
     default-font-family: "Inter 24pt Medium";
 
-    // 0 clock, 1 alarm list, 2 alarm, 3 sound, 4 name; 5 one alarm list
-    // row (`list-row`), 7 one sound list row (`sound-row`), shown offscreen
-    // for the list layers.
-    in-out property <int> page: 0;
+    in-out property <Page> page;
     // Flipped to repaint the whole window (the pixel dimming changed:
     // `ui::dim`).
     in property <bool> repaint-all;
@@ -36,9 +48,8 @@ export component AppWindow inherits Window {
     in property <bool> list-row-highlighted;
     in property <bool> list-row-underlay;
     in property <SoundRow> sound-row;
-    in property <int> sound-row-tab;
+    in property <SoundTab> sound-row-tab;
     in property <int> sound-row-ms;
-    // Page 6: `config.json` cannot be read (the parser's message).
     in property <string> error-text;
     // Debug overlay (cargo feature `debug-overlay`): shown when not empty.
     in property <string> debug-text;
@@ -51,18 +62,18 @@ export component AppWindow inherits Window {
     Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 30px; }
     Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 40px; }
 
-    if root.page == 0: ClockPage { }
-    if root.page == 1: AlarmListPage { }
-    if root.page == 2: AlarmPage { }
-    if root.page == 3: SoundPage { }
-    if root.page == 4: NamePage { }
+    if root.page == Page.clock: ClockPage { }
+    if root.page == Page.alarm-list: AlarmListPage { }
+    if root.page == Page.alarm: AlarmPage { }
+    if root.page == Page.sound: SoundPage { }
+    if root.page == Page.name: NamePage { }
     // Never visible: a change of its colour marks the whole window dirty.
     Rectangle {
         width: 100%;
         height: 100%;
         background: root.repaint-all ? #00000000 : #01010100;
     }
-    if root.debug-text != "" && root.page != 5: Rectangle {
+    if root.debug-text != "": Rectangle {
         x: 8px;
         y: 8px;
         width: debug.preferred-width + 16px;
@@ -78,7 +89,7 @@ export component AppWindow inherits Window {
         }
     }
     // At the window's origin (an element without x/y is centred).
-    if root.page == 6: Rectangle {
+    if root.page == Page.config-error: Rectangle {
         background: Theme.background;
         Text {
             x: 80px;
@@ -107,7 +118,7 @@ export component AppWindow inherits Window {
             wrap: word-wrap;
         }
     }
-    if root.page == 5: ListRowPage {
+    if root.page == Page.alarm-list-row: ListRowPage {
         x: 0;
         y: 0;
         alarm: root.list-row;
@@ -122,9 +133,9 @@ export component AppWindow inherits Window {
         text: root.sound-row.sub;
         font-size: 30px;
     }
-    out property <bool> sound-row-scrolls: root.sound-row.sub != "" && root.sound-row.kind != 4
+    out property <bool> sound-row-scrolls: root.sound-row.sub != "" && root.sound-row.kind != SoundRowKind.airdrop-note
         && sound-row-sub.preferred-width > SoundListLayout.width - SoundListLayout.text-x(root.sound-row.kind, root.sound-row-tab) - 96px;
-    if root.page == 7: SoundRowItem {
+    if root.page == Page.sound-list-row: SoundRowItem {
         x: 0;
         y: 0;
         item: root.sound-row;

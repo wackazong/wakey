@@ -9,7 +9,9 @@
 // others. The once-a-second update dirties only the seconds. The date
 // rolls as a whole.
 
-import { Theme, Icon, Roll } from "theme.slint";
+import { Theme, Icon, IconKind, Roll } from "theme.slint";
+
+export enum AlarmPhase { idle, ringing, snoozed }
 
 // Set from Rust (`app/clock_screen.rs`).
 export global Clock {
@@ -32,8 +34,8 @@ export global Clock {
     in property <color> sky-bottom: #45208e;
     // The horizon is too light for white text: the bottom line is dark.
     in property <bool> bottom-light;
-    // Alarm: 0 idle, 1 ringing, 2 snoozed; snoozes still allowed.
-    in property <int> alarm-phase: 0;
+    // The alarm, and the snoozes still allowed.
+    in property <AlarmPhase> alarm-phase;
     in property <int> snoozes-left: 0;
 
     // Ringing: a tap anywhere snoozes (while snoozes are left); stopping
@@ -50,7 +52,7 @@ export component ClockPage inherits Rectangle {
 
     background: @linear-gradient(180deg, Clock.sky-top 0%, Clock.sky-upper 25%, Clock.sky-middle 50%, Clock.sky-lower 75%, Clock.sky-bottom 100%);
 
-    property <bool> ringing: Clock.alarm-phase == 1;
+    property <bool> ringing: Clock.alarm-phase == AlarmPhase.ringing;
     property <color> digits: root.ringing ? Theme.accent : Theme.text;
     property <color> soft: Theme.text.with-alpha(0.72);
     property <color> faint: Theme.text.with-alpha(0.45);
@@ -123,8 +125,8 @@ export component ClockPage inherits Rectangle {
     // slide starts at once).
     // Bottom line: white on a dark horizon, dark on a light one.
     property <color> alarm-color: Clock.bottom-light
-        ? (Clock.alarm-phase == 0 ? Theme.background.with-alpha(0.72) : Theme.accent-dark)
-        : (Clock.alarm-phase == 0 ? root.soft : Theme.accent);
+        ? (Clock.alarm-phase == AlarmPhase.idle ? Theme.background.with-alpha(0.72) : Theme.accent-dark)
+        : (Clock.alarm-phase == AlarmPhase.idle ? root.soft : Theme.accent);
     property <color> symbol-color: Clock.bottom-light ? Theme.accent-dark : Theme.accent;
     HorizontalLayout {
         x: 0;
@@ -136,7 +138,7 @@ export component ClockPage inherits Rectangle {
         Rectangle {
             width: 40px;
             Icon {
-                kind: 10;
+                kind: IconKind.alarm;
                 y: (parent.height - self.height) / 2;
                 width: 40px;
                 height: 40px;
@@ -155,7 +157,7 @@ export component ClockPage inherits Rectangle {
         y: parent.height - 136px;
         width: parent.width - 2 * 280px;
         height: 136px;
-        enabled: Clock.alarm-phase == 0;
+        enabled: Clock.alarm-phase == AlarmPhase.idle;
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 Clock.open-alarm();
@@ -174,7 +176,7 @@ export component ClockPage inherits Rectangle {
         if Clock.no-speaker: Rectangle {
             width: 40px;
             Icon {
-                kind: 11;
+                kind: IconKind.no-speaker;
                 y: (parent.height - self.height) / 2;
                 width: 40px;
                 height: 40px;
@@ -184,7 +186,7 @@ export component ClockPage inherits Rectangle {
         if Clock.no-network: Rectangle {
             width: 40px;
             Icon {
-                kind: 12;
+                kind: IconKind.no-network;
                 y: (parent.height - self.height) / 2;
                 width: 40px;
                 height: 40px;
@@ -194,7 +196,7 @@ export component ClockPage inherits Rectangle {
     }
 
     // Stop: hold until the bar has filled.
-    if Clock.alarm-phase != 0: Rectangle {
+    if Clock.alarm-phase != AlarmPhase.idle: Rectangle {
         x: parent.width - 400px;
         y: 30px;
         width: 360px;

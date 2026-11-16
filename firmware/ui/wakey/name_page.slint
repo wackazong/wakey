@@ -11,7 +11,7 @@
 // │  123  [          Leerzeichen          ]  -               │
 // └──────────────────────────────────────────────────────────┘
 
-import { Theme, Button, Icon } from "theme.slint";
+import { Theme, Button, ButtonKind, Icon, IconKind } from "theme.slint";
 
 export global NameEditor {
     in property <string> text;
@@ -30,21 +30,21 @@ export global NameEditor {
 
 component Key inherits Rectangle {
     in property <string> text;
-    in property <int> icon: -1;
+    in property <IconKind> icon;
     in property <bool> active;
     callback pressed();
     width: 100px;
     height: 88px;
     border-radius: 16px;
     background: ta.pressed ? Theme.outline : root.active ? Theme.accent-dark : Theme.surface;
-    if root.icon < 0: Text {
+    if root.icon == IconKind.none: Text {
         text: root.text;
         font-size: 40px;
         color: Theme.text;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    if root.icon >= 0: Icon {
+    if root.icon != IconKind.none: Icon {
         kind: root.icon;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
@@ -90,7 +90,7 @@ export component NamePage inherits Rectangle {
         x: 24px;
         y: 20px;
         width: 240px;
-        kind: 2;
+        kind: ButtonKind.ghost;
         text: "Abbrechen";
         on-press: true;
         clicked => { NameEditor.cancel(); }
@@ -99,7 +99,7 @@ export component NamePage inherits Rectangle {
         x: parent.width - 264px;
         y: 20px;
         width: 240px;
-        kind: 1;
+        kind: ButtonKind.primary;
         text: "Fertig";
         on-press: true;
         clicked => { NameEditor.done(); }
@@ -160,7 +160,7 @@ export component NamePage inherits Rectangle {
         x: 50px;
         y: 452px;
         width: 154px;
-        icon: NameEditor.numbers ? -1 : 7;
+        icon: NameEditor.numbers ? IconKind.none : IconKind.shift;
         text: "";
         active: NameEditor.shift && !NameEditor.numbers;
         pressed => {
@@ -179,7 +179,7 @@ export component NamePage inherits Rectangle {
         x: 50px + 162px + 8 * root.pitch;
         y: 452px;
         width: parent.width - 100px - 162px - 8 * root.pitch;
-        icon: 6;
+        icon: IconKind.backspace;
         pressed => { NameEditor.backspace(); }
     }
     // Row 4: layer switch, space, dash.

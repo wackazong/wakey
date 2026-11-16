@@ -5,8 +5,8 @@
 //! `config.json`, then in effect), Abbrechen drops it.
 
 use super::alarm::AlarmClock;
-use super::screens::{AlarmEditor, AppWindow};
-use super::{Ctx, PAGE_ALARM, PAGE_LIST, alarm_list, name_page, show_page, sound_page};
+use super::screens::{AlarmEditor, AppWindow, Page};
+use super::{Ctx, alarm_list, name_page, show_page, sound_page};
 use crate::clock;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::rc::Rc;
@@ -28,7 +28,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
     *ctx.original.borrow_mut() = (cfg.id != 0).then(|| cfg.clone());
     *ctx.draft.borrow_mut() = cfg;
     fill(window, ctx);
-    show_page(window, ctx, PAGE_ALARM);
+    show_page(window, ctx, Page::Alarm);
 }
 
 /// Everything derived from the draft: name, sound, volume, "Klingelt in".
@@ -73,7 +73,7 @@ pub fn save(window: &AppWindow, ctx: &Ctx) {
     match result {
         Ok(()) => {
             alarm_list::refresh(window, &ctx.alarm.borrow());
-            show_page(window, ctx, PAGE_LIST);
+            show_page(window, ctx, Page::AlarmList);
         }
         Err(e) => {
             log::error!("alarm page: saving: {e}");
@@ -81,7 +81,7 @@ pub fn save(window: &AppWindow, ctx: &Ctx) {
             window
                 .global::<AlarmEditor>()
                 .set_error("Speichern fehlgeschlagen – SD-Karte prüfen".into());
-            show_page(window, ctx, PAGE_ALARM);
+            show_page(window, ctx, Page::Alarm);
         }
     }
 }
@@ -111,7 +111,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     }));
     editor.on_edit_name(ctx.with(name_page::open));
     editor.on_open_sound(ctx.with(sound_page::open));
-    editor.on_cancel(ctx.with(|window, ctx| show_page(window, ctx, PAGE_LIST)));
+    editor.on_cancel(ctx.with(|window, ctx| show_page(window, ctx, Page::AlarmList)));
     editor.on_save(ctx.with(save));
 }
 

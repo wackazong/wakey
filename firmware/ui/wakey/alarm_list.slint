@@ -23,7 +23,7 @@
 // drawn over the row being held, with the same alarm plus highlight, and
 // only it repaints.
 
-import { Theme, Button, BackButton, Switch } from "theme.slint";
+import { Theme, Button, ButtonKind, BackButton, IconKind, Switch } from "theme.slint";
 
 // What the finger on the still list is doing (scrolls and swipes are the
 // layer's).
@@ -188,8 +188,8 @@ export component AlarmListPage inherits Rectangle {
         x: parent.width - 264px;
         y: 20px;
         width: 240px;
-        kind: 1;
-        icon: 8;
+        kind: ButtonKind.primary;
+        icon: IconKind.plus;
         text: "Neu";
         on-press: true;
         clicked => { AlarmList.add(); }
@@ -363,8 +363,9 @@ export component AlarmListPage inherits Rectangle {
 // background, with the gap below. Same component as the page's rows, so
 // the pixels match when the page takes over. Not animated: it shows one
 // alarm after the other and is rendered right after each change. Shown by
-// a second `AppWindow` in an offscreen window (page 5): a window component
-// of its own would embed every font a second time (3 MB of flash).
+// a second `AppWindow` in an offscreen window (`Page.alarm-list-row`): a
+// window component of its own would embed every font a second time (3 MB
+// of flash).
 export component ListRowPage inherits Rectangle {
     in property <AlarmRow> alarm;
     // For the pictures of a swipe (`Row`): content offset, highlight, and

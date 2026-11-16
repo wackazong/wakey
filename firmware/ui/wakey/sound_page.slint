@@ -10,17 +10,36 @@
 // │ Vogelstimmen              │ [▶ Probehören]            │
 // └───────────────────────────────────────────────────────┘
 
-import { Theme, Button, BackButton, Icon, Marquee, Pills, Slider } from "theme.slint";
+import { Theme, Button, ButtonKind, BackButton, Icon, IconKind, Marquee, Pills, Slider } from "theme.slint";
+
+export enum SoundRowKind {
+    // „Zufällig“: another sound of the tab every day.
+    random,
+    file,
+    // With `cover`.
+    tidal-track,
+    // A note at the end of the list (AirDrop's state); not a choice.
+    airdrop-note,
+    // A file arriving by AirDrop (with `progress`); not a choice.
+    airdrop-file,
+}
+
+export enum SoundTab { files, tidal }
+
+// What the TIDAL tab shows.
+export enum TidalView {
+    // The tracks, or a note on why there are none.
+    list,
+    // A login code to confirm.
+    login,
+}
 
 export struct SoundRow {
     title: string,
     // Second line (artist, "Piepen"), or empty.
     sub: string,
     selected: bool,
-    // 0 built-in tone, 1 random, 2 file, 3 TIDAL track (with `cover`),
-    // 4 a note at the end of the list (AirDrop; not a choice), 5 a file
-    // arriving by AirDrop (with `progress`; not a choice).
-    kind: int,
+    kind: SoundRowKind,
     // A TIDAL track's album cover (88 × 88); empty while not on the card.
     cover: image,
     // A download under way: how far (0–1), drawn as a bar under the row;
@@ -33,11 +52,11 @@ export struct SoundRow {
 
 // Set from Rust (`app/sound_page.rs`).
 export global SoundPicker {
-    // 0 Datei, 1 TIDAL: the tab bar's choice.
-    in property <int> tab;
+    // The tab bar's choice.
+    in property <SoundTab> tab;
     // The list shown: follows `tab` once the tab bar's highlight has
     // arrived (the list's repaint does not stall the slide).
-    in property <int> shown-tab;
+    in property <SoundTab> shown-tab;
     // Both lists, filled when the page opens.
     in property <[SoundRow]> rows;
     in property <[SoundRow]> tidal-rows;
@@ -64,8 +83,7 @@ export global SoundPicker {
     // Index into 0, 10, 30, 60 s.
     in-out property <int> fade;
     in property <bool> previewing;
-    // TIDAL tab: 0 the rows (or `empty`), 1 a login code to confirm.
-    in property <int> tidal-view;
+    in property <TidalView> tidal-view;
     in property <image> tidal-qr;
     in property <string> tidal-code;
 
@@ -74,7 +92,7 @@ export global SoundPicker {
     callback save();
     // Sichern possible: a change, at least one day (set from Rust).
     in property <bool> can-save;
-    callback select-tab(int);
+    callback select-tab(SoundTab);
     callback select(int);
     callback volume-changed(int);
     callback fade-changed(int);
@@ -160,9 +178,15 @@ export global SoundListLayout {
     out property <length> pitch: 112px;
     // How far a finger moves before the touch counts as a scroll.
     out property <length> slop: 12px;
-    // Where a row's texts start (`SoundRowItem`; kind and tab as there).
-    public pure function text-x(kind: int, tab: int) -> length {
-        kind == 3 || (kind == 1 && tab == 1) ? 132px : kind == 1 ? 96px : 32px
+    // Where a row's texts start (`SoundRowItem`): after the cover, or the
+    // random icon (on the TIDAL tab in the covers' column).
+    public pure function text-x(kind: SoundRowKind, tab: SoundTab) -> length {
+        kind == SoundRowKind.tidal-track || (kind == SoundRowKind.random && tab == SoundTab.tidal) ? 132px
+            : kind == SoundRowKind.random ? 96px : 32px
+    }
+    // A row that can be picked (not one of AirDrop's).
+    public pure function is-choice(kind: SoundRowKind) -> bool {
+        kind != SoundRowKind.airdrop-note && kind != SoundRowKind.airdrop-file
     }
 }
 
@@ -170,8 +194,8 @@ export global SoundListLayout {
 // renders it offscreen (the same pixels).
 export component SoundRowItem inherits Rectangle {
     in property <SoundRow> item;
-    // 1: TIDAL („Zufällig“'s icon in the covers' column).
-    in property <int> tab;
+    // On the TIDAL tab „Zufällig“'s icon is in the covers' column.
+    in property <SoundTab> tab;
     // The clock of the scrolling second line (`Marquee.time-ms`).
     in property <int> marquee-ms;
     // Offscreen (the list layer's copy) the row brings the card's colour;
@@ -180,12 +204,12 @@ export component SoundRowItem inherits Rectangle {
     callback clicked();
     width: SoundListLayout.width;
     height: SoundListLayout.pitch;
-    background: ta.pressed && !root.item.failed && root.item.kind < 4 ? Theme.surface
+    background: ta.pressed && !root.item.failed && SoundListLayout.is-choice(root.item.kind) ? Theme.surface
         : root.item.selected ? Theme.selected
         : root.opaque ? Theme.card : transparent;
 
     // The AirDrop note: centred, faint, as the list's other notes.
-    if root.item.kind == 4: Text {
+    if root.item.kind == SoundRowKind.airdrop-note: Text {
         x: 40px;
         width: parent.width - 80px;
         height: parent.height;
@@ -205,15 +229,15 @@ export component SoundRowItem inherits Rectangle {
     }
     // On the TIDAL tab „Zufällig“'s icon sits in the covers'
     // column, so the texts line up.
-    if root.item.kind == 1: Icon {
-        kind: 5;
-        x: root.tab == 1 ? 46px : 32px;
+    if root.item.kind == SoundRowKind.random: Icon {
+        kind: IconKind.shuffle;
+        x: root.tab == SoundTab.tidal ? 46px : 32px;
         y: 34px;
         width: 44px;
         height: 44px;
         color: Theme.accent;
     }
-    if root.item.kind == 3: Rectangle {
+    if root.item.kind == SoundRowKind.tidal-track: Rectangle {
         x: 24px;
         y: 12px;
         width: 88px;
@@ -226,7 +250,7 @@ export component SoundRowItem inherits Rectangle {
             source: root.item.cover;
         }
     }
-    if root.item.kind != 4: Text {
+    if root.item.kind != SoundRowKind.airdrop-note: Text {
         x: SoundListLayout.text-x(root.item.kind, root.tab);
         y: root.item.sub != "" ? 10px : 0;
         height: root.item.sub != "" ? 54px : 112px;
@@ -238,7 +262,7 @@ export component SoundRowItem inherits Rectangle {
         vertical-alignment: center;
     }
     // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
-    if root.item.sub != "" && root.item.kind != 4: Marquee {
+    if root.item.sub != "" && root.item.kind != SoundRowKind.airdrop-note: Marquee {
         x: SoundListLayout.text-x(root.item.kind, root.tab);
         y: 62px;
         height: 40px;
@@ -249,7 +273,7 @@ export component SoundRowItem inherits Rectangle {
         time-ms: root.marquee-ms;
     }
     if root.item.selected && !root.item.failed: Icon {
-        kind: 2;
+        kind: IconKind.check;
         x: parent.width - 90px;
         y: 24px;
         width: 64px;
@@ -266,7 +290,7 @@ export component SoundRowItem inherits Rectangle {
         border-radius: 22px;
         background: Theme.error;
         Icon {
-            kind: 13;
+            kind: IconKind.cross;
             x: 7px;
             y: 7px;
             width: 30px;
@@ -275,7 +299,7 @@ export component SoundRowItem inherits Rectangle {
         }
     }
     ta := TouchArea {
-        enabled: root.item.kind < 4;
+        enabled: SoundListLayout.is-choice(root.item.kind);
         clicked => { root.clicked(); }
     }
 }
@@ -285,8 +309,7 @@ export component SoundRowItem inherits Rectangle {
 component SoundList inherits Rectangle {
     in property <[SoundRow]> rows;
     in property <string> empty;
-    // 1: TIDAL („Zufällig“'s icon in the covers' column).
-    in property <int> tab;
+    in property <SoundTab> tab;
     in property <length> scroll;
     // The list layer shows the list (it moves): no scrolling text.
     in property <bool> layer-active;
@@ -350,7 +373,7 @@ export component SoundPage inherits Rectangle {
         x: parent.width - 264px;
         y: 20px;
         width: 240px;
-        kind: 1;
+        kind: ButtonKind.primary;
         text: "Sichern";
         on-press: true;
         enabled: SoundPicker.can-save;
@@ -367,8 +390,8 @@ export component SoundPage inherits Rectangle {
         y: 132px;
         width: root.list-width;
         items: ["Datei", "TIDAL"];
-        selected: SoundPicker.tab;
-        chosen(i) => { SoundPicker.select-tab(i); }
+        selected: SoundPicker.tab == SoundTab.files ? 0 : 1;
+        chosen(i) => { SoundPicker.select-tab(i == 0 ? SoundTab.files : SoundTab.tidal); }
     }
 
     // Below the tabs (132 + 88 + 24), down to the settings card's bottom.
@@ -382,25 +405,25 @@ export component SoundPage inherits Rectangle {
         background: Theme.card;
 
         SoundList {
-            visible: SoundPicker.shown-tab == 0;
+            visible: SoundPicker.shown-tab == SoundTab.files;
             rows: SoundPicker.rows;
             empty: SoundPicker.empty;
-            tab: 0;
+            tab: SoundTab.files;
             scroll: SoundPicker.files-scroll;
             layer-active: SoundPicker.layer-active;
             select(i) => { SoundPicker.select(i); }
         }
         SoundList {
-            visible: SoundPicker.shown-tab == 1 && SoundPicker.tidal-view == 0;
+            visible: SoundPicker.shown-tab == SoundTab.tidal && SoundPicker.tidal-view == TidalView.list;
             rows: SoundPicker.tidal-rows;
             empty: SoundPicker.tidal-empty;
-            tab: 1;
+            tab: SoundTab.tidal;
             scroll: SoundPicker.tidal-scroll;
             layer-active: SoundPicker.layer-active;
             select(i) => { SoundPicker.select(i); }
         }
         // The login: QR code of the link, and the code.
-        if SoundPicker.shown-tab == 1 && SoundPicker.tidal-view == 1: Rectangle {
+        if SoundPicker.shown-tab == SoundTab.tidal && SoundPicker.tidal-view == TidalView.login: Rectangle {
             Rectangle {
                 x: 32px;
                 y: (parent.height - self.height) / 2;
@@ -489,7 +512,7 @@ export component SoundPage inherits Rectangle {
             x: 32px;
             y: 420px;
             width: 320px;
-            icon: SoundPicker.previewing ? 4 : 3;
+            icon: SoundPicker.previewing ? IconKind.stop : IconKind.play;
             text: SoundPicker.previewing ? "Stopp" : "Probehören";
             clicked => { SoundPicker.preview(); }
         }

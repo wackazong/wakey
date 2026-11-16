@@ -319,7 +319,7 @@ fn row(a: &AlarmConfig, next: bool) -> AlarmRow {
     }
 }
 
-fn sound(title: &str, sub: &str, selected: bool, kind: i32) -> SoundRow {
+fn sound(title: &str, sub: &str, selected: bool, kind: SoundRowKind) -> SoundRow {
     SoundRow {
         title: title.into(),
         sub: sub.into(),
@@ -345,7 +345,7 @@ fn track(title: &str, artist: &str, selected: bool, a: [u8; 3], b: [u8; 3]) -> S
             b: mix(a[2], b[2]),
         };
     }
-    let mut row = sound(title, artist, selected, 3);
+    let mut row = sound(title, artist, selected, SoundRowKind::TidalTrack);
     row.cover = slint::Image::from_rgb8(buf);
     row
 }
@@ -422,7 +422,7 @@ fn main() {
         layout.get_pitch() as u32,
     ));
     let row_view = AppWindow::new().expect("row view");
-    row_view.set_page(5);
+    row_view.set_page(Page::AlarmListRow);
     row_view.show().expect("show row view");
     let p = Preview {
         window,
@@ -454,7 +454,7 @@ fn main() {
     clock.set_seconds(chars("41"));
     clock.set_date("Dienstag, 10. November 2026".into());
     clock.set_alarm("Morgen 06:30".into());
-    ui.set_page(0);
+    ui.set_page(Page::Clock);
     p.run(500);
     p.shot("0-clock");
     // The minute changes: its last digit rolls (old up and out, new up
@@ -526,16 +526,16 @@ fn main() {
         .map(|a| row(a, a.id == 1))
         .collect();
     list.set_rows(ModelRc::new(VecModel::from(rows)));
-    ui.set_page(1);
+    ui.set_page(Page::AlarmList);
     p.shot("1-list");
     p.check_rows("still list");
     list.on_delete(|id| println!("delete {id}"));
     list.on_open(|id| println!("open {id}"));
     list.on_toggle(|id, on| println!("toggle {id} {on}"));
     // The first press after opening the page: the row lights up in place.
-    ui.set_page(0);
+    ui.set_page(Page::Clock);
     p.render();
-    ui.set_page(1);
+    ui.set_page(Page::AlarmList);
     p.render();
     p.press(600.0, 207.0);
     p.run(130);
@@ -576,9 +576,9 @@ fn main() {
     p.press(1150.0, 207.0);
     p.release(1150.0, 207.0);
     p.run(50);
-    ui.set_page(0);
+    ui.set_page(Page::Clock);
     list.set_rows(ModelRc::new(VecModel::from(Vec::<AlarmRow>::new())));
-    ui.set_page(1);
+    ui.set_page(Page::AlarmList);
     p.shot("1-list-empty");
 
     // Alarm page.
@@ -592,7 +592,7 @@ fn main() {
     ed.set_sound("Morgenlicht".into());
     ed.set_volume_bars(3);
     ed.set_fade("10 s".into());
-    ui.set_page(2);
+    ui.set_page(Page::Alarm);
     p.shot("2-alarm");
     // Drag the minute wheel up by two and a half rows, mid-drag.
     p.press(420.0, 352.0);
@@ -604,30 +604,35 @@ fn main() {
     p.release(420.0, 132.0);
     p.run(1500);
     p.shot("2-alarm-settled");
-    ui.set_page(0);
+    ui.set_page(Page::Clock);
     ed.set_name("".into());
     ed.set_hour(7);
     ed.set_minute(0);
     ed.set_days(days([0; 7]));
     ed.set_any_day(false);
     ed.set_sound("Eingebauter Ton".into());
-    ui.set_page(2);
+    ui.set_page(Page::Alarm);
     p.shot("2-alarm-new-no-days");
 
     // Sound page.
     let sp = ui.global::<SoundPicker>();
     set_corner_caps(ui);
     sp.set_rows(ModelRc::new(VecModel::from(vec![
-        sound("Zufällig", "wechselt jeden Tag", false, 1),
-        sound("Morgenlicht", "", true, 2),
-        sound("Vogelstimmen", "", false, 2),
-        sound("Kirchenglocken", "", false, 2),
-        sound("Meeresrauschen", "", false, 2),
+        sound(
+            "Zufällig",
+            "wechselt jeden Tag",
+            false,
+            SoundRowKind::Random,
+        ),
+        sound("Morgenlicht", "", true, SoundRowKind::File),
+        sound("Vogelstimmen", "", false, SoundRowKind::File),
+        sound("Kirchenglocken", "", false, SoundRowKind::File),
+        sound("Meeresrauschen", "", false, SoundRowKind::File),
     ])));
     sp.set_volume(60);
     sp.set_can_save(true);
     sp.set_fade(1);
-    ui.set_page(3);
+    ui.set_page(Page::Sound);
     p.shot("3-sound");
     sp.set_previewing(true);
     p.shot("3-sound-previewing");
@@ -644,8 +649,8 @@ fn main() {
     sp.set_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
     sp.set_empty("Keine Klänge auf der Speicherkarte (Ordner „sounds“).".into());
     p.shot("3-sound-no-files");
-    sp.set_tab(1);
-    sp.set_shown_tab(1);
+    sp.set_tab(SoundTab::Tidal);
+    sp.set_shown_tab(SoundTab::Tidal);
     sp.set_tidal_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
     sp.set_tidal_empty("TIDAL ist noch nicht eingerichtet.".into());
     p.shot("3-sound-tidal");
@@ -659,7 +664,12 @@ fn main() {
         [200, 60, 50],
     );
     loading.progress = 0.45;
-    let mut both = sound("Slow Sunrise", "Ada Lindqvist · wird geladen", true, 3);
+    let mut both = sound(
+        "Slow Sunrise",
+        "Ada Lindqvist · wird geladen",
+        true,
+        SoundRowKind::TidalTrack,
+    );
     both.progress = 0.7;
     let mut failed_row = track(
         "Morning Tide",
@@ -671,7 +681,12 @@ fn main() {
     failed_row.failed = true;
     sp.set_tidal_empty("".into());
     sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
-        sound("Zufällig", "wechselt jeden Tag", false, 1),
+        sound(
+            "Zufällig",
+            "wechselt jeden Tag",
+            false,
+            SoundRowKind::Random,
+        ),
         track(
             "Kaffee am Fenster",
             "Die Frühaufsteher",
@@ -702,7 +717,12 @@ fn main() {
     );
     picked_failed.failed = true;
     sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
-        sound("Zufällig", "wechselt jeden Tag", false, 1),
+        sound(
+            "Zufällig",
+            "wechselt jeden Tag",
+            false,
+            SoundRowKind::Random,
+        ),
         track(
             "Kaffee am Fenster",
             "Die Frühaufsteher",
@@ -742,7 +762,7 @@ fn main() {
     // Name.
     let ne = ui.global::<NameEditor>();
     ne.set_text("Arbeit".into());
-    ui.set_page(4);
+    ui.set_page(Page::Name);
     p.shot("4-name");
     ne.set_text("".into());
     ne.set_shift(true);
@@ -753,10 +773,10 @@ fn main() {
     ne.set_text("Übung Ärger Öl äöü ß".into());
     p.shot("4-name-umlauts");
     ed.set_name("Übung Ärger Öl".into());
-    ui.set_page(2);
+    ui.set_page(Page::Alarm);
     p.shot("2-alarm-umlauts");
     clock.set_alarm("40px: ÜÄÖ üäö".into());
     clock.set_date("40px: ÜÄÖ üäö".into());
-    ui.set_page(0);
+    ui.set_page(Page::Clock);
     p.shot("0-clock-umlauts");
 }

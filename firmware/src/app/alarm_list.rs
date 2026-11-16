@@ -3,12 +3,12 @@
 //! next one marked. Opens from the alarm line on the clock page.
 //!
 //! Scrolling is the list layer's ([`layer`]): it copies rows rendered by a
-//! second `AppWindow` in an offscreen window (page `PAGE_LIST_ROW`) while
+//! second `AppWindow` in an offscreen window (page `Page::AlarmListRow`) while
 //! the list moves, and the page draws the still list.
 
 use super::alarm::AlarmClock;
-use super::screens::{AlarmList, AlarmListLayout, AlarmRow, AppWindow, Clock, Theme};
-use super::{Ctx, PAGE_CLOCK, PAGE_LIST, PAGE_LIST_ROW, alarm_page, show_page};
+use super::screens::{AlarmList, AlarmListLayout, AlarmRow, AppWindow, Clock, Page, Theme};
+use super::{Ctx, alarm_page, show_page};
 use crate::ui::list_layer::{Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
 use crate::ui::platform;
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
@@ -64,9 +64,9 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         .on_open_alarm(ctx.with(|window, ctx| {
             refresh(window, &ctx.alarm.borrow());
             window.global::<AlarmList>().set_scroll(0.0);
-            show_page(window, ctx, PAGE_LIST);
+            show_page(window, ctx, Page::AlarmList);
         }));
-    list.on_back(ctx.with(|window, ctx| show_page(window, ctx, PAGE_CLOCK)));
+    list.on_back(ctx.with(|window, ctx| show_page(window, ctx, Page::Clock)));
     list.on_add(ctx.with(|window, ctx| {
         alarm_page::open(window, ctx, AlarmConfig::default());
     }));
@@ -113,7 +113,7 @@ pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
     let view = AppWindow::new().expect("alarm row view");
-    view.set_page(PAGE_LIST_ROW);
+    view.set_page(Page::AlarmListRow);
     view.show().expect("show alarm row view");
     let rows = Rows {
         window: window.as_weak(),
@@ -143,7 +143,7 @@ impl ListSource for Rows {
     fn shown(&self) -> bool {
         self.window
             .upgrade()
-            .is_some_and(|w| w.get_page() == PAGE_LIST)
+            .is_some_and(|w| w.get_page() == Page::AlarmList)
     }
 
     fn rows(&self) -> usize {

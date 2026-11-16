@@ -7,8 +7,8 @@
 //! on this screen too.
 
 use super::alarm::View;
-use super::screens::{AppWindow, Clock};
-use super::{Ctx, PAGE_CLOCK, show_page};
+use super::screens::{AlarmPhase, AppWindow, Clock, Page};
+use super::{Ctx, show_page};
 use crate::audio::uac::UsbAudio;
 use crate::clock;
 use crate::net::{Status, Wifi};
@@ -199,13 +199,13 @@ fn update(window: &AppWindow, ctx: &Ctx, face: &Face, speaker: &UsbAudio, wifi: 
             screen.set_alarm(v)
         });
     }
-    if matches!(view, View::Ringing { .. }) && window.get_page() != PAGE_CLOCK {
-        show_page(window, ctx, PAGE_CLOCK);
+    if matches!(view, View::Ringing { .. }) && window.get_page() != Page::Clock {
+        show_page(window, ctx, Page::Clock);
     }
     let (phase, snoozes_left) = match view {
-        View::Idle { .. } => (0, 0),
-        View::Ringing { snoozes_left } => (1, snoozes_left),
-        View::Snoozed { snoozes_left, .. } => (2, snoozes_left),
+        View::Idle { .. } => (AlarmPhase::Idle, 0),
+        View::Ringing { snoozes_left } => (AlarmPhase::Ringing, snoozes_left),
+        View::Snoozed { snoozes_left, .. } => (AlarmPhase::Snoozed, snoozes_left),
     };
     if screen.get_alarm_phase() != phase {
         screen.set_alarm_phase(phase);
