@@ -3,7 +3,7 @@
 //! by the C library (see `crate::clock`). [`DateTime`] fields are UTC here.
 //!
 //! Its interrupt output is not wired to the P4 but to the PMS150 power
-//! controller: the alarm is what switches the board back on from power-off.
+//! controller (its alarm could switch the board on from power-off; unused).
 //!
 //! Register map and the init sequence follow the data sheet and M5Unified's
 //! `RX8130_Class`.
@@ -14,10 +14,9 @@ pub use wakey_core::datetime::DateTime;
 
 pub const ADDR: u8 = 0x32;
 
-// Time and alarm, BCD.
+// Time, BCD.
 const REG_SEC: u8 = 0x10; // 0x10 sec, 0x11 min, 0x12 hour, 0x13 weekday (bit mask),
 // 0x14 day, 0x15 month, 0x16 year (00–99)
-const REG_ALARM_MIN: u8 = 0x17; // 0x17 min, 0x18 hour, 0x19 weekday mask / day; bit 7 = AE (ignore)
 const REG_EXTENSION: u8 = 0x1C;
 const REG_FLAG: u8 = 0x1D;
 const REG_CONTROL0: u8 = 0x1E;
@@ -25,20 +24,14 @@ const REG_CONTROL1: u8 = 0x1F;
 const REG_OFFSET: u8 = 0x30;
 
 // Extension register.
-const EXT_WADA: u8 = 1 << 3; // alarm compares the day of the month instead of the weekday
 const EXT_TE: u8 = 1 << 4; // fixed-cycle timer enable
 // Flag register.
 const FLAG_VLF: u8 = 1 << 1; // voltage low: time is invalid
-const FLAG_AF: u8 = 1 << 3; // alarm matched
 // Control 0.
-const CTRL0_AIE: u8 = 1 << 3; // alarm interrupt → nIRQ
 const CTRL0_STOP: u8 = 1 << 6;
 // Control 1.
 const CTRL1_INIEN: u8 = 1 << 4; // nIRQ (alarm, timer, update) output enable
 const CTRL1_CHGEN: u8 = 1 << 5; // supercap charging
-
-/// Alarm enable bit in the alarm registers (set = the field is ignored).
-const ALARM_AE: u8 = 1 << 7;
 
 /// Cheap to clone (the bus is shared).
 #[derive(Clone)]
@@ -65,8 +58,7 @@ impl Rx8130 {
             let ctrl1 = b.read_reg(ADDR, REG_CONTROL1)?;
             b.write_reg(ADDR, REG_CONTROL1, ctrl1 | CTRL1_INIEN | CTRL1_CHGEN)?;
             b.write_reg(ADDR, REG_OFFSET, 0)?;
-            // Clock running, all interrupt sources off; the alarm is enabled
-            // explicitly by the power-off logic.
+            // Clock running, all interrupt sources off.
             b.write_reg(ADDR, REG_CONTROL0, 0)?;
             let ext = b.read_reg(ADDR, REG_EXTENSION)?;
             b.write_reg(ADDR, REG_EXTENSION, ext & !EXT_TE)?;
@@ -125,49 +117,5 @@ impl Rx8130 {
         let flags = b.read_reg(ADDR, REG_FLAG)?;
         b.write_reg(ADDR, REG_FLAG, flags & !FLAG_VLF)?;
         Ok(())
-    }
-
-    /// Alarm at `hour:minute` UTC on the weekdays in `weekday_mask` (bit 0 =
-    /// Sunday; 0x7F = daily). Enables the interrupt output.
-    pub fn set_alarm(&self, hour: u8, minute: u8, weekday_mask: u8) -> Result<(), EspError> {
-        let mut b = i2c::lock(&self.bus);
-        let ctrl0 = b.read_reg(ADDR, REG_CONTROL0)?;
-        b.write_reg(ADDR, REG_CONTROL0, ctrl0 & !CTRL0_AIE)?;
-        let ext = b.read_reg(ADDR, REG_EXTENSION)?;
-        b.write_reg(ADDR, REG_EXTENSION, ext & !EXT_WADA)?;
-        b.write(
-            ADDR,
-            &[
-                REG_ALARM_MIN,
-                bcd(minute),
-                bcd(hour),
-                weekday_mask & !ALARM_AE,
-            ],
-        )?;
-        let flags = b.read_reg(ADDR, REG_FLAG)?;
-        b.write_reg(ADDR, REG_FLAG, flags & !FLAG_AF)?;
-        b.write_reg(ADDR, REG_CONTROL0, ctrl0 | CTRL0_AIE)
-    }
-
-    pub fn alarm_enable(&self, on: bool) -> Result<(), EspError> {
-        let mut b = i2c::lock(&self.bus);
-        let ctrl0 = b.read_reg(ADDR, REG_CONTROL0)?;
-        let v = if on {
-            ctrl0 | CTRL0_AIE
-        } else {
-            ctrl0 & !CTRL0_AIE
-        };
-        b.write_reg(ADDR, REG_CONTROL0, v)
-    }
-
-    /// True if the alarm matched since the flag was last cleared.
-    pub fn alarm_flag(&self) -> Result<bool, EspError> {
-        Ok(i2c::lock(&self.bus).read_reg(ADDR, REG_FLAG)? & FLAG_AF != 0)
-    }
-
-    pub fn alarm_clear(&self) -> Result<(), EspError> {
-        let mut b = i2c::lock(&self.bus);
-        let flags = b.read_reg(ADDR, REG_FLAG)?;
-        b.write_reg(ADDR, REG_FLAG, flags & !FLAG_AF)
     }
 }

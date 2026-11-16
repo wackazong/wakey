@@ -10,7 +10,7 @@
 //! the token if it is about to expire (saved), finds the playlist
 //! (`playlist` in `config.json`, "Wecker") among the user's own and reads
 //! its tracks into `tidal/playlist.json` on the card, which
-//! [`Tidal::playlist`] serves (offline too). While the tab stays open the
+//! [`Tidal::listed`] serves (offline too). While the tab stays open the
 //! job reads the tracks again every [`WATCH`] (edits in the TIDAL app show
 //! up); Wi-Fi stays on until the tab closes.
 //!
@@ -37,12 +37,12 @@ use crate::net::Wifi;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::path::PathBuf;
-use wakey_core::tidal::api::{self, Track};
 use wakey_core::audio_file::{AudioFile, Container};
+use wakey_core::tidal::api::{self, Track};
 use wakey_core::tidal::auth::{self, Poll};
 use wakey_core::tidal::flac_mp4::Unpacker;
 use wakey_core::tidal::manifest::MediaPlan;
@@ -67,7 +67,7 @@ pub enum State {
     Code { url: String, code: String },
     /// Reading the playlist.
     Syncing,
-    /// Logged in; [`Tidal::playlist`] is as fresh as it gets.
+    /// Logged in; the playlist ([`Tidal::listed`]) is as fresh as it gets.
     LoggedIn,
     /// The last attempt failed (in words).
     Failed(String),
@@ -180,7 +180,6 @@ pub enum TrackStatus {
     Failed,
 }
 
-
 /// The tracks on the card.
 fn scan_tracks() -> BTreeSet<u64> {
     std::fs::read_dir(sd_path(sync::DIR))
@@ -254,7 +253,8 @@ fn send(req: &wakey_core::tidal::Request, stage: &str) -> Result<(u16, Vec<u8>),
             Err(_) => log::warn!("tidal: {stage}: HTTP {status} ({} bytes)", body.len()),
         }
         if status == 401 {
-            let unbound = serde_json::from_slice::<Reason>(&body).is_ok_and(|r| r.sub_status == Some(6004));
+            let unbound =
+                serde_json::from_slice::<Reason>(&body).is_ok_and(|r| r.sub_status == Some(6004));
             return Err(if unbound { UNBOUND } else { SESSION_INVALID }.into());
         }
     }
@@ -277,7 +277,10 @@ fn load_playlist() -> Vec<Track> {
 /// alarm: `tidal:random`), and the file of one track if it is there.
 pub fn downloaded() -> Vec<Track> {
     let have = scan_tracks();
-    load_playlist().into_iter().filter(|t| have.contains(&t.id)).collect()
+    load_playlist()
+        .into_iter()
+        .filter(|t| have.contains(&t.id))
+        .collect()
 }
 
 /// A cover as stored (RGB888, [`cover::COVER_BYTES`]), if it is on the
@@ -292,7 +295,9 @@ fn scan_covers() -> Vec<String> {
     std::fs::read_dir(sd_path(&format!("{}/covers", sync::DIR)))
         .map(|dir| {
             dir.flatten()
-                .filter_map(|e| sync::cover_id_of(&e.file_name().to_string_lossy()).map(String::from))
+                .filter_map(|e| {
+                    sync::cover_id_of(&e.file_name().to_string_lossy()).map(String::from)
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -535,13 +540,14 @@ impl CardWriter {
         if region.is_null() {
             return Err(std::io::Error::other("no memory for the write buffers"));
         }
-        let (to_writer, from_main) = std::sync::mpsc::sync_channel::<Option<(usize, usize)>>(BLOCKS);
+        let (to_writer, from_main) =
+            std::sync::mpsc::sync_channel::<Option<(usize, usize)>>(BLOCKS);
         let (to_main, free) = std::sync::mpsc::sync_channel::<usize>(BLOCKS);
         for k in 1..BLOCKS {
             let _ = to_main.send(region as usize + k * BLOCK);
         }
-        let previous = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::get()
-            .unwrap_or_default();
+        let previous =
+            esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::get().unwrap_or_default();
         let _ = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration {
             name: Some(c"card-writer"),
             pin_to_core: Some(esp_idf_svc::hal::cpu::Core::Core1),
@@ -602,7 +608,9 @@ impl CardWriter {
     fn join(&mut self) -> std::io::Result<()> {
         self.to_writer = None;
         match self.writer.take() {
-            Some(h) => h.join().unwrap_or_else(|_| Err(std::io::Error::other("card writer panicked"))),
+            Some(h) => h
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("card writer panicked"))),
             None => Ok(()),
         }
     }
@@ -615,7 +623,11 @@ impl Write for CardWriter {
             let take = (BLOCK - self.len).min(data.len());
             // SAFETY: within the current block.
             unsafe {
-                core::ptr::copy_nonoverlapping(data.as_ptr(), (self.cur as *mut u8).add(self.len), take)
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr(),
+                    (self.cur as *mut u8).add(self.len),
+                    take,
+                )
             };
             self.len += take;
             data = &data[take..];
@@ -629,7 +641,10 @@ impl Write for CardWriter {
     /// Writes what is left and waits until all is on the card.
     fn flush(&mut self) -> std::io::Result<()> {
         if self.len > 0 {
-            let tx = self.to_writer.as_ref().ok_or_else(|| std::io::Error::other("card writer stopped"))?;
+            let tx = self
+                .to_writer
+                .as_ref()
+                .ok_or_else(|| std::io::Error::other("card writer stopped"))?;
             let _ = tx.send(Some((self.cur, self.len)));
             self.len = 0;
         }
@@ -653,7 +668,10 @@ fn save_playlist(tracks: &[Track]) -> std::io::Result<()> {
     std::fs::create_dir_all(sd_path(sync::DIR))?;
     let path = sd_path(sync::PLAYLIST_FILE);
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(tracks).map_err(std::io::Error::other)?)?;
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec(tracks).map_err(std::io::Error::other)?,
+    )?;
     match std::fs::remove_file(&path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
         _ => {}
@@ -673,7 +691,9 @@ pub struct Tidal {
 impl Tidal {
     pub fn new(cfg: TidalConfig, wifi: Wifi) -> Self {
         // The playlist found before, if it is still the one configured.
-        let kept = load_state().filter(|s| s.playlist == cfg.playlist).unwrap_or_default();
+        let kept = load_state()
+            .filter(|s| s.playlist == cfg.playlist)
+            .unwrap_or_default();
         let state = if !cfg.has_credentials() {
             State::NoCredentials
         } else if cfg.session.is_some() {
@@ -721,22 +741,18 @@ impl Tidal {
         self.lock().state.clone()
     }
 
-    /// The playlist's tracks, in order.
-    pub fn playlist(&self) -> Vec<Track> {
-        self.lock().playlist.clone()
-    }
-
     /// The tracks the TIDAL tab lists: the playlist, then tracks that left
     /// it but the alarm being edited uses (or used since the tab opened),
     /// each with `true` if it is one of those.
     pub fn listed(&self) -> Vec<(Track, bool)> {
         let inner = self.lock();
-        let mut list: Vec<(Track, bool)> = inner.playlist.iter().cloned().map(|t| (t, false)).collect();
+        let mut list: Vec<(Track, bool)> =
+            inner.playlist.iter().cloned().map(|t| (t, false)).collect();
         list.extend(inner.listed_orphans().into_iter().map(|t| (t, true)));
         list
     }
 
-    /// Changes when [`Self::playlist`] or a track's status does.
+    /// Changes when [`Self::listed`] or a track's status does.
     pub fn version(&self) -> u32 {
         self.lock().version
     }
@@ -808,7 +824,11 @@ impl Tidal {
             return;
         }
         inner.busy = true;
-        inner.state = if sync { State::Syncing } else { State::Connecting };
+        inner.state = if sync {
+            State::Syncing
+        } else {
+            State::Connecting
+        };
         drop(inner);
         let this = self.clone();
         self.wifi.run(Box::new(move |net| {
@@ -902,7 +922,9 @@ impl Tidal {
                 let inner = self.lock();
                 inner.prefer.is_some_and(|p| inner.lacks(p))
             };
-            if (!due || urgent) && let Some(track) = self.next_missing() {
+            if (!due || urgent)
+                && let Some(track) = self.next_missing()
+            {
                 if let Err(e) = self.download(&track) {
                     if e == DEFERRED {
                         log::info!("tidal: download {}: stopped for another track", track.id);
@@ -1028,9 +1050,13 @@ impl Tidal {
         let part = path.with_extension("flac.part");
         let t = Instant::now();
         self.set_progress(track.id, 0.0);
-        let result = self
-            .fetch(track.id, &plan, &part)
-            .map_err(|e| if self.deferred(track.id) { DEFERRED.into() } else { e });
+        let result = self.fetch(track.id, &plan, &part).map_err(|e| {
+            if self.deferred(track.id) {
+                DEFERRED.into()
+            } else {
+                e
+            }
+        });
         self.lock().downloading = None;
         let bytes = match result {
             Ok(b) => b,
@@ -1048,11 +1074,13 @@ impl Tidal {
             }
         };
         // Readable as FLAC, or it does not count.
-        let check = AudioFile::open(&part).map_err(|e| e.to_string()).and_then(|f| {
-            (f.format.container == Container::Flac && f.format.sample_rate > 0)
-                .then_some(())
-                .ok_or_else(|| "kein FLAC".to_string())
-        });
+        let check = AudioFile::open(&part)
+            .map_err(|e| e.to_string())
+            .and_then(|f| {
+                (f.format.container == Container::Flac && f.format.sample_rate > 0)
+                    .then_some(())
+                    .ok_or_else(|| "kein FLAC".to_string())
+            });
         if let Err(e) = check {
             let _ = std::fs::remove_file(&part);
             self.bump();
@@ -1095,7 +1123,10 @@ impl Tidal {
                     log::info!("tidal: download {id}: resuming at {} KiB", offset / 1024);
                 }
                 let mut last = String::from("keine Quelle");
-                let mut tries = urls.iter().map(|u| (u, false)).collect::<std::collections::VecDeque<_>>();
+                let mut tries = urls
+                    .iter()
+                    .map(|u| (u, false))
+                    .collect::<std::collections::VecDeque<_>>();
                 while let Some((url, retried)) = tries.pop_front() {
                     if self.deferred(id) {
                         return Err(DEFERRED.into());
@@ -1151,7 +1182,9 @@ impl Tidal {
                         // The rest refused (no range, another file): this
                         // mirror once more from the start.
                         Err(e) if at > 0 && !retried && !self.deferred(id) => {
-                            log::warn!("tidal: download {id}: resuming failed ({e}), from the start");
+                            log::warn!(
+                                "tidal: download {id}: resuming failed ({e}), from the start"
+                            );
                             offset = 0;
                             tries.push_front((url, true));
                         }
@@ -1184,7 +1217,9 @@ impl Tidal {
                         anyhow::ensure!(!self.deferred(id), DEFERRED);
                         fed.set(fed.get() + b.len() as u64);
                         out.clear();
-                        unpacker.push(b, &mut out).map_err(|e| anyhow::anyhow!("{e}"))?;
+                        unpacker
+                            .push(b, &mut out)
+                            .map_err(|e| anyhow::anyhow!("{e}"))?;
                         file.write_all(&out)?;
                         written.set(written.get() + out.len() as u64);
                         Ok(())
@@ -1248,7 +1283,11 @@ impl Tidal {
     fn session(&self) -> Result<TidalSession, String> {
         let (cfg, session) = {
             let inner = self.lock();
-            let s = inner.cfg.session.clone().ok_or("Nicht bei TIDAL angemeldet.")?;
+            let s = inner
+                .cfg
+                .session
+                .clone()
+                .ok_or("Nicht bei TIDAL angemeldet.")?;
             (inner.cfg.clone(), s)
         };
         let now = crate::clock::moment().unix;
@@ -1282,7 +1321,12 @@ impl Tidal {
 
     /// An API call for `s`: bound first; if TIDAL still wants the binding
     /// (6004), bound again and the call repeated once.
-    fn call(&self, s: &TidalSession, req: &wakey_core::tidal::Request, stage: &str) -> Result<(u16, Vec<u8>), String> {
+    fn call(
+        &self,
+        s: &TidalSession,
+        req: &wakey_core::tidal::Request,
+        stage: &str,
+    ) -> Result<(u16, Vec<u8>), String> {
         self.bind(s)?;
         match send(req, stage) {
             Err(e) if e == UNBOUND => {
@@ -1351,7 +1395,9 @@ impl Tidal {
         let last_updated = info.map(|i| i.last_updated);
         let unchanged = {
             let inner = self.lock();
-            last_updated.is_some() && inner.last_updated == last_updated && !inner.playlist.is_empty()
+            last_updated.is_some()
+                && inner.last_updated == last_updated
+                && !inner.playlist.is_empty()
         };
         if unchanged {
             let (n, listed) = {
@@ -1360,14 +1406,18 @@ impl Tidal {
                 listed.extend(inner.listed_orphans());
                 (inner.playlist.len(), listed)
             };
-            log::info!("tidal: playlist unchanged ({n} tracks), {} ms", t.elapsed().as_millis());
+            log::info!(
+                "tidal: playlist unchanged ({n} tracks), {} ms",
+                t.elapsed().as_millis()
+            );
             self.sync_covers(&listed);
             return Ok(n);
         }
         let mut tracks = Vec::new();
         let mut offset = Some(0);
         while let Some(o) = offset {
-            let (status, body) = self.call(&s, &api::playlist_items(&s, &uuid, o), "playlist items")?;
+            let (status, body) =
+                self.call(&s, &api::playlist_items(&s, &uuid, o), "playlist items")?;
             let (page, next) =
                 api::parse_playlist_items(status, &body, o).map_err(|e| e.to_string())?;
             tracks.extend(page);
@@ -1424,7 +1474,14 @@ impl Tidal {
         let listed = {
             let mut inner = self.lock();
             let before = inner.known.len();
-            let Inner { known, playlist, selected, keep, have, .. } = &mut *inner;
+            let Inner {
+                known,
+                playlist,
+                selected,
+                keep,
+                have,
+                ..
+            } = &mut *inner;
             known.retain(|id, _| {
                 playlist.iter().any(|t| t.id == *id)
                     || selected.contains(id)
@@ -1471,9 +1528,14 @@ impl Tidal {
     /// The device code login, on the `wifi` thread. True if logged in
     /// (false: the tab was closed).
     fn login(&self, cfg: &TidalConfig) -> Result<bool, String> {
-        let (status, body) = http::send(&auth::device_authorization(cfg)).map_err(|e| e.to_string())?;
+        let (status, body) =
+            http::send(&auth::device_authorization(cfg)).map_err(|e| e.to_string())?;
         let code = auth::parse_device_authorization(status, &body).map_err(|e| e.to_string())?;
-        log::info!("tidal: login code {} (valid {} s)", code.user_code, code.expires_in);
+        log::info!(
+            "tidal: login code {} (valid {} s)",
+            code.user_code,
+            code.expires_in
+        );
         self.lock().state = State::Code {
             url: code.url.clone(),
             code: code.user_code.clone(),
@@ -1490,7 +1552,9 @@ impl Tidal {
                 return Err("Der Code ist abgelaufen.".into());
             }
             let (status, body) = http::send(&auth::poll(cfg, &code)).map_err(|e| e.to_string())?;
-            match auth::parse_poll(status, &body, crate::clock::moment().unix).map_err(|e| e.to_string())? {
+            match auth::parse_poll(status, &body, crate::clock::moment().unix)
+                .map_err(|e| e.to_string())?
+            {
                 Poll::Pending => {}
                 Poll::SlowDown => interval += Duration::from_secs(5),
                 Poll::Expired => return Err("Der Code ist abgelaufen.".into()),

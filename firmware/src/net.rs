@@ -33,7 +33,6 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sntp::{EspSntp, SyncStatus};
 use esp_idf_svc::sys::{ESP_ERR_TIMEOUT, EspError};
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -120,7 +119,6 @@ impl Drop for JobGuard {
 #[derive(Clone)]
 pub struct Wifi {
     status: Arc<Mutex<Status>>,
-    active: Arc<AtomicBool>,
     jobs: mpsc::Sender<Job>,
 }
 
@@ -130,11 +128,6 @@ impl Wifi {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-    }
-
-    /// True during a session (the C6 powered, the driver up).
-    pub fn active(&self) -> bool {
-        self.active.load(Ordering::Relaxed)
     }
 
     /// Runs `job` in a session as soon as the thread is free (now, unless
@@ -160,11 +153,9 @@ pub fn start(
     on_time_synced: impl Fn() + Send + 'static,
 ) -> Wifi {
     let status = Arc::new(Mutex::new(Status::Starting));
-    let active = Arc::new(AtomicBool::new(false));
     let (jobs, job_rx) = mpsc::channel::<Job>();
     let wifi = Wifi {
         status: status.clone(),
-        active: active.clone(),
         jobs,
     };
     // On core 1 at priority 1, below the audio decoder (5) and the card
@@ -203,13 +194,10 @@ pub fn start(
             let mut next = Instant::now();
             loop {
                 if crate::airdrop::wanted() {
-                    active.store(true, Ordering::Relaxed);
                     crate::airdrop::run(&mut link, &power, &stop_transport);
-                    active.store(false, Ordering::Relaxed);
                 }
                 if due || job.is_some() {
                     set(Status::Starting);
-                    active.store(true, Ordering::Relaxed);
                     let t = Instant::now();
                     let result = session(
                         &mut modem,
@@ -225,7 +213,6 @@ pub fn start(
                     // AirDrop's images on the C6, if the session found them
                     // missing (once; in the background).
                     crate::airdrop::setup(&power, &stop_transport);
-                    active.store(false, Ordering::Relaxed);
                     let wait = match result {
                         Ok(Outcome::Synced) => {
                             on_time_synced();

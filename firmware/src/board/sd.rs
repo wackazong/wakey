@@ -15,9 +15,6 @@ use esp_idf_svc::sys::{self as sys, EspError, esp};
 
 pub const MOUNT_POINT: &str = "/sdcard";
 
-/// Verbose SD driver logs while bringing the card up.
-const DEBUG_LOGS: bool = false;
-
 /// The mounted card (and the pin supply); unmounted when dropped.
 pub struct SdCard {
     _fs: MountedFatfs<Fatfs<SdCardDriver<SdMmcHostDriver<'static>>>>,
@@ -55,19 +52,9 @@ pub struct SdPins {
     pub d3: Gpio42<'static>,
 }
 
+/// Mounts the card. For the driver's own view of a failing card, raise the
+/// log level of its tags (`sdmmc_*`) with `esp_log_level_set` before.
 pub fn mount(slot: SDMMC0<'static>, p: SdPins) -> Result<SdCard, EspError> {
-    if DEBUG_LOGS {
-        for tag in [
-            c"sdmmc_init",
-            c"sdmmc_cmd",
-            c"sdmmc_common",
-            c"sdmmc_sd",
-            c"sdmmc_req",
-            c"sdmmc_periph",
-        ] {
-            unsafe { sys::esp_log_level_set(tag.as_ptr(), sys::esp_log_level_t_ESP_LOG_DEBUG) };
-        }
-    }
     let pin_supply = PinSupply::on()?;
     let host = SdMmcHostDriver::new_4bits(
         slot,
@@ -137,8 +124,13 @@ fn restore_sdio_host() {
         )
     };
     if host != 0 || slot != 0 {
-        log::error!("sd: SDMMC host for the C6 not restored (init {host}, slot {slot}): Wi-Fi will fail");
+        log::error!(
+            "sd: SDMMC host for the C6 not restored (init {host}, slot {slot}): Wi-Fi will fail"
+        );
     } else {
-        log::info!("sd: SDMMC host restored for the C6 (slot {})", sys::CONFIG_ESP_HOSTED_SDIO_SLOT);
+        log::info!(
+            "sd: SDMMC host restored for the C6 (slot {})",
+            sys::CONFIG_ESP_HOSTED_SDIO_SLOT
+        );
     }
 }

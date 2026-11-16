@@ -43,9 +43,6 @@ pub static PACKETS_ERR: AtomicU32 = AtomicU32::new(0);
 
 enum Cmd {
     Stream(bool),
-    /// Volume in dB (0 = device maximum), clamped to the device range.
-    Volume(f32),
-    Mute(bool),
     /// USB-A 5 V and the root port on or off (off: the device goes away).
     Power(bool),
 }
@@ -104,15 +101,6 @@ impl UsbAudio {
     pub fn set_streaming(&self, on: bool) {
         self.shared.streaming.store(on, Ordering::Release);
         let _ = self.cmds.send(Cmd::Stream(on));
-    }
-
-    /// Device volume in dB (0 = device maximum; the Pebble takes −60..0).
-    pub fn set_volume_db(&self, db: f32) {
-        let _ = self.cmds.send(Cmd::Volume(db));
-    }
-
-    pub fn set_mute(&self, mute: bool) {
-        let _ = self.cmds.send(Cmd::Mute(mute));
     }
 
     /// Powers the USB-A port (5 V and root port) on or off. The switched-on

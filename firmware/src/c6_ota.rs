@@ -8,18 +8,10 @@ use esp_idf_svc::sys;
 /// Bytes per write RPC (esp_hosted's example uses 1400–1500).
 const CHUNK: usize = 1400;
 
-/// Writes `image`; `progress` gets the percentage every 10 %. The C6
-/// checks the image at `end`. A failure before leaves the slot unusable
-/// but the running firmware as it was.
-pub fn write(image: &[u8], progress: impl FnMut(usize)) -> anyhow::Result<()> {
-    write_from(image.len(), |at, buf| {
-        buf.copy_from_slice(&image[at..at + buf.len()]);
-        Ok(())
-    }, progress)
-}
-
-/// [`write`] from a source of `len` bytes that `read(offset, buf)` fills
-/// piece by piece (an image in a flash partition).
+/// Writes an image of `len` bytes that `read(offset, buf)` fills piece by
+/// piece (an image in a flash partition); `progress` gets the percentage
+/// every 10 %. The C6 checks the image at `end`. A failure before leaves
+/// the slot unusable but the running firmware as it was.
 pub fn write_from(
     len: usize,
     mut read: impl FnMut(usize, &mut [u8]) -> anyhow::Result<()>,

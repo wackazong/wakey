@@ -17,7 +17,6 @@ mod reg {
     pub const OUTPUT_HIGH_Z: u8 = 0x07; // 1 = high impedance
     pub const PULL_ENABLE: u8 = 0x0B;
     pub const PULL_SELECT: u8 = 0x0D; // 1 = pull-up
-    pub const INPUT: u8 = 0x0F;
 }
 
 /// Expander pins the firmware drives or reads.
@@ -181,14 +180,6 @@ impl IoExpanders {
                 img.dir &= !(1 << bit);
             }
             bus.write_reg(addr, reg::DIRECTION, img.dir)
-        })
-    }
-
-    /// Reads the input level of a pin.
-    pub fn get(&self, pin: Pin) -> Result<bool, EspError> {
-        let (addr, bit) = pin.location();
-        self.with(addr, |bus, addr, _| {
-            Ok(bus.read_reg(addr, reg::INPUT)? & (1 << bit) != 0)
         })
     }
 

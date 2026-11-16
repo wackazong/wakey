@@ -204,8 +204,6 @@ pub(super) fn client_thread(
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
                 Cmd::Stream(on) => client.stream(on),
-                Cmd::Volume(db) => client.set_volume_db(db),
-                Cmd::Mute(m) => client.set_mute(m),
                 Cmd::Power(on) if on != powered => {
                     powered = on;
                     if on {
@@ -472,11 +470,17 @@ impl Client {
             return;
         };
         let mut m = [0u8; 1];
-        let mute = self.control(0xA1, GET_CUR, 0x0100, index, &mut m).ok().map(|()| m[0]);
+        let mute = self
+            .control(0xA1, GET_CUR, 0x0100, index, &mut m)
+            .ok()
+            .map(|()| m[0]);
         let mut vol = [None; 3];
         for (ch, v) in vol.iter_mut().enumerate() {
             let mut b = [0u8; 2];
-            if self.control(0xA1, GET_CUR, 0x0200 | ch as u16, index, &mut b).is_ok() {
+            if self
+                .control(0xA1, GET_CUR, 0x0200 | ch as u16, index, &mut b)
+                .is_ok()
+            {
                 *v = Some(f32::from(i16::from_le_bytes(b)) / 256.0);
             }
         }
