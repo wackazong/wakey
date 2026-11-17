@@ -20,7 +20,7 @@ use std::io::{self, BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wakey_core::audio_file::AudioFile;
 use wakey_core::resample::Converter;
 use wakey_core::tone::{self, Beeper};
@@ -29,6 +29,9 @@ use wakey_core::tone::{self, Beeper};
 const RING_SAMPLES: usize = SAMPLE_RATE as usize * 2;
 /// Frames decoded per step.
 const CHUNK_FRAMES: usize = 4096;
+/// How long [`Player::start`] waits for the previous decoder to stop. It
+/// normally takes one decoding step, a few milliseconds.
+const STOP_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct Ring {
     samples: Mutex<VecDeque<i16>>,
@@ -40,8 +43,12 @@ struct Ring {
     /// Output gain (f32 bits) and fade-in length in frames.
     gain: AtomicU32,
     fade_frames: AtomicU32,
-    /// Set when a sound starts: the source restarts the fade.
-    restart_fade: AtomicBool,
+    /// Frames the speakers have taken since the sound started, for the
+    /// fade-in. Here and not in the source: when the USB speaker is
+    /// unplugged during an alarm, the built-in one goes on from the same
+    /// count. Changed only under the lock of `samples`, so a start's reset
+    /// cannot fall between a source's read and its update.
+    played: AtomicU32,
 }
 
 /// What [`Player::ring`] and [`Player::preview`] play.
@@ -82,7 +89,7 @@ impl Player {
                 stop: AtomicBool::new(false),
                 gain: AtomicU32::new(1f32.to_bits()),
                 fade_frames: AtomicU32::new(0),
-                restart_fade: AtomicBool::new(false),
+                played: AtomicU32::new(0),
             }),
         }
     }
@@ -91,15 +98,12 @@ impl Player {
     /// `BuiltinSpeaker::start`). Only one may take from it at a time.
     pub fn source(&self) -> Source {
         let ring = self.ring.clone();
-        let mut frames: u64 = 0;
         Box::new(move |buf: &mut [i16]| {
-            if ring.restart_fade.swap(false, Ordering::AcqRel) {
-                frames = 0;
-            }
+            let mut q = ring.samples.lock().unwrap();
+            let played = ring.played.load(Ordering::Relaxed);
             let full = f32::from_bits(ring.gain.load(Ordering::Relaxed));
             let fade = u64::from(ring.fade_frames.load(Ordering::Relaxed));
-            let gain = tone::faded(full, frames, fade);
-            let mut q = ring.samples.lock().unwrap();
+            let gain = tone::faded(full, u64::from(played), fade);
             let n = buf.len().min(q.len());
             for (dst, s) in buf.iter_mut().zip(q.drain(..n)) {
                 *dst = if gain == 1.0 {
@@ -108,7 +112,8 @@ impl Player {
                     (f32::from(s) * gain) as i16
                 };
             }
-            frames += (n / 2) as u64;
+            ring.played
+                .store(played.saturating_add((n / 2) as u32), Ordering::Relaxed);
             drop(q);
             ring.space.notify_one();
             buf[n..].fill(0);
@@ -161,19 +166,35 @@ impl Player {
     }
 
     /// Stops what is playing and starts `produce` on a new decoder thread.
+    ///
+    /// Called on the UI thread, so the wait for the previous decoder is
+    /// bounded ([`STOP_TIMEOUT`]). A decoder that does not stop in time
+    /// (stuck in a read from a failing card) keeps the ring: a second one
+    /// beside it would mix into it, so nothing new starts.
     fn start(&self, gain: f32, fade_frames: u32, produce: impl FnOnce(&Ring) + Send + 'static) {
         let ring = self.ring.clone();
         // Let a previous decoder see the stop and clear the ring.
         if self.is_playing() {
             self.stop();
+            let since = Instant::now();
             while self.is_playing() {
+                if since.elapsed() > STOP_TIMEOUT {
+                    log::error!(
+                        "player: previous decoder did not stop within {} ms; not starting",
+                        STOP_TIMEOUT.as_millis()
+                    );
+                    return;
+                }
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        ring.samples.lock().unwrap().clear();
+        {
+            let mut q = ring.samples.lock().unwrap();
+            q.clear();
+            ring.played.store(0, Ordering::Relaxed);
+        }
         ring.gain.store(gain.to_bits(), Ordering::Relaxed);
         ring.fade_frames.store(fade_frames, Ordering::Relaxed);
-        ring.restart_fade.store(true, Ordering::Release);
         ring.stop.store(false, Ordering::Release);
         ring.armed.store(false, Ordering::Release);
         ring.playing.store(true, Ordering::Release);
@@ -262,11 +283,9 @@ fn decode_from<R: Read + Seek + Send + 'static>(
         }
         let frames = file.read(&mut input)?;
         if frames == 0 {
-            if f.frames == 0 {
-                return Ok(());
-            }
-            // A file that announces frames and yields none would be
-            // rewound in a busy loop.
+            // The end of a pass, also for a file of unknown length
+            // (`f.frames == 0`: ADTS AAC, some MP3). A pass that yielded
+            // nothing would be rewound in a busy loop.
             if pass_frames == 0 {
                 return Err(io::Error::other("no audio data"));
             }
