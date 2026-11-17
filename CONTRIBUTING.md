@@ -15,7 +15,7 @@ Each directory with a `Cargo.toml` is its own workspace with its own toolchain; 
 | --- | --- | --- |
 | `firmware/` | pinned nightly, ESP32-P4 target (`rust-toolchain.toml`) | `cargo fmt --check`, `cargo clippy --release --bins` (with all features too when feature-gated code changed; see [firmware/README.md](firmware/README.md#build-and-flash)) |
 | `wakey-core/` | stable | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` |
-| `tools/ui-preview/` | stable | `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo run --release -- <out dir>` renders every page and checks the list rows |
+| `tools/ui-preview/` | stable | `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo run --release -- <out dir>` renders every page and checks the list rows; on Linux it needs fontconfig (`libfontconfig1-dev`) |
 
 The C6 images (`firmware/c6/`) are C on ESP-IDF; see [firmware/c6/README.md](firmware/c6/README.md). Their stream decoder has a host test: `firmware/c6/airdrop/test/run.sh` after `./fetch.sh`.
 

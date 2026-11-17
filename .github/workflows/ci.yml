@@ -40,6 +40,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Slint's text layout (fontique) links the system's fontconfig on
+      # Linux.
+      - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: tools/ui-preview
