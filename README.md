@@ -170,6 +170,8 @@ Next to `config.json` the clock keeps a folder `tidal/` (the playlist and downlo
 
 Rust on ESP-IDF 5.5 (std) with the Embassy executor on the ESP32-P4. The UI is [Slint](https://slint.dev) with a custom platform that renders line by line through the P4's pixel-processing accelerator and composes scrolling lists with its 2D-DMA engine. The ESP32-C6 is the Wi-Fi radio through Espressif's esp_hosted, and switches to an AirDrop receiver (based on [ESP32Drop](https://github.com/s-iwaki-d/ESP32Drop)) on request. Everything that does not need the hardware (alarm state machine, configuration, audio decoding, the TIDAL protocol, scroll physics, the sky) is in [`wakey-core`](wakey-core/src/lib.rs) and tested on a PC.
 
+**A guided tour through the code:** the [Wakey walkthrough](https://wackazong.com/wakey/) reads the firmware with you in 21 chapters, from the board and the threads to a single touch travelling to the screen, for readers who know Rust but not embedded, Embassy or Slint.
+
 | Path | Content |
 | --- | --- |
 | [`firmware/`](firmware) | The firmware for the ESP32-P4 (its own Cargo workspace and toolchain) |
