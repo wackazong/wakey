@@ -323,9 +323,11 @@ impl Station {
                 );
             }
             // Until AirDrop is wanted, a job comes, or the next session is
-            // due (not while the display sleeps: it waits for it).
+            // due (not while the display sleeps: it waits for it). A job a
+            // session gave back unrun goes first: a new one received here
+            // would take its place, and it would never answer.
             loop {
-                if airdrop::wanted() {
+                if airdrop::wanted() || job.is_some() {
                     break;
                 }
                 if Instant::now() >= next && !(self.display_asleep)() {
