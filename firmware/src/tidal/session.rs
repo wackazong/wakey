@@ -78,7 +78,7 @@ impl From<std::io::Error> for Error {
     }
 }
 
-pub type Result<T> = core::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// What the TIDAL tab says after a failure (the app words it).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,7 +211,7 @@ impl Tidal {
             .ok_or_else(|| Error::NoPlaylist(name.clone()))?
             .uuid
             .clone();
-        log::info!("tidal: playlist „{name}“ found");
+        log::info!("tidal: playlist \"{name}\" found");
         Ok(uuid)
     }
 

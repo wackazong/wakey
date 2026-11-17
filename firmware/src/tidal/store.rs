@@ -54,6 +54,25 @@ pub(super) fn scan_tracks() -> BTreeSet<u64> {
         .unwrap_or_default()
 }
 
+/// Removes the unfinished downloads (`<id>.flac.part`) of all tracks but
+/// `keep`: nothing resumes them.
+pub(super) fn remove_parts(keep: &BTreeSet<u64>) {
+    let Ok(dir) = std::fs::read_dir(sd::path(sync::DIR)) else {
+        return;
+    };
+    let stale = dir
+        .flatten()
+        .filter_map(|e| sync::part_id_of(&e.file_name().to_string_lossy()))
+        .filter(|id| !keep.contains(id));
+    // Collected first: no file is removed while the directory is read.
+    for id in stale.collect::<Vec<_>>() {
+        match std::fs::remove_file(part_path(id)) {
+            Ok(()) => log::info!("tidal: removed the unfinished download of {id}"),
+            Err(e) => log::warn!("tidal: removing the unfinished download of {id}: {e}"),
+        }
+    }
+}
+
 /// The covers on the card (ids).
 pub(super) fn scan_covers() -> Vec<String> {
     std::fs::read_dir(covers_dir())

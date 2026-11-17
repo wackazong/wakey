@@ -24,15 +24,12 @@ impl Tidal {
         let last_updated = info.map(|i| i.last_updated);
         let unchanged = {
             let inner = self.lock();
-            last_updated.is_some()
+            let same = last_updated.is_some()
                 && inner.last_updated == last_updated
-                && !inner.playlist.is_empty()
+                && !inner.playlist.is_empty();
+            same.then(|| (inner.playlist.len(), inner.with_listed_orphans()))
         };
-        if unchanged {
-            let (n, listed) = {
-                let inner = self.lock();
-                (inner.playlist.len(), inner.with_listed_orphans())
-            };
+        if let Some((n, listed)) = unchanged {
             log::info!(
                 "tidal: playlist unchanged ({n} tracks), {} ms",
                 t.elapsed().as_millis()
@@ -41,15 +38,17 @@ impl Tidal {
             return Ok(n);
         }
         let tracks = self.read_tracks(&s, &uuid)?;
+        log::info!("tidal: playlist read, {} ms", t.elapsed().as_millis());
+        let n = tracks.len();
+        self.take_tracks(tracks)?;
+        // Only once the tracks are stored: a playlist that could not be
+        // written is read again by the next sync.
         self.lock().last_updated = last_updated.clone();
         store::save_state(&SyncState {
             playlist: self.lock().cfg.playlist.clone(),
             uuid: Some(uuid),
             last_updated,
         });
-        log::info!("tidal: playlist read, {} ms", t.elapsed().as_millis());
-        let n = tracks.len();
-        self.take_tracks(tracks)?;
         let listed = self.lock().with_listed_orphans();
         self.sync_covers(&listed);
         Ok(n)
@@ -116,7 +115,7 @@ impl Tidal {
             log::info!("tidal: playlist changed, {} tracks", tracks.len());
             let mut inner = self.lock();
             inner.playlist = tracks;
-            inner.version = inner.version.wrapping_add(1);
+            inner.bump();
         }
         // Remembered: the playlist, what alarms use, what is on the card.
         let mut inner = self.lock();
@@ -142,7 +141,9 @@ impl Tidal {
     }
 
     /// Removes the files of tracks no longer in `tracks`, unless an alarm
-    /// uses them or the open tab still lists them.
+    /// uses them or the open tab still lists them. Unfinished downloads
+    /// (`.flac.part`) go too, except those to be resumed of tracks that
+    /// stay.
     fn prune_files(&self, tracks: &[Track]) {
         let (have, spare): (Vec<u64>, BTreeSet<u64>) = {
             let inner = self.lock();
@@ -159,6 +160,18 @@ impl Tidal {
             }
             self.lock().have.remove(&id);
         }
+        let keep = {
+            let mut inner = self.lock();
+            inner
+                .resumable
+                .retain(|id| spare.contains(id) || tracks.iter().any(|t| t.id == *id));
+            // Syncs and downloads share the `wifi` thread, so none is under
+            // way; kept all the same.
+            let mut keep = inner.resumable.clone();
+            keep.extend(inner.downloading.map(|(id, _)| id));
+            keep
+        };
+        store::remove_parts(&keep);
     }
 
     /// The covers of `tracks` the card lacks, one by one (the list is filled

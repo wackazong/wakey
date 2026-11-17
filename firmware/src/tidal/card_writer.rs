@@ -79,7 +79,8 @@ impl CardWriter {
                         file.sync_all()?;
                     }
                 }
-                file.flush()
+                // Closing the file would sync it too, but lose the error.
+                file.sync_all()
             })?;
         Ok(Self {
             to_writer: Some(to_writer),

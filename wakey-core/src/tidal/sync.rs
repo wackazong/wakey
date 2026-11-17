@@ -27,6 +27,12 @@ pub fn track_id_of(file_name: &str) -> Option<u64> {
     file_name.strip_suffix(".flac")?.parse().ok()
 }
 
+/// The track id from the file name of an unfinished download in `tidal/`
+/// (`"123.flac.part"`).
+pub fn part_id_of(file_name: &str) -> Option<u64> {
+    track_id_of(file_name.strip_suffix(".part")?)
+}
+
 /// A cover id from a file name in `tidal/covers/`.
 pub fn cover_id_of(file_name: &str) -> Option<&str> {
     file_name.strip_suffix(".rgb").filter(|s| !s.is_empty())
@@ -103,6 +109,9 @@ mod tests {
         assert_eq!(track_path(12), "tidal/12.flac");
         assert_eq!(track_id_of("12.flac"), Some(12));
         assert_eq!(track_id_of("12.flac.part"), None);
+        assert_eq!(part_id_of("12.flac.part"), Some(12));
+        assert_eq!(part_id_of("12.flac"), None);
+        assert_eq!(part_id_of("playlist.json.part"), None);
         assert_eq!(cover_id_of("ab-cd.rgb"), Some("ab-cd"));
     }
 }

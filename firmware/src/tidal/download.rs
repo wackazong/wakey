@@ -78,7 +78,7 @@ impl Tidal {
         );
         let mut inner = self.lock();
         inner.have.insert(track.id);
-        inner.version = inner.version.wrapping_add(1);
+        inner.bump();
         Ok(())
     }
 
@@ -131,7 +131,7 @@ impl Tidal {
                         "tidal: download {id}: {} KiB of {:?} KiB, {} KiB/s, {} of {} ms writing to the card",
                         done / 1024,
                         total.map(|t| t / 1024),
-                        done / 1024 / t.elapsed().as_secs().max(1),
+                        (done - at) / 1024 / t.elapsed().as_secs().max(1),
                         writing.get().as_millis(),
                         t.elapsed().as_millis()
                     );

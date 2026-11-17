@@ -8,7 +8,7 @@
 //!
 //! Sync: whenever the tab opens with a session, a session job refreshes
 //! the token if it is about to expire (saved), finds the playlist
-//! (`playlist` in `config.json`, "Wecker") and reads its tracks into
+//! (`playlist` in `config.json`, "Wakey") and reads its tracks into
 //! `tidal/playlist.json` on the card, which [`Tidal::listed`] serves
 //! (offline too). The playlist's id is kept in `tidal/state.json`: it is
 //! searched by name among the user's playlists only when unknown, gone or
@@ -18,7 +18,7 @@
 //!
 //! Downloads: only selected tracks ([`Tidal::set_selected`]: those of the
 //! saved alarms and the one picked in the alarm being edited; all of the
-//! playlist while an alarm uses „Zufällig“). A change of the selection
+//! playlist while an alarm uses "Random"). A change of the selection
 //! changes the queue; the download under way finishes. The job fetches the
 //! selected tracks the card lacks, one at a time in playlist order, to
 //! `tidal/<id>.flac` ([`download`]), and deletes the files of tracks no
@@ -41,6 +41,8 @@ pub use growing::Growing;
 pub use session::Problem;
 pub use store::{cover_rgb, downloaded, track_file, track_title};
 
+use crate::airdrop;
+use crate::board::sd;
 use crate::config::{self, TidalConfig};
 use crate::net::{Unavailable, Wifi};
 use session::Error;
@@ -118,7 +120,7 @@ struct Inner {
     have: BTreeSet<u64>,
     /// Tracks to have on the card (chosen in alarms).
     selected: BTreeSet<u64>,
-    /// An alarm uses „Zufällig“: the whole playlist.
+    /// An alarm uses "Random": the whole playlist.
     all: bool,
     /// The track being downloaded, and how far (0–1).
     downloading: Option<(u64, f32)>,
@@ -209,6 +211,11 @@ impl Inner {
                 && self.known.contains_key(&p));
         (in_tracks && self.lacks(p)).then_some(p)
     }
+
+    /// The list is to be filled again.
+    fn bump(&mut self) {
+        self.version = self.version.wrapping_add(1);
+    }
 }
 
 /// What a TIDAL job does in its Wi-Fi session, before
@@ -245,6 +252,9 @@ impl Tidal {
         } else {
             State::LoggedOut
         };
+        // Unfinished downloads of the last run: none is resumed (what can
+        // be is known only while running, `Inner::resumable`).
+        store::remove_parts(&BTreeSet::new());
         let playlist = store::load_playlist();
         let mut known = store::load_known();
         known.extend(playlist.iter().map(|t| (t.id, t.clone())));
@@ -318,7 +328,7 @@ impl Tidal {
 
     /// The tracks to have on the card. Starts their downloads (a Wi-Fi
     /// session) unless a job is under way, which takes them on.
-    /// `all`: the whole playlist (an alarm uses „Zufällig“).
+    /// `all`: the whole playlist (an alarm uses "Random").
     ///
     /// `draft`: the track of the alarm being edited (the tab lists it even
     /// if it left the playlist).
@@ -328,7 +338,7 @@ impl Tidal {
             inner.selected = ids;
             inner.all = all;
             inner.draft = draft;
-            inner.version = inner.version.wrapping_add(1);
+            inner.bump();
         }
         inner.keep_draft();
         let missing = inner.missing();
@@ -518,7 +528,7 @@ impl Tidal {
         inner.uuid = None;
         inner.last_updated = None;
         inner.bound = None;
-        let _ = std::fs::remove_file(crate::board::sd::path(store::STATE_FILE));
+        let _ = std::fs::remove_file(sd::path(store::STATE_FILE));
     }
 
     /// After a sync: downloads what the card lacks, and while the tab is
@@ -528,16 +538,18 @@ impl Tidal {
     fn keep_up(&self) -> Ended {
         let mut last_sync = Instant::now();
         loop {
-            if crate::airdrop::wanted() {
+            if airdrop::wanted() {
                 return Ended::ForAirDrop;
             }
-            if self.lock().state != State::LoggedIn {
-                return Ended::Done;
-            }
-            let wanted = self.lock().wanted;
+            let (wanted, urgent) = {
+                let inner = self.lock();
+                if inner.state != State::LoggedIn {
+                    return Ended::Done;
+                }
+                (inner.wanted, inner.preferred().is_some())
+            };
             let due = wanted && last_sync.elapsed() >= WATCH;
             // A picked track that is missing goes before the sync.
-            let urgent = self.lock().preferred().is_some();
             if (!due || urgent)
                 && let Some(track) = self.next_missing()
             {
@@ -568,7 +580,7 @@ impl Tidal {
                 // Settings pages open, the tab not: the session waits for
                 // it (checked every second; a pick or the tab wakes it).
                 let inner = self.lock();
-                if !inner.missing() {
+                if !inner.wanted && !inner.missing() {
                     let _ = self.kick.wait_timeout(inner, Duration::from_secs(1));
                 }
                 continue;
@@ -609,7 +621,7 @@ impl Tidal {
     /// The download of `id` is to stop: another track was picked and is
     /// still missing, or AirDrop wants the C6 (the download resumes later).
     fn deferred(&self, id: u64) -> bool {
-        if crate::airdrop::wanted() {
+        if airdrop::wanted() {
             return true;
         }
         self.lock().preferred().is_some_and(|p| p != id)
@@ -621,13 +633,12 @@ impl Tidal {
         let new = inner.downloading.is_none_or(|(d, _)| d != id);
         inner.downloading = Some((id, fraction.clamp(0.0, 1.0)));
         if new {
-            inner.version = inner.version.wrapping_add(1);
+            inner.bump();
         }
     }
 
     /// The list is to be filled again.
     fn bump(&self) {
-        let mut inner = self.lock();
-        inner.version = inner.version.wrapping_add(1);
+        self.lock().bump();
     }
 }
