@@ -26,7 +26,11 @@ pub struct AlarmClock {
     ring: RingConfig,
     machine: Alarms,
     nvs: Option<EspNvs<NvsDefault>>,
+    /// The state in NVS: updated only when a write succeeded, so a failed
+    /// one is tried again on the next tick.
     saved: State,
+    /// The last write failed (its error is logged once, not every tick).
+    save_failed: bool,
     player: Player,
     output: Output,
     /// The alarm the speaker is ringing for right now.
@@ -76,6 +80,7 @@ impl AlarmClock {
             machine: Alarms::new(saved.clone()),
             nvs,
             saved,
+            save_failed: false,
             player,
             output,
             sounding: None,
@@ -271,11 +276,28 @@ impl AlarmClock {
     fn follow(&mut self) {
         let state = self.machine.state();
         if *state != self.saved {
-            log::info!("alarm: {:?}", state.phase);
-            if let Some(nvs) = &self.nvs {
-                save_state(nvs, state);
+            if !self.save_failed {
+                log::info!("alarm: {:?}", state.phase);
             }
-            self.saved = state.clone();
+            let written = match &self.nvs {
+                Some(nvs) => nvs.set_str(NVS_KEY, &state.to_json()),
+                None => Ok(()),
+            };
+            match written {
+                Ok(()) => {
+                    if self.save_failed {
+                        log::info!("alarm: state saved after all");
+                    }
+                    self.save_failed = false;
+                    self.saved = state.clone();
+                }
+                Err(e) => {
+                    if !self.save_failed {
+                        log::error!("alarm: saving the state: {e}; trying again every tick");
+                    }
+                    self.save_failed = true;
+                }
+            }
         }
         let ringing = self.machine.ringing();
         if ringing == self.sounding {
@@ -318,11 +340,5 @@ fn load_state(nvs: &EspNvs<NvsDefault>) -> State {
             log::error!("alarm: reading the saved state: {e}");
             State::default()
         }
-    }
-}
-
-fn save_state(nvs: &EspNvs<NvsDefault>, state: &State) {
-    if let Err(e) = nvs.set_str(NVS_KEY, &state.to_json()) {
-        log::error!("alarm: saving the state: {e}");
     }
 }

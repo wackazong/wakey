@@ -175,7 +175,6 @@ async fn app(
         c6_link,
         sd: _sd, // stays mounted
         codec,
-        ..
     } = Board::init().expect("board init");
 
     clock::init(&rtc);
