@@ -9,19 +9,20 @@ use esp_idf_svc::hal::gpio::{AnyIOPin, PinDriver, Pull};
 use esp_idf_svc::hal::i2c::{I2c, I2cConfig, I2cDriver};
 use esp_idf_svc::hal::units::Hertz;
 use esp_idf_svc::sys::EspError;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_millis(50);
 
 /// The bus, shared between chip drivers and tasks.
-pub type SharedI2c = std::sync::Arc<std::sync::Mutex<SysI2c>>;
+pub type SharedI2c = Arc<Mutex<SysI2c>>;
 
 pub struct SysI2c {
     driver: I2cDriver<'static>,
 }
 
 /// Locks a [`SharedI2c`] (a poisoned lock is still a usable bus).
-pub fn lock(bus: &SharedI2c) -> std::sync::MutexGuard<'_, SysI2c> {
+pub fn lock(bus: &SharedI2c) -> MutexGuard<'_, SysI2c> {
     bus.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -39,8 +40,8 @@ impl SysI2c {
         // The hardware gives up when a device holds SCL low (clock
         // stretching) longer than this. The driver's default is 2^10 clock
         // cycles, ~26 µs: the touch controller stretches longer while it
-        // processes a touch, and every such read timed out (touch lagged,
-        // then stopped). 10 ms rounds up to 2^19 cycles, ~13 ms.
+        // processes a touch, and every such read then times out (touch
+        // lags, then stops). 10 ms rounds up to 2^19 cycles, ~13 ms.
         let config = I2cConfig::new()
             .timeout(Duration::from_millis(10).into())
             .baudrate(Hertz(400_000))

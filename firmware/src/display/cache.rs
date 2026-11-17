@@ -1,11 +1,9 @@
 //! CPU cache maintenance for memory that DMA engines (panel, PPA, 2D-DMA)
 //! read or write. They access PSRAM directly, not through the cache.
 
+use crate::psram::CACHE_LINE;
 use core::ffi::c_void;
 use esp_idf_svc::sys;
-
-/// L2 cache line size (`CONFIG_CACHE_L2_CACHE_LINE_128B`).
-const LINE: usize = 128;
 
 // `esp_cache.h` is not in esp-idf-sys's default bindings.
 const ESP_CACHE_MSYNC_FLAG_UNALIGNED: i32 = 1 << 1;
@@ -41,14 +39,14 @@ pub unsafe fn writeback(buf: *mut u16, pixels: usize) {
 /// around them must hold no CPU writes that are still needed: they are
 /// dropped too.
 pub unsafe fn invalidate(buf: *mut u16, pixels: usize) {
-    let first = buf as usize & !(LINE - 1);
+    let first = buf as usize & !(CACHE_LINE - 1);
     let last = buf as usize + pixels * 2;
     // SAFETY: whole cache lines around the caller's range, whose dirty
     // contents the caller gives up.
     let err = unsafe {
         esp_cache_msync(
             first as *mut c_void,
-            (last - first).next_multiple_of(LINE),
+            (last - first).next_multiple_of(CACHE_LINE),
             ESP_CACHE_MSYNC_FLAG_DIR_M2C,
         )
     };

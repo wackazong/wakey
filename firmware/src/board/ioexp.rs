@@ -8,8 +8,8 @@ use super::i2c::{self, SharedI2c, SysI2c};
 use esp_idf_svc::sys::EspError;
 use std::sync::{Arc, Mutex};
 
-pub const IOE_A: u8 = 0x43;
-pub const IOE_B: u8 = 0x44;
+const IOE_A: u8 = 0x43;
+const IOE_B: u8 = 0x44;
 
 mod reg {
     pub const DIRECTION: u8 = 0x03; // 1 = output
@@ -171,7 +171,7 @@ impl IoExpanders {
     }
 
     /// Makes a pin an output (`true`) or an input (`false`, pull as configured).
-    pub fn set_output(&self, pin: Pin, output: bool) -> Result<(), EspError> {
+    fn set_output(&self, pin: Pin, output: bool) -> Result<(), EspError> {
         let (addr, bit) = pin.location();
         self.with(addr, |bus, addr, img| {
             if output {

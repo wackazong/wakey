@@ -7,8 +7,9 @@
 //! created: first the full-screen main window ([`init`]), then any
 //! offscreen windows ([`offscreen_window`]) rendered on demand (list rows).
 
-use super::{UI_HEIGHT, UI_WIDTH};
+use super::{UI_HEIGHT, UI_WIDTH, dim};
 use crate::display::ppa::{PpaRotator, Target};
+use core::ops::Range;
 use embassy_time::Instant;
 use slint::PlatformError;
 use slint::platform::software_renderer::{
@@ -23,6 +24,8 @@ thread_local! {
     /// Windows handed out, in order, to the next components created.
     static PENDING: RefCell<VecDeque<Rc<MinimalSoftwareWindow>>> = const { RefCell::new(VecDeque::new()) };
 }
+
+/// The Slint platform: hands out the prepared windows and tells the time.
 struct TabPlatform {
     start: Instant,
 }
@@ -53,16 +56,22 @@ pub fn init() -> Rc<MinimalSoftwareWindow> {
         start: Instant::now(),
     }))
     .expect("Slint platform already set");
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
-    window.set_size(slint::PhysicalSize::new(UI_WIDTH, UI_HEIGHT));
-    PENDING.with(|p| p.borrow_mut().push_back(window.clone()));
-    window
+    prepare_window(RepaintBufferType::SwappedBuffers, UI_WIDTH, UI_HEIGHT)
 }
 
 /// Prepares an offscreen window of `width × height` landscape pixels for
 /// the next component created. Render it with [`render_offscreen`].
 pub fn offscreen_window(width: u32, height: u32) -> Rc<MinimalSoftwareWindow> {
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    prepare_window(RepaintBufferType::NewBuffer, width, height)
+}
+
+/// A window of `width × height` pixels for the next component created.
+fn prepare_window(
+    repaint: RepaintBufferType,
+    width: u32,
+    height: u32,
+) -> Rc<MinimalSoftwareWindow> {
+    let window = MinimalSoftwareWindow::new(repaint);
     window.set_size(slint::PhysicalSize::new(width, height));
     PENDING.with(|p| p.borrow_mut().push_back(window.clone()));
     window
@@ -91,13 +100,13 @@ impl LineBufferProvider for PpaLines<'_> {
     fn process_line(
         &mut self,
         line: usize,
-        range: core::ops::Range<usize>,
+        range: Range<usize>,
         render_fn: impl FnOnce(&mut [Self::TargetPixel]),
     ) {
         let x0 = range.start;
         let px = self.rot.line(line, range);
         // SAFETY: Rgb565Pixel is #[repr(transparent)] over u16.
         render_fn(unsafe { core::slice::from_raw_parts_mut(px.as_mut_ptr().cast(), px.len()) });
-        super::dim::apply(px, x0, line);
+        dim::apply(px, x0, line);
     }
 }

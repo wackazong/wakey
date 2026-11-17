@@ -2,8 +2,8 @@
 
 use esp_idf_svc::sys;
 
-/// PSRAM DMA works on whole cache lines: buffers start on one and are
-/// sized in whole ones.
+/// The L2 cache line (`CONFIG_CACHE_L2_CACHE_LINE_128B`). PSRAM DMA works
+/// on whole cache lines: buffers start on one and are sized in whole ones.
 pub const CACHE_LINE: usize = 128;
 
 /// A cache-line aligned buffer in PSRAM (`heap_caps_aligned_alloc`), freed

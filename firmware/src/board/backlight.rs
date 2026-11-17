@@ -8,7 +8,7 @@ use esp_idf_svc::hal::units::Hertz;
 
 /// PWM frequency. M5GFX uses 44.1 kHz, which leaves 10 bits of duty: the
 /// visible range (0–2 %, see `ambient`) then has ~20 steps, and fades
-/// jumped. At 4 kHz the duty has 14 bits (~330 steps there); 5 kHz looked
+/// jump. At 4 kHz the duty has 14 bits (~330 steps there); 5 kHz looks
 /// the same as 44.1 kHz (no flicker). Espressif's BSP uses 5 kHz.
 const PWM_HZ: u32 = 4_000;
 

@@ -29,6 +29,7 @@ use super::platform::PpaLines;
 use crate::display::dma2d::{Blit, FbCopy, OwnedPicture, Picture};
 use crate::display::ppa::{PpaRotator, Target};
 use crate::display::{Display, HEIGHT, WIDTH};
+use core::ops::Range;
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 use embassy_time::{Duration, Instant};
 use slint::platform::software_renderer::{
@@ -267,17 +268,12 @@ impl Slide<'_> {
             self.jobs.push_back(whole(self.new, fb));
             self.finals += 1;
         } else {
-            let eased = if t < 0.5 {
-                4.0 * t * t * t
-            } else {
-                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-            };
             let (length, blank) = if self.vertical() {
                 (WIDTH, BLANK_H)
             } else {
                 (HEIGHT, BLANK_W)
             };
-            let mut d = ((eased.min(1.0) * length as f32) as usize).min(length);
+            let mut d = ((ease(t).min(1.0) * length as f32) as usize).min(length);
             if !self.new_ready {
                 // Show no more of the new page than the background covers.
                 d = d.min(blank);
@@ -368,6 +364,16 @@ impl Slide<'_> {
     }
 }
 
+/// Cubic ease in and out: the slide's progress at `t` of its duration
+/// (both 0..=1).
+fn ease(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
 /// Slint's line output to the PPA, driving the slide in between.
 struct Polling<'a, 'b> {
     lines: PpaLines<'a>,
@@ -381,7 +387,7 @@ impl LineBufferProvider for Polling<'_, '_> {
     fn process_line(
         &mut self,
         line: usize,
-        range: core::ops::Range<usize>,
+        range: Range<usize>,
         render_fn: impl FnOnce(&mut [Self::TargetPixel]),
     ) {
         self.slide.poll(self.display);

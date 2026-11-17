@@ -20,10 +20,13 @@ pub use backlight::Backlight;
 
 use crate::display::{Display, PanelVariant};
 use esp_idf_svc::hal::delay::FreeRtos;
+use esp_idf_svc::hal::gpio::Gpio14;
 use esp_idf_svc::hal::modem::Modem;
 use esp_idf_svc::hal::peripherals::Peripherals;
+use esp_idf_svc::hal::uart::UART1;
 use i2c::{SharedI2c, SysI2c};
 use ioexp::IoExpanders;
+use std::sync::{Arc, Mutex};
 
 /// GT911 touch controller addresses (the ILI9881C variant); the ST712x
 /// variants answer at [`touch::ADDR`].
@@ -32,8 +35,8 @@ const GT911_ADDR_BACKUP: u8 = 0x5D;
 
 /// The UART and the pin of the C6's one-way link to the P4 (`RF_C6_IO2`).
 pub struct C6Link {
-    pub uart: esp_idf_svc::hal::uart::UART1<'static>,
-    pub rx: esp_idf_svc::hal::gpio::Gpio14<'static>,
+    pub uart: UART1<'static>,
+    pub rx: Gpio14<'static>,
 }
 
 pub struct Board {
@@ -61,7 +64,7 @@ impl Board {
         let p = Peripherals::take()?;
 
         // 1. I2C with bus recovery.
-        let i2c: SharedI2c = std::sync::Arc::new(std::sync::Mutex::new(SysI2c::new(
+        let i2c: SharedI2c = Arc::new(Mutex::new(SysI2c::new(
             p.i2c0,
             p.pins.gpio31.degrade_input_output(),
             p.pins.gpio32.degrade_input_output(),

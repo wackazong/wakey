@@ -1,9 +1,9 @@
 //! Hardware rotation with the PPA (Pixel Processing Accelerator).
 //!
-//! UI toolkits render unrotated landscape lines into small strips in
-//! internal RAM. Each finished strip is queued to the PPA's
-//! scale-rotate-mirror engine, which rotates it by 90° and writes it into the
-//! portrait frame buffer by DMA, while the CPU renders the next strip.
+//! Slint renders unrotated landscape lines into small strips in internal
+//! RAM. Each finished strip goes to the PPA's scale-rotate-mirror engine,
+//! which rotates it by 90° and writes it into the portrait target picture
+//! by DMA, while the CPU renders the next strip.
 //!
 //! This replaces two CPU costs: software rotation (cache-unfriendly) and
 //! copying rendered lines into PSRAM.
@@ -17,22 +17,24 @@
 //!   driver invalidates the output rows before each transaction, which would
 //!   discard CPU writes still in the cache.
 //! - [`PpaRotator::finish`] must be called before the frame is presented. It
-//!   waits for the queue to drain.
+//!   waits until the PPA has written every strip.
 
 use super::dma2d::Picture;
 use super::{HEIGHT, WIDTH, cache};
+use crate::psram::CACHE_LINE;
 use core::ffi::c_void;
 use core::ops::Range;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
-use esp_idf_svc::sys::{self as sys, EspError, esp};
+use esp_idf_svc::sys::{self, EspError, esp};
 
 /// Landscape width (= panel height): maximum strip line length.
 const LINE_PX: usize = HEIGHT;
 /// Lines per strip. Taller strips mean wider writes per panel row in PSRAM
 /// (2 bytes per line) and fewer transactions, at the cost of internal RAM.
 pub const STRIP_LINES: usize = 16;
-/// Strip buffers. Some are open (being filled), the rest are queued in the PPA.
+/// Strip buffers. Some are open (being filled), the rest are with the PPA
+/// or free.
 const NUM_BUFS: usize = 4;
 /// At most this many strips are filled at the same time. Slint hands out
 /// several ranges per line when the dirty region has rectangles side by side.
@@ -50,6 +52,9 @@ const MAX_BLOCK_W: usize = 640;
 /// `docs/pitfalls.md`). Shorter strips are padded with lines read back from
 /// the frame buffer.
 const MIN_LINES: usize = 8;
+
+/// Submissions remembered for the stall report.
+const RECENT: usize = 8;
 
 /// Microseconds the CPU spent waiting for the PPA (diagnostics).
 pub static WAIT_US: AtomicU32 = AtomicU32::new(0);
@@ -77,8 +82,9 @@ unsafe extern "C" fn on_trans_done(
 /// `row_ref - x`.
 #[derive(Clone, Copy, Debug)]
 pub struct Target {
-    /// 128-byte aligned, and allocated in whole 128-byte cache lines: the
-    /// PPA rejects an output buffer size that is not a multiple of them.
+    /// Cache-line aligned, and allocated in whole cache lines
+    /// ([`CACHE_LINE`]): the PPA rejects an output buffer size that is not
+    /// a multiple of them.
     pub buf: *mut u16,
     /// Picture width (row stride) and height, pixels.
     pub pic_w: usize,
@@ -106,6 +112,8 @@ impl Target {
     }
 }
 
+/// A strip: buffer `buf` holds `lines` landscape lines from `first_line`
+/// on, each the pixels `range`.
 #[derive(Clone, Debug, Default)]
 struct Open {
     buf: usize,
@@ -114,6 +122,9 @@ struct Open {
     lines: usize,
 }
 
+/// The PPA client with its strip buffers. One render at a time:
+/// [`begin`](Self::begin), a [`line`](Self::line) per rendered line,
+/// [`finish`](Self::finish).
 pub struct PpaRotator {
     client: sys::ppa_client_handle_t,
     bufs: [*mut u16; NUM_BUFS],
@@ -123,7 +134,7 @@ pub struct PpaRotator {
     submitted: u32,
     open: heapless::Vec<Open, MAX_OPEN>,
     /// Geometry of recent submissions (diagnostics for stalls).
-    recent: [(u32, Open); 8],
+    recent: [(u32, Open); RECENT],
     /// Picture receiving the current render.
     target: Target,
 }
@@ -152,7 +163,7 @@ impl PpaRotator {
             // SAFETY: a plain allocation; the result is checked below.
             let p = unsafe {
                 sys::heap_caps_aligned_alloc(
-                    128,
+                    CACHE_LINE,
                     STRIP_LINES * LINE_PX * 2,
                     sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_DMA | sys::MALLOC_CAP_8BIT,
                 )
@@ -202,7 +213,7 @@ impl PpaRotator {
                 self.recent
                     .iter()
                     .map(|(n, o)| (*n, o.range.clone(), o.first_line, o.lines))
-                    .collect::<heapless::Vec<_, 8>>()
+                    .collect::<heapless::Vec<_, RECENT>>()
             );
         }
     }
@@ -253,12 +264,14 @@ impl PpaRotator {
         let w = o.range.len();
         let start = o.lines * w;
         o.lines += 1;
-        // SAFETY: the buffer holds STRIP_LINES × LINE_PX pixels, the PPA does
-        // not read it until it is flushed.
+        // SAFETY: the buffer holds STRIP_LINES × LINE_PX pixels, of which
+        // this is one line (`lines` < STRIP_LINES, `range` within a
+        // landscape line); the PPA has finished with it (`free_buffer`) and
+        // does not read it until it is flushed.
         unsafe { core::slice::from_raw_parts_mut(self.bufs[o.buf].add(start), w) }
     }
 
-    /// Queues open strip `i` to the PPA and closes it.
+    /// Submits open strip `i` to the PPA and closes it.
     fn flush(&mut self, i: usize) {
         let mut o = self.open.remove(i);
         if o.lines == 0 {
@@ -275,7 +288,7 @@ impl PpaRotator {
             x += bw;
         }
         self.buf_seq[o.buf] = self.submitted;
-        self.recent[self.submitted as usize % 8] = (self.submitted, o);
+        self.recent[self.submitted as usize % RECENT] = (self.submitted, o);
     }
 
     /// Grows strip `o` to `MIN_LINES` lines. The extra lines are not dirty in
@@ -283,11 +296,7 @@ impl PpaRotator {
     /// read back (after the PPA has finished everything queued, and with the
     /// cache dropped for those rows) and written again unchanged.
     fn pad(&mut self, o: &mut Open) {
-        let mut spins = 0;
-        while Self::done() != self.submitted {
-            self.report_stall(&mut spins);
-            core::hint::spin_loop();
-        }
+        self.wait_idle();
         let t = self.target;
         let w = o.range.len();
         let start = o.first_line.min(t.lines - MIN_LINES);
@@ -306,7 +315,7 @@ impl PpaRotator {
             cache::invalidate(t.buf.add(row0 * t.pic_w), w * t.pic_w);
             // Move the rendered lines to their place in the padded strip.
             if shift > 0 {
-                core::ptr::copy(buf, buf.add(shift * w), o.lines * w);
+                ptr::copy(buf, buf.add(shift * w), o.lines * w);
             }
             let rendered = shift..shift + o.lines;
             for l in 0..MIN_LINES {
@@ -333,13 +342,7 @@ impl PpaRotator {
     /// stalls completes when submitted alone). One in flight still lets
     /// the CPU render the next strip while the PPA rotates this one.
     fn submit(&mut self, o: &Open, x: usize, bw: usize) {
-        let mut spins = 0;
-        let t0 = now_us();
-        while Self::done() != self.submitted {
-            self.report_stall(&mut spins);
-            core::hint::spin_loop();
-        }
-        WAIT_US.fetch_add(now_us().wrapping_sub(t0), Ordering::Relaxed);
+        self.wait_idle();
         let w = o.range.len() as u32;
         let h = o.lines as u32;
         // SAFETY: the configuration is plain data (zeroed is its default),
@@ -356,7 +359,7 @@ impl PpaRotator {
             cfg.in_.__bindgen_anon_1.srm_cm = sys::ppa_srm_color_mode_t_PPA_SRM_COLOR_MODE_RGB565;
             let t = self.target;
             cfg.out.buffer = t.buf.cast();
-            cfg.out.buffer_size = (t.pic_w * t.pic_h * 2).next_multiple_of(128) as u32;
+            cfg.out.buffer_size = (t.pic_w * t.pic_h * 2).next_multiple_of(CACHE_LINE) as u32;
             cfg.out.pic_w = t.pic_w as u32;
             cfg.out.pic_h = t.pic_h as u32;
             // Landscape (x, y) → picture column col_off+y, row row_ref-x. The
@@ -378,15 +381,21 @@ impl PpaRotator {
         self.submitted = self.submitted.wrapping_add(1);
     }
 
-    /// Queues the remaining strips and waits until the PPA has written
-    /// everything into the frame buffer.
+    /// Submits the remaining strips and waits until the PPA has written
+    /// everything into the target.
     pub fn finish(&mut self) {
         while !self.open.is_empty() {
             self.flush(0);
         }
+        self.wait_idle();
+    }
+
+    /// Waits until the PPA has finished everything submitted; the time
+    /// counts into [`WAIT_US`].
+    fn wait_idle(&self) {
         let mut spins = 0;
         let t0 = now_us();
-        while (Self::done().wrapping_sub(self.submitted) as i32) < 0 {
+        while Self::done() != self.submitted {
             self.report_stall(&mut spins);
             core::hint::spin_loop();
         }

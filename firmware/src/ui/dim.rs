@@ -16,6 +16,17 @@ pub const FULL: u16 = 256;
 static FACTOR: AtomicU16 = AtomicU16::new(FULL);
 static EPOCH: AtomicU32 = AtomicU32::new(0);
 
+/// The channels of an RGB565 pixel spread over a 32-bit word with gaps
+/// (green in the upper half), so one multiply scales all three.
+const SPREAD: u32 = 0x07e0_f81f;
+
+/// The factor in 1/32 (what the gaps of [`SPREAD`] leave room for), or
+/// `None` while undimmed.
+fn factor_32() -> Option<u32> {
+    let f = u32::from(factor());
+    (f < u32::from(FULL)).then_some((f + 4) >> 3)
+}
+
 /// Sets the brightness factor in 1/256 (any thread; [`FULL`] = undimmed).
 pub fn set(factor: u16) {
     let factor = factor.min(FULL);
@@ -44,22 +55,18 @@ pub fn changed_since(seen: &mut u32) -> bool {
 /// One colour scaled by the factor, rounded to the nearest level (for
 /// areas filled without Slint, e.g. the list layer's background).
 pub fn scale(px: u16) -> u16 {
-    let f = u32::from(FACTOR.load(Ordering::Relaxed));
-    if f >= u32::from(FULL) {
+    let Some(f) = factor_32() else {
         return px;
-    }
-    let f32_ = (f + 4) >> 3;
-    const MASK: u32 = 0x07e0_f81f;
+    };
     const HALF: u32 = 16 | (16 << 11) | (16 << 21);
-    let x = (u32::from(px) | (u32::from(px) << 16)) & MASK;
-    let x = ((x * f32_ + HALF) >> 5) & MASK;
+    let x = (u32::from(px) | (u32::from(px) << 16)) & SPREAD;
+    let x = ((x * f + HALF) >> 5) & SPREAD;
     (x | (x >> 16)) as u16
 }
 
-/// Scales a freshly drawn line (RGB565) by the factor, to 1/32: the
-/// channels are spread over a 32-bit word with gaps (green in the upper
-/// half), so one multiply scales all three (~20 ms less per full screen
-/// than three).
+/// Scales a freshly drawn line (RGB565) by the factor, to 1/32, with one
+/// multiply per pixel ([`SPREAD`]; ~20 ms less per full screen than
+/// three).
 ///
 /// The scaled channels have 5 bits of fraction. Cut off, a dimmed
 /// gradient shows stripes (at 35 % a channel has ~11 levels left, and
@@ -69,12 +76,9 @@ pub fn scale(px: u16) -> u16 {
 /// on screen (the pattern is offset from the renderer's, which uses the
 /// same matrix).
 pub fn apply(px: &mut [u16], x0: usize, y: usize) {
-    let f = u32::from(FACTOR.load(Ordering::Relaxed));
-    if f >= u32::from(FULL) {
+    let Some(f) = factor_32() else {
         return;
-    }
-    let f32_ = (f + 4) >> 3;
-    const MASK: u32 = 0x07e0_f81f;
+    };
     const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
     // The threshold (0..31) at each channel's lowest bit: blue 0, red 11,
     // green 21. Fits: 31 × 32 + 31 < 2^10, 63 × 32 + 31 < 2^11.
@@ -85,8 +89,8 @@ pub fn apply(px: &mut [u16], x0: usize, y: usize) {
     });
     for chunk in px.chunks_mut(4) {
         for (p, d) in chunk.iter_mut().zip(pattern) {
-            let x = (u32::from(*p) | (u32::from(*p) << 16)) & MASK;
-            let x = ((x * f32_ + d) >> 5) & MASK;
+            let x = (u32::from(*p) | (u32::from(*p) << 16)) & SPREAD;
+            let x = ((x * f + d) >> 5) & SPREAD;
             *p = (x | (x >> 16)) as u16;
         }
     }

@@ -35,7 +35,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::interrupt::{self, asynch::HalIsrNotification};
 use esp_idf_svc::hal::lcd::DSI;
-use esp_idf_svc::sys::{self as sys, EspError, esp};
+use esp_idf_svc::sys::{self, EspError, esp};
 use init_tables::InitCmd;
 
 /// Native panel width (portrait), pixels.
@@ -141,6 +141,8 @@ fn calloc_fb(size: usize) -> *mut c_void {
     unsafe { sys::heap_caps_calloc(1, size, FB_CAPS) }
 }
 
+/// The vendored DPI driver's frame buffer allocation: one of [`FB_POOL`],
+/// zeroed.
 #[unsafe(no_mangle)]
 extern "C" fn esp_lcd_dpi_panel_alloc_fb(size: usize) -> *mut c_void {
     if size != PIXELS * 2 {
@@ -170,6 +172,8 @@ extern "C" fn esp_lcd_dpi_panel_alloc_fb(size: usize) -> *mut c_void {
     calloc_fb(size)
 }
 
+/// The vendored DPI driver's frame buffer release: one of [`FB_POOL`] is
+/// kept for the next stream.
 #[unsafe(no_mangle)]
 extern "C" fn esp_lcd_dpi_panel_free_fb(fb: *mut c_void) {
     for (slot, in_use) in FB_POOL.iter().zip(&FB_IN_USE) {
@@ -205,6 +209,7 @@ unsafe extern "C" fn on_frame_buf_complete(
 
 // ── Display ─────────────────────────────────────────────────────────────────
 
+/// The panel: its DSI link, the video stream and the two frame buffers.
 pub struct Display {
     variant: PanelVariant,
     panel: sys::esp_lcd_panel_handle_t,
@@ -245,11 +250,7 @@ impl Display {
             esp!(sys::esp_ldo_acquire_channel(&ldo_cfg, &mut this.phy_ldo))?;
         }
 
-        this.open_link()?;
-        this.init_panel()?;
-
-        this.start_stream()?;
-
+        this.link_up()?;
         log::info!(
             "display: {:?} {}x{} RGB565, {:.1} Hz, frame buffers {:?}",
             variant,
@@ -318,7 +319,8 @@ impl Display {
                 vsync_back_porch: timing.vsync_back_porch,
                 vsync_front_porch: timing.vsync_front_porch,
             };
-            // No DMA2D: we render straight into the frame buffers.
+            // `flags.use_dma2d` stays off: it is for the driver's own
+            // copies, and rendering goes straight into the frame buffers.
             esp!(sys::esp_lcd_new_panel_dpi(
                 self.bus,
                 &dpi_cfg,
@@ -517,7 +519,7 @@ impl Display {
 
     /// Pixel clock `mhz` (80 MHz = 66 Hz refresh on the ST7123), or the
     /// panel's own with `None`; used while the display sleeps. The frame
-    /// buffers are new afterwards (contents undefined).
+    /// buffers are black afterwards.
     ///
     /// A new stream alone leaves the panel black: the whole link is rebuilt
     /// as at boot (panel init, then the stream).

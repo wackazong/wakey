@@ -1,9 +1,11 @@
 //! Frame statistics, logged once per second.
 
 use crate::display::Display;
+use crate::display::ppa;
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration, Instant};
 
+/// Frames presented and their render times over one second.
 pub struct FrameStats {
     name: &'static str,
     window_start: Instant,
@@ -46,8 +48,7 @@ impl FrameStats {
         let secs = elapsed.as_micros() as f32 / 1e6;
         let scanned = Display::frames_scanned().wrapping_sub(self.scanned_at_start);
         let n = self.frames.max(1);
-        let ppa_wait_ms =
-            crate::display::ppa::WAIT_US.swap(0, Ordering::Relaxed) as f32 / 1000.0 / n as f32;
+        let ppa_wait_ms = ppa::WAIT_US.swap(0, Ordering::Relaxed) as f32 / 1000.0 / n as f32;
         log::info!(
             "{}: {:.1} fps (panel {:.1} Hz), render avg {:.2} ms max {:.2} ms (PPA wait {ppa_wait_ms:.2}), {} rows/frame, {}",
             self.name,
@@ -81,8 +82,8 @@ pub fn last() -> (f32, f32) {
 
 /// Free heap memory. DMA-capable memory is internal RAM on the ESP32-P4;
 /// when it runs out, drivers fail (see `sdkconfig.defaults`,
-/// `SPIRAM_MALLOC_ALWAYSINTERNAL`). PSRAM's largest block shows how
-/// fragmented it is (a frame buffer needs 1.8 MB in one piece).
+/// `SPIRAM_MALLOC_ALWAYSINTERNAL`). The largest PSRAM block shows how
+/// fragmented PSRAM is.
 pub(super) struct FreeHeap {
     total: usize,
     internal: usize,

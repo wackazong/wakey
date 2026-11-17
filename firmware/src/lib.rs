@@ -1,15 +1,15 @@
 //! Firmware of the Tab5 alarm clock: Rust (std) on ESP-IDF with the Embassy
 //! executor. See `docs/architecture.md` for the overall design.
 //!
-//! Layers, top to bottom; each uses only the ones below it:
+//! Layers, top to bottom; none uses a layer above it:
 //!
 //! - [`app`]: the alarm clock application (screens, wiring, UI texts).
-//! - Services: [`ui`] (Slint, touch, list layer, page slides), [`audio`] (USB speaker,
-//!   built-in speaker, file playback), [`net`] (Wi-Fi sessions, NTP),
-//!   [`tidal`] (login, playlist, downloads) over [`http`], [`airdrop`]
-//!   (sound files from iPhones), [`sounds`] (the card's sound files),
-//!   [`clock`] (local time, RTC), [`config`] (`config.json`), [`ambient`]
-//!   (backlight from the room's light, camera as light meter).
+//! - Services: [`ui`] (Slint, touch, list layer, page slides), [`audio`]
+//!   (USB speaker, built-in speaker, file playback), [`net`] (Wi-Fi
+//!   sessions, NTP), [`tidal`] (login, playlist, downloads) over [`http`],
+//!   [`airdrop`] (sound files from iPhones), [`sounds`] (the card's sound
+//!   files), [`clock`] (local time, RTC), [`config`] (`config.json`),
+//!   [`ambient`] (backlight from the room's light, camera as light meter).
 //! - Hardware: [`board`] (pins, chips, power switches, bring-up),
 //!   [`display`] (panel, frame buffers, PPA, 2D-DMA) and [`c6`] (the Wi-Fi
 //!   co-processor: power, esp_hosted's transport, its images).

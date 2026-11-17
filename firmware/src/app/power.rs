@@ -12,6 +12,7 @@
 
 use super::alarm::{AlarmClock, View};
 use super::screens::{AppWindow, Page};
+use crate::ambient;
 use crate::audio::uac::UsbAudio;
 use crate::board::i2c::SharedI2c;
 use crate::board::ina226;
@@ -25,7 +26,8 @@ use wakey_core::config::{PowerConfig, SleepWhen};
 /// USB-A on this long before an alarm rings (or a snooze ends).
 const USB_LEAD_S: i64 = 60;
 
-/// Checks twice a second.
+/// Starts the check, twice a second, that puts the display to sleep, wakes
+/// it and switches the USB-A port.
 pub fn start(
     window: &AppWindow,
     cfg: PowerConfig,
@@ -64,7 +66,7 @@ pub fn start(
         let allowed = match cfg.sleep_when {
             SleepWhen::Never => false,
             SleepWhen::Always => true,
-            SleepWhen::Dark | SleepWhen::Unknown => crate::ambient::night() || on_battery,
+            SleepWhen::Dark | SleepWhen::Unknown => ambient::night() || on_battery,
         };
         let ringing = matches!(alarm.borrow().view(), View::Ringing { .. });
         #[cfg(feature = "debug-overlay")]
@@ -87,7 +89,7 @@ pub fn start(
                     } else {
                         "sleep no longer allowed"
                     },
-                    crate::ambient::last_light()
+                    ambient::last_light()
                 );
                 power::wake();
                 // The sleep timer counts from the wake, not from the last
@@ -110,13 +112,9 @@ pub fn start(
 #[cfg(feature = "debug-overlay")]
 fn debug_text(cfg: &PowerConfig, allowed: bool, ringing: bool, page: Page) -> String {
     let dim = u32::from(crate::ui::dim::factor()) * 100 / u32::from(crate::ui::dim::FULL);
-    let backlight = crate::ambient::backlight_level() * 100.0;
-    let light = crate::ambient::last_light();
-    let night = if crate::ambient::night() {
-        "night"
-    } else {
-        "day"
-    };
+    let backlight = ambient::backlight_level() * 100.0;
+    let light = ambient::last_light();
+    let night = if ambient::night() { "night" } else { "day" };
     let sleep = if power::asleep() {
         "asleep".to_string()
     } else if !allowed {

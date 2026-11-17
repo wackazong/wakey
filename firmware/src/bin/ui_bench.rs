@@ -10,8 +10,8 @@ use embassy_time::Instant;
 use slint::{Color, SharedString, Timer, TimerMode};
 use wakey::board::Board;
 use wakey::display::ppa::PpaRotator;
-use wakey::ui::list_layer::{Layout, ListLayer, ListSource};
-use wakey::ui::{platform, render_loop, stats};
+use wakey::ui::list_layer::{Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
+use wakey::ui::{input, platform, render_loop, rgb565, stats};
 
 include!(concat!(env!("OUT_DIR"), "/ui_bench.rs"));
 
@@ -57,10 +57,10 @@ impl ListSource for Tracks {
     fn offset(&self) -> f32 {
         0.0
     }
-    fn prepare_swipe(&mut self, _: usize, _: wakey::ui::list_layer::SwipePart) {}
+    fn prepare_swipe(&mut self, _: usize, _: SwipePart) {}
     fn layer_started(&mut self) {}
     fn scroll_ended(&mut self, _: f32) {}
-    fn swipe_ended(&mut self, _: usize, _: wakey::ui::list_layer::SwipeEnd) {}
+    fn swipe_ended(&mut self, _: usize, _: SwipeEnd) {}
 }
 
 fn main() -> ! {
@@ -76,7 +76,7 @@ async fn app() {
         ioexp,
         ..
     } = Board::init().expect("board init");
-    wakey::ui::input::start(i2c, ioexp);
+    input::start(i2c, ioexp);
     let variant = display.variant();
     let mut rot = PpaRotator::new().expect("PPA");
 
@@ -98,7 +98,7 @@ async fn app() {
         slots: 64,
         slop: 12.0,
         // The list area's background in `ui_bench.slint`.
-        background: wakey::ui::rgb565(Color::from_rgb_u8(0x14, 0x1a, 0x20)),
+        background: rgb565(Color::from_rgb_u8(0x14, 0x1a, 0x20)),
         page_draws_still: false,
         // The layer has every touch: it only scrolls.
         swipe: false,

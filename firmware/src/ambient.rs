@@ -17,6 +17,7 @@ use crate::board::Backlight;
 use crate::board::camera;
 use crate::board::i2c::SharedI2c;
 use crate::psram::PsramBuffer;
+use crate::runtime::Thread;
 use esp_idf_svc::sys::{self, esp};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -43,11 +44,6 @@ const PERIOD: Duration = Duration::from_secs(10);
 /// - from [`LIGHT_ROOM_END`] to [`LIGHT_BRIGHT`]: [`LEVEL_ROOM_TOP`] to
 ///   [`LEVEL_MAX`] on a log scale.
 const LEVEL_NIGHT: f32 = 0.01;
-/// A change of brightness takes this long (3 s looked jumpy).
-const FADE: Duration = Duration::from_secs(8);
-/// Steps of the pixel brightness in a fade: each repaints the whole window
-/// (~0.2 s), so about as many as fit into [`FADE`].
-const PIXEL_STEPS: f32 = 40.0;
 const LEVEL_ROOM: f32 = 0.13;
 const LEVEL_ROOM_TOP: f32 = 0.4;
 const LEVEL_MAX: f32 = 1.0;
@@ -55,6 +51,11 @@ const LIGHT_NIGHT: f32 = 2.0;
 const LIGHT_NIGHT_END: f32 = 4.0;
 const LIGHT_ROOM_END: f32 = 30.0;
 const LIGHT_BRIGHT: f32 = 300.0;
+/// A change of brightness takes this long (3 s looks jumpy).
+const FADE: Duration = Duration::from_secs(8);
+/// Steps of the pixel brightness in a fade: each repaints the whole window
+/// (~0.2 s), so about as many as fit into [`FADE`].
+const PIXEL_STEPS: f32 = 40.0;
 /// Exposure settings from least to most sensitive: (lines, gain as a power
 /// of two).
 const SETTINGS: [(u32, usize); 9] = [
@@ -71,13 +72,24 @@ const SETTINGS: [(u32, usize); 9] = [
 /// A frame average in this range is a usable reading.
 const MEAN_LOW: f32 = 25.0;
 const MEAN_HIGH: f32 = 200.0;
+/// Pixels of one frame.
+const PIXELS: usize = (camera::WIDTH * camera::HEIGHT) as usize;
+
 /// The room is dark (night mode), from the last measurement.
 static NIGHT: AtomicBool = AtomicBool::new(false);
-
 /// The backlight level and the last light reading (f32 bits), for the
 /// debug overlay.
 static BACKLIGHT: AtomicU32 = AtomicU32::new(0);
 static LIGHT: AtomicU32 = AtomicU32::new(0);
+/// A frame finished into the meter's buffer (set by the driver's ISR
+/// callback).
+static FRAME_DONE: AtomicBool = AtomicBool::new(false);
+
+/// True while the room is dark (night mode; `app::power` lets the display
+/// sleep then).
+pub fn night() -> bool {
+    NIGHT.load(Ordering::Relaxed)
+}
 
 /// The backlight level last set (0.0–1.0).
 pub fn backlight_level() -> f32 {
@@ -93,15 +105,6 @@ fn set_backlight(backlight: &mut Backlight, level: f32) -> anyhow::Result<()> {
     BACKLIGHT.store(level.to_bits(), Ordering::Relaxed);
     backlight.set_level(level)
 }
-
-/// True while the room is dark (night mode; `app::power` lets the display
-/// sleep then).
-pub fn night() -> bool {
-    NIGHT.load(Ordering::Relaxed)
-}
-
-/// A frame finished into our buffer (set by the driver's ISR callback).
-static FRAME_DONE: AtomicBool = AtomicBool::new(false);
 
 /// The display as the light meter sees it: whether it sleeps (backlight
 /// off), and the brightness of its pixels (`full` = unchanged).
@@ -172,7 +175,7 @@ pub fn start(bus: SharedI2c, mut backlight: Backlight, screen: Screen, night_pix
             std::thread::sleep(Duration::from_millis(50));
         }
     };
-    if let Err(e) = crate::runtime::Thread::new(c"ambient", 6 * 1024).spawn(run) {
+    if let Err(e) = Thread::new(c"ambient", 6 * 1024).spawn(run) {
         log::error!("ambient: thread: {e}");
     }
 }
@@ -231,10 +234,6 @@ struct Meter {
     setting: usize,
 }
 
-// SAFETY: the handles and the buffer are used by the light meter thread
-// only.
-unsafe impl Send for Meter {}
-
 unsafe extern "C" fn frame_done(
     _ctlr: sys::esp_cam_ctlr_handle_t,
     _trans: *mut sys::esp_cam_ctlr_trans_t,
@@ -243,8 +242,6 @@ unsafe extern "C" fn frame_done(
     FRAME_DONE.store(true, Ordering::Release);
     false
 }
-
-const PIXELS: usize = (camera::WIDTH * camera::HEIGHT) as usize;
 
 impl Meter {
     fn new(bus: &SharedI2c) -> anyhow::Result<Self> {
@@ -297,7 +294,7 @@ impl Meter {
             esp!(sys::esp_isp_enable(meter.isp))?;
             // FIFO overflow and buffer full do not interrupt: ESP-IDF's
             // handler logs each from the interrupt, and a burst of them
-            // tripped the interrupt watchdog. `frame` checks them instead.
+            // trips the interrupt watchdog. `frame` checks them instead.
             let ena = ISP_INT_ENA as *mut u32;
             ena.write_volatile(ena.read_volatile() & !ISP_OVERFLOW);
         }
@@ -377,7 +374,8 @@ impl Meter {
         // SAFETY: an ISP register (the ISP is enabled).
         let raw = unsafe { (ISP_INT_RAW as *const u32).read_volatile() };
         anyhow::ensure!(raw & ISP_OVERFLOW == 0, "ISP overflow, frame discarded");
-        // SAFETY: the frame is complete and the driver invalidated the
+        // SAFETY: the buffer holds `PIXELS` RGB565 pixels and is cache-line
+        // aligned; the frame is complete and the driver invalidated the
         // cache for the buffer before the callback: these reads see it.
         // No DMA writes until the next `receive`.
         let frame =

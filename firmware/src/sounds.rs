@@ -1,9 +1,11 @@
 //! The sound files on the SD card: `sounds/*.wav|aif|aiff|aifc|flac|m4a|mp3|aac`
 //! ([`wakey_core::airdrop::SOUND_EXTENSIONS`]), for the sound page and for
-//! "Zufällig" ([`wakey_core::alarm::Sound::RandomFile`]).
+//! "Random" ([`wakey_core::alarm::Sound::RandomFile`]).
 
 use crate::board::sd;
+use crate::tidal;
 use std::path::{Path, PathBuf};
+use wakey_core::airdrop::{SOUND_EXTENSIONS, nfc};
 use wakey_core::alarm::{self, Sound};
 use wakey_core::datetime::Date;
 
@@ -21,8 +23,7 @@ pub struct SoundFile {
 
 /// Files the player can read, sorted by title.
 pub fn list() -> Vec<SoundFile> {
-    let dir = sd::path(DIR);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    let Ok(entries) = std::fs::read_dir(sd::path(DIR)) else {
         return Vec::new();
     };
     let mut files: Vec<SoundFile> = entries
@@ -30,8 +31,7 @@ pub fn list() -> Vec<SoundFile> {
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
             let (stem, ext) = name.rsplit_once('.')?;
-            let playable =
-                wakey_core::airdrop::SOUND_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str());
+            let playable = SOUND_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str());
             (playable && !stem.starts_with('.')).then(|| SoundFile {
                 path: format!("{DIR}/{name}"),
                 title: title_of(stem),
@@ -45,7 +45,7 @@ pub fn list() -> Vec<SoundFile> {
 /// A file's title from its name without extension: `_` as spaces, and
 /// composed (iOS sends "ö" as "o" + a combining mark).
 fn title_of(stem: &str) -> String {
-    wakey_core::airdrop::nfc(&stem.replace('_', " "))
+    nfc(&stem.replace('_', " "))
 }
 
 /// The title of the file at `path` (below the card root), as [`list`]
@@ -69,7 +69,7 @@ pub fn resolve(sound: &Sound, id: u32, date: Date) -> Option<PathBuf> {
             Some(sd::path(&file.path))
         }
         Sound::TidalTrack(track) => {
-            let file = track.parse().ok().and_then(crate::tidal::track_file);
+            let file = track.parse().ok().and_then(tidal::track_file);
             if file.is_none() {
                 log::warn!(
                     "sounds: TIDAL track {track} not on the card, playing the built-in tone"
@@ -78,12 +78,12 @@ pub fn resolve(sound: &Sound, id: u32, date: Date) -> Option<PathBuf> {
             file
         }
         Sound::TidalRandom => {
-            let tracks = crate::tidal::downloaded();
+            let tracks = tidal::downloaded();
             let track = tracks.get(alarm::pick_daily(tracks.len(), date, id));
             match track {
                 Some(t) => {
                     log::info!("sounds: today's TIDAL pick: {} ({})", t.title, t.id);
-                    crate::tidal::track_file(t.id)
+                    tidal::track_file(t.id)
                 }
                 None => {
                     log::warn!("sounds: no TIDAL tracks on the card, playing the built-in tone");

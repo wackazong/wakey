@@ -206,8 +206,7 @@ pub fn download_range(
             delivered = true;
             sink(b)
         };
-        let result = fetch(&mut conn, url, range, &mut counting, progress);
-        match result {
+        match fetch(&mut conn, url, range, &mut counting, progress) {
             Ok(total) => {
                 log::info!(
                     "http: GET {} → {} KiB in {} ms{}",

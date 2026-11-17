@@ -19,6 +19,7 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant};
 use esp_idf_svc::hal::cpu::Core;
 
+/// What a touch event reports: the finger came down, moved, or lifted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
     Down,
@@ -64,6 +65,7 @@ pub fn restart_idle() {
     LAST_TOUCH_MS.store(Instant::now().as_millis() as u32, Ordering::Relaxed);
 }
 
+/// The touch events, oldest first; the render loop takes them out.
 pub static EVENTS: Channel<CriticalSectionRawMutex, TouchEvent, 32> = Channel::new();
 
 /// Touch panel coordinates → landscape UI coordinates. The touch

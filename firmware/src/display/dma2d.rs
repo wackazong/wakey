@@ -4,13 +4,14 @@
 //! driver uses it for its own copies). Measured on the Tab5 with the display
 //! streaming: 720×640 px PSRAM → PSRAM in 7.2 ms (64 Mpx/s), three times the
 //! PPA's rate. No pixel processing, no cache maintenance: use it only for
-//! memory the CPU does not write (layers filled by the PPA, frame buffers).
+//! memory the CPU does not write (layers filled by the PPA, frame buffers)
+//! or has written back ([`Picture::fill`]).
 
 use super::{HEIGHT, WIDTH, cache};
 use crate::psram::PsramBuffer;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
-use esp_idf_svc::sys::{self as sys, EspError, esp};
+use esp_idf_svc::sys::{self, EspError, esp};
 
 /// `esp_async_fbcpy_trans_desc_t` (esp_lcd/priv_include/esp_async_fbcpy.h).
 #[repr(C)]
@@ -177,7 +178,7 @@ impl FbCopy {
         debug_assert!(to.0 + size.0 <= dst.w && to.1 + size.1 <= dst.h);
         self.wait();
         let mut d = TransDesc {
-            src_buffer: src.buf as *const c_void,
+            src_buffer: src.buf.cast(),
             dst_buffer: dst.buf.cast(),
             src_buffer_size_x: src.w,
             src_buffer_size_y: src.h,

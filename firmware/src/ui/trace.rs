@@ -1,11 +1,11 @@
 //! Per-frame trace for performance work (feature `ui-bench`): render time,
 //! time since the previous frame, dirty bounding box, CPU cycles and
 //! retired instructions. Cycles per instruction show whether a frame is
-//! slow from work (≈ 1.4 on this core) or from memory stalls (≈ 5).
+//! slow from work (≈ 1.3 on this core) or from memory stalls (≈ 5).
 //!
 //! Off until [`ENABLED`] is set (the scripted bench in `app::bench` does).
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::Instant;
 
 /// Log every frame.
@@ -48,8 +48,8 @@ impl Frame {
     pub fn presented(self, dirty: (i32, i32, u32, u32)) {
         let now = Instant::now();
         let now_us = now.as_micros() as u32;
-        let last_us = LAST_PRESENT_US.swap(now_us, Relaxed);
-        if !ENABLED.load(Relaxed) {
+        let last_us = LAST_PRESENT_US.swap(now_us, Ordering::Relaxed);
+        if !ENABLED.load(Ordering::Relaxed) {
             return;
         }
         let (cycles, instructions) = counters();

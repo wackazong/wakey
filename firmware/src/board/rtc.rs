@@ -14,9 +14,9 @@ pub use wakey_core::datetime::DateTime;
 
 pub const ADDR: u8 = 0x32;
 
-// Time, BCD.
-const REG_SEC: u8 = 0x10; // 0x10 sec, 0x11 min, 0x12 hour, 0x13 weekday (bit mask),
-// 0x14 day, 0x15 month, 0x16 year (00–99)
+// Time, BCD: 0x10 sec, 0x11 min, 0x12 hour, 0x13 weekday (bit mask),
+// 0x14 day, 0x15 month, 0x16 year (00–99).
+const REG_SEC: u8 = 0x10;
 const REG_EXTENSION: u8 = 0x1C;
 const REG_FLAG: u8 = 0x1D;
 const REG_CONTROL0: u8 = 0x1E;
@@ -85,9 +85,9 @@ impl Rx8130 {
             year: 2000 + u16::from(unbcd(r[6])),
         };
         // A chip that was never set can hold non-BCD junk with VLF clear.
-        let bcd_ok = [0, 1, 2, 4, 5, 6]
-            .iter()
-            .all(|&i| r[i] & 0x0F <= 9 && (r[i] & 0x7F) >> 4 <= 9);
+        // Low digits are checked here (the weekday is a bit mask); a high
+        // digit above 9 gives a value `plausible` rejects.
+        let bcd_ok = [0, 1, 2, 4, 5, 6].iter().all(|&i| r[i] & 0x0F <= 9);
         if !bcd_ok || !t.plausible() {
             log::warn!("rtc: time registers {r:02x?} are not a valid time");
             return Ok(None);

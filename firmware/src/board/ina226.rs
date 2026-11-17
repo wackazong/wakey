@@ -10,7 +10,7 @@ const SHUNT_VOLTAGE: u8 = 0x01;
 const ON_BATTERY_MA: f32 = 30.0;
 
 /// Battery current in mA (2.5 µV per LSB over 5 mΩ), if the chip answers.
-pub fn current_ma(bus: &SharedI2c) -> Option<f32> {
+fn current_ma(bus: &SharedI2c) -> Option<f32> {
     let mut b = [0u8; 2];
     lock(bus).write_read(ADDR, &[SHUNT_VOLTAGE], &mut b).ok()?;
     Some(f32::from(i16::from_be_bytes(b)) * 0.5)

@@ -49,6 +49,7 @@ pub(super) fn take_request() -> Option<Request> {
     Request::from_u8(REQUEST.swap(0, Ordering::Relaxed))
 }
 
+/// The render loop's report: the display went to sleep, or is awake again.
 pub(super) fn set_asleep(on: bool) {
     if ASLEEP.swap(on, Ordering::Relaxed) != on {
         log::info!("power: display {}", if on { "asleep" } else { "awake" });

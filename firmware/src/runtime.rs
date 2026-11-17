@@ -1,13 +1,15 @@
 //! Threads and the Embassy executor on ESP-IDF.
 //!
 //! [`Thread`] spawns a `std` thread with the FreeRTOS settings `std` cannot
-//! express (core, priority, stack in PSRAM). The executor is `embassy-executor`'s std platform: it runs on a FreeRTOS
-//! task and sleeps on a condition variable when no task is ready. Time
-//! comes from the `embassy-time` driver of `esp-idf-svc` (esp_timer,
-//! 1 MHz). Interrupts wake tasks through
+//! express (core, priority, stack in PSRAM). The executor is
+//! `embassy-executor`'s std platform: it runs on a FreeRTOS task and sleeps
+//! on a condition variable when no task is ready. Time comes from the
+//! `embassy-time` driver of `esp-idf-svc` (esp_timer, 1 MHz). Interrupts
+//! wake tasks through
 //! [`esp_idf_svc::hal::interrupt::asynch::HalIsrNotification`], which moves
 //! the waker call out of ISR context.
 
+use crate::taskstats;
 use embassy_executor::{Executor, Spawner};
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::task::thread::{MallocCap, ThreadSpawnConfiguration};
@@ -72,7 +74,7 @@ impl Thread {
             std::thread::Builder::new()
                 .name(name.into())
                 .stack_size(self.stack_size)
-                .spawn(crate::taskstats::named(name, f))
+                .spawn(taskstats::named(name, f))
         })
     }
 
@@ -89,7 +91,7 @@ impl Thread {
             std::thread::Builder::new()
                 .name(name.into())
                 .stack_size(self.stack_size)
-                .spawn_scoped(scope, crate::taskstats::named(name, f))
+                .spawn_scoped(scope, taskstats::named(name, f))
         })
     }
 
@@ -133,11 +135,11 @@ const EXECUTOR_STACK: usize = 64 * 1024;
 ///
 /// Not on the main task: esp_hosted (Wi-Fi via the C6) allocates internal
 /// RAM in a C constructor, before ESP-IDF creates the main task, and a
-/// 64 KiB main stack then no longer fits beside the start-up stack (boot
+/// 64 KiB main stack then does not fit beside the start-up stack (boot
 /// loop in `esp_startup_start_app`). Once `main` runs, the start-up stack is
-/// free again. `app` gets 64 KiB of internal RAM, priority 1 (as the main
-/// task had) and core 0; the display ISRs are installed from it, so they
-/// run on the same core as the render loop (see [`crate::display`]).
+/// free again. `app` gets 64 KiB of internal RAM, the main task's priority
+/// (1) and core 0; the display ISRs are installed from it, so they run on
+/// the same core as the render loop (see [`crate::display`]).
 pub fn start(init: impl FnOnce(Spawner) + Send + 'static) -> ! {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();

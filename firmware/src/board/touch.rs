@@ -3,13 +3,14 @@
 //! `esp_lcd_touch_st7123` component.
 //!
 //! Only the ST7123/ST7121 panel variants are supported; the older
-//! ILI9881C variant has a GT911 (not implemented yet).
+//! ILI9881C variant has a GT911 (not implemented).
 
 use super::i2c::SysI2c;
 use esp_idf_svc::sys::EspError;
 
 pub const ADDR: u8 = 0x55;
 
+const REG_FIRMWARE: u16 = 0x0000;
 const REG_ADV_INFO: u16 = 0x0010;
 const REG_MAX_TOUCHES: u16 = 0x0009;
 const REG_REPORT: u16 = 0x0014;
@@ -51,9 +52,9 @@ pub fn read_point(i2c: &mut SysI2c) -> Result<Option<(u16, u16)>, EspError> {
         }))
 }
 
-/// Firmware version (register 0x0000): 3 on the ST7123, 1 on the ST7121.
+/// Firmware version: 3 on the ST7123, 1 on the ST7121.
 pub fn firmware(i2c: &mut SysI2c) -> Result<u8, EspError> {
     let mut fw = [0u8];
-    read(i2c, 0x0000, &mut fw)?;
+    read(i2c, REG_FIRMWARE, &mut fw)?;
     Ok(fw[0])
 }

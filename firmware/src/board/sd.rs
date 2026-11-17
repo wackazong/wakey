@@ -7,7 +7,7 @@
 //! VDD itself is on SOC_3.3V.
 
 use esp_idf_svc::fs::fatfs::Fatfs;
-use esp_idf_svc::hal::gpio::{Gpio39, Gpio40, Gpio41, Gpio42, Gpio43, Gpio44};
+use esp_idf_svc::hal::gpio::{AnyIOPin, Gpio39, Gpio40, Gpio41, Gpio42, Gpio43, Gpio44};
 use esp_idf_svc::hal::sd::mmc::{SDMMC0, SdMmcHostConfiguration, SdMmcHostDriver};
 use esp_idf_svc::hal::sd::{SdCardConfiguration, SdCardDriver};
 use esp_idf_svc::io::vfs::MountedFatfs;
@@ -90,8 +90,8 @@ pub fn mount(slot: SDMMC0<'static>, p: SdPins) -> Result<SdCard, EspError> {
         p.d1,
         p.d2,
         p.d3,
-        None::<esp_idf_svc::hal::gpio::AnyIOPin>,
-        None::<esp_idf_svc::hal::gpio::AnyIOPin>,
+        None::<AnyIOPin>,
+        None::<AnyIOPin>,
         &SdMmcHostConfiguration::new(),
     )?;
     // 40 MHz (high speed) instead of the default 20: downloads write tens of

@@ -9,16 +9,20 @@
 
 use super::input::{self, Phase, TouchEvent};
 use super::platform::PpaLines;
-use super::stats::FrameStats;
+use super::power;
+use super::stats::{FrameStats, FreeHeap};
+use super::transition::{self, Transitions};
 use crate::display::Display;
 use crate::display::dma2d::Picture;
 use crate::display::ppa::{PpaRotator, Target};
+use core::ops::Range;
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
 use slint::platform::software_renderer::{
     MinimalSoftwareWindow, RenderingRotation, RepaintBufferType,
 };
+use slint::platform::{PointerEventButton, WindowEvent};
 use std::rc::Rc;
 
 /// Where a touch event goes.
@@ -41,6 +45,8 @@ pub trait FrameHook {
     /// True while the hook changes the screen every frame (keeps the loop
     /// running at the panel rate even when Slint is idle).
     fn active(&mut self) -> bool;
+    /// A touch event, before Slint sees it.
+    fn pointer(&mut self, ev: &TouchEvent) -> Route;
     /// Before Slint renders: start drawing into the back buffer `fb` (e.g.
     /// an asynchronous DMA copy). `rot` is idle and may be used.
     fn start(&mut self, fb: Target, rot: &mut PpaRotator);
@@ -50,12 +56,10 @@ pub trait FrameHook {
     /// After Slint has rendered: optional extra work with the idle `rot`,
     /// then wait until everything started in `start` is in the back buffer.
     fn finish(&mut self, rot: &mut PpaRotator);
-    /// A touch event, before Slint sees it.
-    fn pointer(&mut self, ev: &TouchEvent) -> Route;
     /// True if the landscape area `x` × `y` that Slint just rendered
     /// overlaps what the hook draws. Then the loop draws the hook again
     /// after Slint, in the same frame.
-    fn overlaps(&mut self, x: core::ops::Range<usize>, y: core::ops::Range<usize>) -> bool;
+    fn overlaps(&mut self, x: Range<usize>, y: Range<usize>) -> bool;
     /// Called when nothing is drawn; do a small piece of background work
     /// (e.g. pre-render list rows). Return true if there is more to do.
     fn idle_work(&mut self, rot: &mut PpaRotator) -> bool;
@@ -63,7 +67,6 @@ pub trait FrameHook {
 
 /// Sends a touch event to a Slint window.
 fn dispatch(window: &MinimalSoftwareWindow, ev: &TouchEvent) {
-    use slint::platform::{PointerEventButton, WindowEvent};
     let position = slint::LogicalPosition::new(ev.x, ev.y);
     let button = PointerEventButton::Left;
     match ev.phase {
@@ -78,6 +81,11 @@ fn dispatch(window: &MinimalSoftwareWindow, ev: &TouchEvent) {
 
 /// A Slint render longer than this logs its dirty rectangles.
 const SLOW_FRAME: Duration = Duration::from_millis(35);
+/// Pixel clock while the display sleeps: 33 Hz instead of 66 Hz.
+const SLEEP_PIXEL_CLOCK_MHZ: f32 = 40.0;
+/// The longest the loop sleeps: requests from other threads ([`power`])
+/// set a flag and do not wake it.
+const MAX_SLEEP: Duration = Duration::from_millis(100);
 
 /// Where the render loop is, for the stall report ([`stage`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -137,15 +145,48 @@ pub fn stage() -> Stage {
 /// (one leaking or fragmenting PSRAM would show over many cycles).
 fn log_heap_for_test(when: &str) {
     if cfg!(feature = "sleep-cycle-test") {
-        log::info!(
-            "display: {when} link rebuild: {}",
-            super::stats::FreeHeap::now()
-        );
+        log::info!("display: {when} link rebuild: {}", FreeHeap::now());
     }
 }
 
-/// Pixel clock while the display sleeps: 33 Hz instead of 66 Hz.
-const SLEEP_PIXEL_CLOCK_MHZ: f32 = 40.0;
+/// Puts the display to sleep, or starts waking it (awake once the next
+/// frame is presented).
+///
+/// The panel itself stays on: its touch half (the same chip) stops scanning
+/// in sleep mode, and nothing could wake it. The backlight off is dark
+/// enough.
+///
+/// Asleep, the panel refreshes at half rate (33 Hz): half the PSRAM reads,
+/// and its touch still scans. It shows nothing at that rate, which does not
+/// matter with the backlight off. A rate change rebuilds the whole display
+/// link (a new stream alone leaves the panel black), which clears the frame
+/// buffers.
+async fn switch_refresh(display: &mut Display, sleep: bool) {
+    log_heap_for_test("before");
+    if sleep {
+        power::set_asleep(true);
+        // The light meter thread turns the backlight off first.
+        Timer::after(Duration::from_millis(150)).await;
+        let t = Instant::now();
+        if let Err(e) = display.set_pixel_clock(Some(SLEEP_PIXEL_CLOCK_MHZ)) {
+            log::warn!("display: sleep refresh not set: {e}");
+        }
+        log::info!(
+            "display: asleep, link rebuilt in {} ms",
+            t.elapsed().as_millis()
+        );
+    } else {
+        let t = Instant::now();
+        if let Err(e) = display.set_pixel_clock(None) {
+            log::warn!("display: refresh not restored: {e}");
+        }
+        log::info!(
+            "display: waking, link rebuilt in {} ms",
+            t.elapsed().as_millis()
+        );
+    }
+    log_heap_for_test("after");
+}
 
 /// Renders the main window, plus `hook`, forever.
 pub async fn run(
@@ -155,7 +196,7 @@ pub async fn run(
     mut hook: Option<&mut dyn FrameHook>,
 ) -> ! {
     let mut stats = FrameStats::new("slint/ppa");
-    let mut transitions = super::transition::Transitions::new();
+    let mut transitions = Transitions::new();
     // An event that woke the idle loop, handled in the next iteration.
     let mut woken_by: Option<TouchEvent> = None;
     // Slint renders into the two frame buffers in turn and repaints only
@@ -171,52 +212,23 @@ pub async fn run(
     // Woken: the next frame presented ends the sleep (the backlight comes
     // on only then, over a fresh picture).
     let mut waking = false;
-    // Full repaints still due (new frame buffers after waking).
+    // Full repaints still due (the link rebuild on waking cleared both
+    // frame buffers).
     let mut full_repaints = 0u8;
     loop {
         ITERATIONS.fetch_add(1, Ordering::Relaxed);
-        if let Some(sleep) = super::power::take_request().map(|r| r == super::power::Request::Sleep)
-            && sleep != (super::power::asleep() && !waking)
+        if let Some(sleep) = power::take_request().map(|r| r == power::Request::Sleep)
+            && sleep != (power::asleep() && !waking)
         {
-            // The panel itself stays on: its touch half (the same chip)
-            // stops scanning in sleep mode, and nothing could wake it. The
-            // backlight off is dark enough.
-            //
-            // Asleep, the panel refreshes at half rate (33 Hz): half the
-            // PSRAM reads, and its touch still scans. It shows nothing at
-            // that rate, which does not matter with the backlight off. A
-            // rate change rebuilds the whole display link (a new stream
-            // alone leaves the panel black) with new, empty frame buffers.
-            log_heap_for_test("before");
-            if sleep {
-                super::power::set_asleep(true);
-                // The light meter thread turns the backlight off first.
-                Timer::after(Duration::from_millis(150)).await;
-                let t = Instant::now();
-                if let Err(e) = display.set_pixel_clock(Some(SLEEP_PIXEL_CLOCK_MHZ)) {
-                    log::warn!("display: sleep refresh not set: {e}");
-                }
-                log::info!(
-                    "display: asleep, link rebuilt in {} ms",
-                    t.elapsed().as_millis()
-                );
-            } else {
-                let t = Instant::now();
-                if let Err(e) = display.set_pixel_clock(None) {
-                    log::warn!("display: refresh not restored: {e}");
-                }
-                log::info!(
-                    "display: waking, link rebuilt in {} ms",
-                    t.elapsed().as_millis()
-                );
+            switch_refresh(&mut display, sleep).await;
+            if !sleep {
                 waking = true;
                 full_repaints = 2;
                 window.request_redraw();
                 other_buffer_stale = true;
             }
-            log_heap_for_test("after");
         }
-        if super::power::asleep() && !waking {
+        if power::asleep() && !waking {
             // Nothing is drawn; a touch only wakes (the rest of it is
             // dropped, it must not press anything).
             slint::platform::update_timers_and_animations();
@@ -224,16 +236,13 @@ pub async fn run(
             if let Some(ev) = ev {
                 if ev.phase == Phase::Down {
                     log::info!("power: woken by a touch at ({:.0}, {:.0})", ev.x, ev.y);
-                    super::power::wake();
+                    power::wake();
                     drop_touch = true;
                 }
                 continue;
             }
-            if let Either::Second(ev) = select(
-                Timer::after(Duration::from_millis(100)),
-                input::EVENTS.receive(),
-            )
-            .await
+            if let Either::Second(ev) =
+                select(Timer::after(MAX_SLEEP), input::EVENTS.receive()).await
             {
                 woken_by = Some(ev);
             }
@@ -250,7 +259,7 @@ pub async fn run(
             }
             let route = hook.as_mut().map_or(Route::Slint, |h| h.pointer(&ev));
             log::trace!(
-                "touch event {:?} ({:.0}, {:.0}) → {route:?}",
+                "touch: {:?} ({:.0}, {:.0}) → {route:?}",
                 ev.phase,
                 ev.x,
                 ev.y
@@ -258,24 +267,22 @@ pub async fn run(
             match route {
                 Route::Slint => {
                     dispatch(&window, &ev);
-                    if ev.phase == Phase::Down && super::transition::pending() {
+                    if ev.phase == Phase::Down && transition::pending() {
                         drop_touch = true;
                         // Whatever the old page's touch area holds ends.
-                        window.dispatch_event(slint::platform::WindowEvent::PointerExited);
+                        window.dispatch_event(WindowEvent::PointerExited);
                     }
                 }
                 Route::Hook => {}
                 // A pressed touch area gets `PointerEventKind.cancel`.
-                Route::TakeOver => {
-                    window.dispatch_event(slint::platform::WindowEvent::PointerExited)
-                }
+                Route::TakeOver => window.dispatch_event(WindowEvent::PointerExited),
             }
         }
         enter(Stage::Timers);
         slint::platform::update_timers_and_animations();
         // A page change requested during the touch handling above: shown
         // as a slide, which also renders the new page into both buffers.
-        if let Some(direction) = super::transition::take() {
+        if let Some(direction) = transition::take() {
             enter(Stage::Render);
             transitions.run(direction, &window, &mut display, rot).await;
             // Slint drew the new page once and believes one buffer holds
@@ -320,7 +327,7 @@ pub async fn run(
         }
         window.draw_if_needed(|renderer| {
             slint_rendered = true;
-            // Both buffers are new after waking: repaint all of each once.
+            // Both buffers are blank after waking: repaint all of each once.
             renderer.set_repaint_buffer_type(if full_repaints > 0 {
                 RepaintBufferType::NewBuffer
             } else {
@@ -381,7 +388,7 @@ pub async fn run(
             display.present(0..1).expect("present");
             if waking {
                 waking = false;
-                super::power::set_asleep(false);
+                power::set_asleep(false);
             }
             stats.frame(render_time, slint_area.map_or(0, |(x, _)| x.len()));
             #[cfg(feature = "ui-bench")]
@@ -396,10 +403,9 @@ pub async fn run(
                 continue;
             }
             enter(Stage::Sleep);
-            let wait = slint::platform::duration_until_next_timer_update()
-                .map(|d| Duration::from_micros(d.as_micros() as u64))
-                .unwrap_or(Duration::from_millis(100))
-                .min(Duration::from_millis(100));
+            let wait = slint::platform::duration_until_next_timer_update().map_or(MAX_SLEEP, |d| {
+                Duration::from_micros(d.as_micros() as u64).min(MAX_SLEEP)
+            });
             if let Either::Second(ev) = select(Timer::after(wait), input::EVENTS.receive()).await {
                 woken_by = Some(ev);
             }

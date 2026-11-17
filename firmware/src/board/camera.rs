@@ -9,17 +9,17 @@
 //! (`sc202cs_mipi_1lane_24Minput_1280x720_raw8_30fps`, Apache-2.0): 1280×720
 //! RAW8 (BGGR), 576 Mbit/s on one lane; line time 1920 / 72 MHz = 26.7 µs.
 //! The frame is stretched to [`FRAME_LINES`] lines (5 fps instead of 30):
-//! a light meter needs no more, and at 30 fps the ISP's FIFO overflowed
-//! while a download, TLS, the SD card and the display all used PSRAM.
+//! a light meter needs no more, and at 30 fps the ISP's FIFO can overflow
+//! while a download, TLS, the SD card and the display all use PSRAM.
 
 use super::i2c::{SharedI2c, lock};
 use esp_idf_svc::sys::EspError;
 
 /// The sensor's 7-bit I2C address.
-pub const ADDR: u8 = 0x36;
+const ADDR: u8 = 0x36;
 /// Chip ID registers (16-bit address, big-endian ID).
 const CHIP_ID_H: u16 = 0x3107;
-pub const CHIP_ID: u16 = 0xeb52;
+const CHIP_ID: u16 = 0xeb52;
 
 /// Frame size and link of [`INIT`].
 pub const WIDTH: u32 = 1280;
@@ -69,20 +69,20 @@ const INIT: &[(u16, u8)] = &[
 ];
 
 /// Reads a 16-bit-addressed register.
-pub fn read(bus: &SharedI2c, reg: u16) -> Result<u8, EspError> {
+fn read(bus: &SharedI2c, reg: u16) -> Result<u8, EspError> {
     let mut b = [0u8];
     lock(bus).write_read(ADDR, &reg.to_be_bytes(), &mut b)?;
     Ok(b[0])
 }
 
 /// Writes a 16-bit-addressed register.
-pub fn write(bus: &SharedI2c, reg: u16, value: u8) -> Result<(), EspError> {
+fn write(bus: &SharedI2c, reg: u16, value: u8) -> Result<(), EspError> {
     let [h, l] = reg.to_be_bytes();
     lock(bus).write(ADDR, &[h, l, value])
 }
 
 /// The sensor's chip ID.
-pub fn chip_id(bus: &SharedI2c) -> Result<u16, EspError> {
+fn chip_id(bus: &SharedI2c) -> Result<u16, EspError> {
     Ok(u16::from_be_bytes([
         read(bus, CHIP_ID_H)?,
         read(bus, CHIP_ID_H + 1)?,

@@ -13,7 +13,7 @@ use esp_idf_svc::hal::gpio::AnyIOPin;
 use esp_idf_svc::hal::i2s::I2S0;
 use esp_idf_svc::sys::EspError;
 
-pub const ADDR: u8 = 0x10;
+const ADDR: u8 = 0x10;
 
 /// The I2S peripheral and pins wired to the codec.
 pub struct CodecPins {
@@ -56,9 +56,9 @@ const INIT: [(u8, u8); 31] = [
     (49, 0x21), // ROUT2
     (25, 0x20),
     // Restart the state machine, then power up (ADC parts stay down). The
-    // codec stays powered while the P4 restarts (a flash) and lost its
-    // clock mid-stream; without the restart it stayed silent until the
-    // board was power-cycled.
+    // codec stays powered while the P4 restarts (a flash) and loses its
+    // clock mid-stream; without the restart it then stays silent until the
+    // board is power-cycled.
     (2, 0xF0),
     (2, 0x0A),
 ];
@@ -67,15 +67,15 @@ const INIT: [(u8, u8); 31] = [
 /// powers it up again (MCLK running first).
 pub fn power_down(bus: &SharedI2c) -> Result<(), EspError> {
     let mut b = i2c::lock(bus);
-    b.write(ADDR, &[4, 0xC0])?;
-    b.write(ADDR, &[2, 0xFF])
+    b.write_reg(ADDR, 4, 0xC0)?;
+    b.write_reg(ADDR, 2, 0xFF)
 }
 
 /// Powers the DAC path up. MCLK must be running.
 pub fn init(bus: &SharedI2c) -> Result<(), EspError> {
     let mut b = i2c::lock(bus);
     for (reg, value) in INIT {
-        b.write(ADDR, &[reg, value])?;
+        b.write_reg(ADDR, reg, value)?;
     }
     Ok(())
 }
