@@ -66,7 +66,7 @@
     "downloading": "{artist} · downloading …",
     "queued": "{artist} · download pending",
     "removed": "No longer in the playlist · {artist}",
-    "no_credentials": "TIDAL is not set up: the credentials are missing in config.json.",
+    "no_credentials": "TIDAL needs an API client in config.json (client_id and client_secret); the QR-code login comes after. See the README, “Sounds from TIDAL”.",
     "connecting": "Connecting to TIDAL …",
     "syncing": "Loading the playlist …",
     "empty": "The playlist is empty.",

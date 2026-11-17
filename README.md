@@ -107,7 +107,15 @@ The receiver is on only while this tab is open.
 
 ### Sounds from TIDAL
 
-1. Add your TIDAL API client to `config.json` (see [Configuration](#configuration)), and create a playlist named "Wakey" in your TIDAL collection (or set another name).
+Two sets of credentials are involved. The first is an **API client**, which identifies the app to TIDAL: a `client_id` and a `client_secret`. Wakey ships none, so you add your own, and it must be allowed to use TIDAL's device login. The second is **your login**, which the clock gets from the QR code and stores in `config.json` by itself. Until the API client is there, the TIDAL tab says that it is missing and shows no QR code.
+
+1. Add the API client to the `tidal` section of `config.json` on the card, and restart the clock:
+
+   ```json
+   "tidal": { "client_id": "…", "client_secret": "…", "playlist": "Wakey" }
+   ```
+
+   Create a playlist named "Wakey" in your TIDAL collection, or set `playlist` to another name ([Configuration](#configuration) has all keys).
 2. On the clock, open an alarm, tap "Sound" and the "TIDAL" tab. Scan the QR code with your phone and confirm the login.
 3. The playlist appears; pick a track. The clock downloads the tracks your alarms use to the card.
 

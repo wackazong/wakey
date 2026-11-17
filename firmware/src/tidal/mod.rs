@@ -58,7 +58,8 @@ const WATCH: Duration = Duration::from_secs(5);
 /// What the TIDAL tab shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
-    /// `config.json` has no app credentials.
+    /// `config.json` has no API client (`client_id` and `client_secret`),
+    /// so no login code can be requested; not about the user's session.
     NoCredentials,
     /// No session; nothing under way.
     LoggedOut,
