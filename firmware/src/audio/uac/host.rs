@@ -1,6 +1,7 @@
 //! ESP-IDF's USB host library on the Tab5's USB-A port, plus the one
 //! register tweak the Pebble needs.
 
+use crate::runtime::Thread;
 use esp_idf_svc::sys::{self as sys, EspError, esp};
 
 unsafe extern "C" {
@@ -11,7 +12,7 @@ unsafe extern "C" {
 /// Makes the high-speed controller a full/low-speed-only host: sets
 /// `HCFG.FSLSSupp` (offset 0x400, bit 2), so it does not answer a device's
 /// high-speed chirp during the port reset. Full-speed devices (the Pebble)
-/// failed the root-port reset on the Tab5's USB-A port without this. Newer
+/// fail the root-port reset on the Tab5's USB-A port without this. Newer
 /// releases of Espressif's USB host stack expose this as
 /// `usb_host_config_t::fsls_only`; ESP-IDF 5.5.5's HAL cannot. Must run
 /// after `usb_host_install` (which resets the core) and before the root port
@@ -39,7 +40,7 @@ pub(super) fn install() -> Result<(), EspError> {
         esp!(sys::usb_host_install(&cfg))?;
     }
     set_full_speed_only();
-    crate::runtime::Thread::new(c"usb-lib", 4096)
+    Thread::new(c"usb-lib", 4096)
         .spawn(|| {
             loop {
                 let mut flags = 0u32;
@@ -56,8 +57,8 @@ pub(super) fn install() -> Result<(), EspError> {
 }
 
 /// Powers the root port (connection detection, reset, enumeration). Never
-/// switched off again: powered down while a device was still enumerating,
-/// ESP-IDF's hub driver aborted at the next disconnection (`device.rs`).
+/// switched off again: powered down while a device is still enumerating,
+/// ESP-IDF's hub driver aborts at the next disconnection (`device.rs`).
 pub(super) fn power_root_port() -> Result<(), EspError> {
     // SAFETY: plain call; the host library is installed.
     unsafe { esp!(sys::usb_host_lib_set_root_port_power(true)) }

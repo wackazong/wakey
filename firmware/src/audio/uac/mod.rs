@@ -21,22 +21,25 @@ mod host;
 
 use super::{SAMPLE_RATE, Source};
 use crate::board::ioexp::Switch;
-use esp_idf_svc::sys::EspError;
+use crate::runtime::Thread;
+use esp_idf_svc::sys::{self, EspError};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 
 /// Stream format: [`SAMPLE_RATE`], stereo, 16 bit.
-pub const CHANNELS: usize = 2;
+const CHANNELS: usize = 2;
 /// Isochronous transfers in flight, and 1 ms packets per transfer: 3 × 8 ms
 /// of buffering.
 const NUM_XFERS: usize = 3;
 const PACKETS: usize = 8;
 /// Bytes per 1 ms packet: 48 frames × 2 channels × 2 bytes.
 const PACKET_BYTES: usize = (SAMPLE_RATE as usize / 1000) * CHANNELS * 2;
+/// Grace after power on before a missing device counts as missing.
+const ENUMERATE_GRACE_MS: u32 = 10_000;
 
 /// Packets sent and packets that failed, for logs.
-pub static PACKETS_OK: AtomicU32 = AtomicU32::new(0);
-pub static PACKETS_ERR: AtomicU32 = AtomicU32::new(0);
+static PACKETS_OK: AtomicU32 = AtomicU32::new(0);
+static PACKETS_ERR: AtomicU32 = AtomicU32::new(0);
 
 enum Cmd {
     Stream(bool),
@@ -55,11 +58,8 @@ struct Shared {
 
 fn now_ms() -> u32 {
     // SAFETY: reads a timer, no preconditions.
-    (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000) as u32
+    (unsafe { sys::esp_timer_get_time() } / 1000) as u32
 }
-
-/// Grace after power on before a missing device counts as missing.
-const ENUMERATE_GRACE_MS: u32 = 10_000;
 
 /// The USB speaker. Cheap to clone.
 #[derive(Clone)]
@@ -80,7 +80,7 @@ impl UsbAudio {
         });
         let (tx, rx) = mpsc::channel();
         let thread_shared = shared.clone();
-        crate::runtime::Thread::new(c"uac", 8192)
+        Thread::new(c"uac", 8192)
             .spawn(move || device::client_thread(thread_shared, rx, vbus, source))
             .expect("uac thread");
         Ok(Self { shared, cmds: tx })

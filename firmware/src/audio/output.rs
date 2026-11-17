@@ -12,7 +12,7 @@ use super::builtin::BuiltinSpeaker;
 use super::uac::UsbAudio;
 
 /// Which output plays.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Route {
     Silent,
     Usb,

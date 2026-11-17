@@ -7,7 +7,7 @@
 //! (mixed to mono, the amplifier takes the left channel only), clicks on
 //! top, and always the inaudible [`mix::keepalive`] signal: on exact digital
 //! silence something in the chain mutes, and a lone click or the first beep
-//! after a pause lost its start.
+//! after a pause loses its start.
 //!
 //! The amplifier is on while streaming, from a [`BuiltinSpeaker::wake`]
 //! (the alarm page: its wheels click) or a click, until [`AMP_OFF_AFTER`]
@@ -19,6 +19,7 @@ use super::{SAMPLE_RATE, Source};
 use crate::board::codec::{self, CodecPins};
 use crate::board::i2c::SharedI2c;
 use crate::board::ioexp::{IoExpanders, Pin};
+use crate::runtime::Thread;
 use esp_idf_svc::hal::delay::TickType;
 use esp_idf_svc::hal::i2s::config::{
     Config, DataBitWidth, MclkMultiple, SlotMode, StdClkConfig, StdConfig, StdGpioConfig,
@@ -38,7 +39,7 @@ const AMP_OFF_AFTER: Duration = Duration::from_secs(8);
 const AMP_START: Duration = Duration::from_millis(50);
 /// DMA: 3 × 2 ms, and the mixer's block. The stream is kept full, so
 /// whatever is mixed in waits behind it: small buffers keep that wait short
-/// and even (5 ms buffers made fast clicks uneven).
+/// and even (5 ms buffers make fast clicks uneven).
 const DMA_BUFFERS: u32 = 3;
 const DMA_FRAMES: u32 = 96;
 const BLOCK_SAMPLES: usize = DMA_FRAMES as usize * 2;
@@ -118,7 +119,7 @@ impl BuiltinSpeaker {
             amp_on: false,
             last_activity: Instant::now(),
         };
-        crate::runtime::Thread::new(c"speaker", 4096).spawn(move || mixer.run(&rx))?;
+        Thread::new(c"speaker", 4096).spawn(move || mixer.run(&rx))?;
         Ok(Self { tx: Some(tx) })
     }
 
@@ -251,19 +252,18 @@ impl Mixer {
         }
         self.amp_on = on;
         log::info!("speaker: amplifier {}", if on { "on" } else { "off" });
-        if !on {
-            if let Err(e) = codec::power_down(&self.bus) {
-                log::warn!("speaker: codec power-down: {e}");
-            }
-            if let Err(e) = self.i2s.tx_disable() {
-                log::warn!("speaker: I2S stop: {e}");
-            }
-        }
         if on {
             let started = Instant::now();
             self.block.copy_from_slice(&self.keepalive);
             while started.elapsed() < AMP_START {
                 self.write_block();
+            }
+        } else {
+            if let Err(e) = codec::power_down(&self.bus) {
+                log::warn!("speaker: codec power-down: {e}");
+            }
+            if let Err(e) = self.i2s.tx_disable() {
+                log::warn!("speaker: I2S stop: {e}");
             }
         }
     }
