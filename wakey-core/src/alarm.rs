@@ -36,7 +36,7 @@
 
 use crate::datetime::{Date, DateTime};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What an alarm plays. In `config.json` a string: `"beep"`, `"random"`,
 /// `"tidal:random"`, `"tidal:<track id>"`, or a file path below the SD
@@ -82,10 +82,16 @@ impl From<Sound> for String {
     }
 }
 
+/// Lowest volume, %: an alarm is never silent.
+pub const VOLUME_MIN: u8 = 1;
+
+/// Longest name kept, in characters.
+pub const NAME_MAX: usize = 24;
+
 /// One entry of the `alarms` list in `config.json`.
 ///
 /// ```json
-/// { "id": 1, "name": "Arbeit", "enabled": true, "hour": 6, "minute": 30,
+/// { "id": 1, "name": "Work", "enabled": true, "hour": 6, "minute": 30,
 ///   "weekdays": [1, 1, 1, 1, 1, 0, 0], "sound": "random",
 ///   "volume": 60, "fade_in_s": 10 }
 /// ```
@@ -125,16 +131,10 @@ impl Default for AlarmConfig {
     }
 }
 
-/// Lowest volume, %: an alarm is never silent.
-pub const VOLUME_MIN: u8 = 1;
-
-/// Longest name kept, in characters.
-pub const NAME_MAX: usize = 24;
-
 impl AlarmConfig {
     /// Brings out-of-range values into range (a hand-edited file should not
     /// stop the clock).
-    pub fn sanitize(&mut self) {
+    fn sanitize(&mut self) {
         self.hour = self.hour.min(23);
         self.minute = self.minute.min(59);
         self.volume = self.volume.clamp(VOLUME_MIN, 100);
@@ -143,7 +143,7 @@ impl AlarmConfig {
     }
 
     /// `weekday`: 0 = Sunday, as in [`DateTime`].
-    pub fn rings_on(&self, weekday: u8) -> bool {
+    fn rings_on(&self, weekday: u8) -> bool {
         self.weekdays[(usize::from(weekday) + 6) % 7] != 0
     }
 
@@ -185,7 +185,8 @@ impl Default for RingConfig {
 }
 
 impl RingConfig {
-    pub fn sanitize(&mut self) {
+    /// Brings out-of-range values into range.
+    pub(crate) fn sanitize(&mut self) {
         self.snooze_min = self.snooze_min.clamp(1, 60);
         self.max_snoozes = self.max_snoozes.min(10);
         self.ring_timeout_min = self.ring_timeout_min.clamp(1, 60);
@@ -203,7 +204,7 @@ impl RingConfig {
 /// Sanitizes every alarm and gives each a unique, non-zero id (keeping the
 /// existing ones), so a hand-written list works.
 pub fn sanitize_list(alarms: &mut [AlarmConfig]) {
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let mut next = alarms.iter().map(|a| a.id).max().unwrap_or(0);
     for a in alarms.iter_mut() {
         a.sanitize();
@@ -274,6 +275,7 @@ impl State {
     }
 }
 
+/// What the state machine is doing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
     #[default]
@@ -311,6 +313,7 @@ pub enum Input {
     Stop,
 }
 
+/// The state machine (rules in the module documentation).
 pub struct Alarms {
     state: State,
     /// The previous tick, to see alarm times being crossed.
@@ -335,10 +338,6 @@ impl Alarms {
         }
     }
 
-    pub fn is_ringing(&self) -> bool {
-        self.ringing().is_some()
-    }
-
     /// While ringing or snoozed: how many snoozes are left.
     pub fn snoozes_left(&self, ring: &RingConfig) -> Option<u8> {
         match self.state.phase {
@@ -346,14 +345,6 @@ impl Alarms {
                 Some(ring.max_snoozes.saturating_sub(snoozes))
             }
             Phase::Idle => None,
-        }
-    }
-
-    /// When snoozed: the Unix time it rings again.
-    pub fn snoozed_until(&self) -> Option<i64> {
-        match self.state.phase {
-            Phase::Snoozed { until, .. } => Some(until),
-            _ => None,
         }
     }
 
@@ -425,28 +416,19 @@ impl Alarms {
             .filter(|a| due(a, ring, s.done.get(&a.id).copied(), self.last, now))
             .map(|a| a.id)
             .collect();
-        if let Some(&first) = due.first() {
-            match s.phase {
-                Phase::Ringing { .. } => {
-                    // Folded into the one already ringing.
-                    for id in due {
-                        s.done.insert(id, today);
-                    }
-                }
-                Phase::Snoozed { id, day, .. } => {
-                    s.done.insert(id, day);
-                    s.phase = ringing(first, today, ring, now);
-                    for &id in &due[1..] {
-                        s.done.insert(id, today);
-                    }
-                }
-                Phase::Idle => {
-                    s.phase = ringing(first, today, ring, now);
-                    for &id in &due[1..] {
-                        s.done.insert(id, today);
-                    }
-                }
+        // One alarm rings at a time: the rest are done for today.
+        let mut folded = due.as_slice();
+        if !matches!(s.phase, Phase::Ringing { .. })
+            && let Some((&first, rest)) = due.split_first()
+        {
+            if let Phase::Snoozed { id, day, .. } = s.phase {
+                s.done.insert(id, day);
             }
+            s.phase = ringing(first, today, ring, now);
+            folded = rest;
+        }
+        for &id in folded {
+            s.done.insert(id, today);
         }
         self.last = Some(now);
     }
@@ -629,9 +611,9 @@ mod tests {
         let c = cfg();
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, ALARM - 5, ALARM - 1);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         a.tick(&c, &r(), at_unix(ALARM));
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
         assert_eq!(a.snoozes_left(&r()), Some(3));
     }
 
@@ -641,13 +623,13 @@ mod tests {
         c[0].enabled = false;
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, ALARM - 1, ALARM + 1);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
 
         let mut c = cfg();
         c[0].weekdays = [0, 1, 1, 1, 1, 1, 1]; // not on Mondays
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, ALARM - 1, ALARM + 1);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         assert!(!c[0].rings_on(1) && c[0].rings_on(0) && c[0].rings_on(2));
         assert_eq!(c[0].weekday_bits(), 0b111_1110);
     }
@@ -658,12 +640,12 @@ mod tests {
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, ALARM - 1, ALARM);
         a.input(&r(), at_unix(ALARM + 5), Input::Stop);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         run(&mut a, &c, ALARM + 5, ALARM + 3600);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         // Tomorrow it rings again.
         run(&mut a, &c, ALARM + 86_400 - 1, ALARM + 86_400);
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
     }
 
     #[test]
@@ -674,19 +656,20 @@ mod tests {
         let mut t = ALARM;
         for left in [2, 1, 0] {
             a.input(&r(), at_unix(t + 10), Input::Snooze);
-            assert!(!a.is_ringing());
+            assert_eq!(a.ringing(), None);
             assert_eq!(a.snoozes_left(&r()), Some(left));
-            assert_eq!(a.snoozed_until(), Some(t + 10 + 9 * 60));
+            let until = t + 10 + 9 * 60;
+            assert!(matches!(a.state().phase, Phase::Snoozed { until: u, .. } if u == until));
             run(&mut a, &c, t + 10, t + 10 + 9 * 60 - 1);
-            assert!(!a.is_ringing());
+            assert_eq!(a.ringing(), None);
             t += 10 + 9 * 60;
             a.tick(&c, &r(), at_unix(t));
-            assert!(a.is_ringing());
+            assert_eq!(a.ringing(), Some(1));
         }
         a.input(&r(), at_unix(t + 1), Input::Snooze);
-        assert!(a.is_ringing(), "a fourth snooze is ignored");
+        assert_eq!(a.ringing(), Some(1), "a fourth snooze is ignored");
         a.input(&r(), at_unix(t + 2), Input::Stop);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         assert_eq!(
             a.state().done.get(&1).copied(),
             Some(at_unix(ALARM).local.date())
@@ -701,7 +684,7 @@ mod tests {
         a.input(&r(), at_unix(ALARM + 1), Input::Snooze);
         a.input(&r(), at_unix(ALARM + 2), Input::Stop);
         run(&mut a, &c, ALARM + 2, ALARM + 3600);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         assert_eq!(a.state().phase, Phase::Idle);
     }
 
@@ -710,11 +693,11 @@ mod tests {
         let c = cfg();
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, ALARM - 1, ALARM + 10 * 60 - 1);
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
         a.tick(&c, &r(), at_unix(ALARM + 10 * 60));
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         run(&mut a, &c, ALARM + 10 * 60, ALARM + 7200);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
     }
 
     #[test]
@@ -725,11 +708,11 @@ mod tests {
         a.input(&r(), at_unix(ALARM + 9 * 60), Input::Snooze);
         let again = ALARM + 18 * 60;
         run(&mut a, &c, ALARM + 9 * 60, again);
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
         run(&mut a, &c, again, again + 10 * 60 - 1);
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
         a.tick(&c, &r(), at_unix(again + 10 * 60));
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
     }
 
     #[test]
@@ -737,11 +720,11 @@ mod tests {
         let c = cfg();
         let mut a = Alarms::new(State::default());
         a.tick(&c, &r(), at_unix(ALARM + 5 * 60));
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
 
         let mut a = Alarms::new(State::default());
         a.tick(&c, &r(), at_unix(ALARM + 11 * 60));
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
     }
 
     #[test]
@@ -754,7 +737,7 @@ mod tests {
         // Rebooted a minute later: does not ring again.
         let mut b = Alarms::new(saved);
         b.tick(&c, &r(), at_unix(ALARM + 60));
-        assert!(!b.is_ringing());
+        assert_eq!(b.ringing(), None);
 
         // Rebooted while snoozed: rings when the snooze ends.
         let mut a = Alarms::new(State::default());
@@ -762,7 +745,7 @@ mod tests {
         a.input(&r(), at_unix(ALARM + 1), Input::Snooze);
         let mut b = Alarms::new(a.state().clone());
         run(&mut b, &c, ALARM + 120, ALARM + 1 + 9 * 60);
-        assert!(b.is_ringing());
+        assert_eq!(b.ringing(), Some(1));
         assert_eq!(b.snoozes_left(&r()), Some(2));
     }
 
@@ -788,7 +771,7 @@ mod tests {
         run(&mut a, &off, ALARM - 1, ALARM + 60);
         // Enabled a minute late: not now, tomorrow.
         run(&mut a, &c, ALARM + 61, ALARM + 120);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         let next = a.next_of(&c[0], at_unix(ALARM + 120).local).unwrap();
         assert_eq!((next.day, next.hour, next.minute), (10, 6, 30));
     }
@@ -799,12 +782,12 @@ mod tests {
         let mut a = Alarms::new(State::default());
         a.tick(&c, &r(), at_unix(ALARM - 3 * 3600));
         a.tick(&c, &r(), at_unix(ALARM + 3600)); // NTP corrects by four hours
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         // A small correction does.
         let mut a = Alarms::new(State::default());
         a.tick(&c, &r(), at_unix(ALARM - 30));
         a.tick(&c, &r(), at_unix(ALARM + 30));
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
     }
 
     #[test]
@@ -814,7 +797,7 @@ mod tests {
         run(&mut a, &c, ALARM - 1, ALARM);
         a.tick(&c, &r(), at_unix(ALARM - 3600));
         run(&mut a, &c, ALARM - 3600, ALARM - 3600 + 10 * 60);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
     }
 
     #[test]
@@ -826,10 +809,10 @@ mod tests {
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, jump - 5, jump - 1);
         assert_eq!(at_unix(jump - 1).local.hms(), "01:59:59");
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         a.tick(&c, &r(), at_unix(jump));
         assert_eq!(at_unix(jump).local.hms(), "03:00:00");
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
     }
 
     #[test]
@@ -842,11 +825,11 @@ mod tests {
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, first - 1, first);
         assert_eq!(at_unix(first).local.hms(), "02:30:00");
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
         // Unanswered: silenced after 10 minutes.
         run(&mut a, &c, first, back + 3600);
         assert_eq!(at_unix(back + 1800).local.hms(), "02:30:00");
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
         assert_eq!(
             a.state().done.get(&1).copied(),
             Some(at_unix(first).local.date())
@@ -860,7 +843,23 @@ mod tests {
         let midnight = winter(11, 10, 0, 0, 0).unix;
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, midnight - 3, midnight);
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
+    }
+
+    #[test]
+    fn ringing_across_midnight_counts_for_the_day_it_started() {
+        let mut c = cfg();
+        (c[0].hour, c[0].minute) = (23, 55);
+        let start = winter(11, 9, 23, 55, 0);
+        let mut a = Alarms::new(State::default());
+        run(&mut a, &c, start.unix - 1, start.unix + 9 * 60);
+        assert_eq!(a.ringing(), Some(1));
+        run(&mut a, &c, start.unix + 9 * 60, start.unix + 11 * 60);
+        assert_eq!(a.ringing(), None);
+        assert_eq!(a.state().done.get(&1), Some(&start.local.date()));
+        // Tuesday 00:06: it rings again that evening.
+        let next = a.next_of(&c[0], at_unix(start.unix + 11 * 60).local);
+        assert_eq!(next.map(|n| (n.day, n.hour, n.minute)), Some((10, 23, 55)));
     }
 
     #[test]
@@ -904,7 +903,7 @@ mod tests {
         a.reconfigured(&earlier, at_unix(ALARM + 60).local);
         let mut b = Alarms::new(a.state().clone());
         run(&mut b, &earlier, ALARM + 60, ALARM + 120);
-        assert!(!b.is_ringing());
+        assert_eq!(b.ringing(), None);
         // Moved to 07:00: rings at 07:00.
         let mut later = c.clone();
         later[0].hour = 7;
@@ -912,7 +911,7 @@ mod tests {
         a.reconfigured(&later, at_unix(ALARM + 60).local);
         assert_eq!(a.state().done.get(&1).copied(), None);
         run(&mut a, &later, ALARM + 60, ALARM + 1800);
-        assert!(a.is_ringing());
+        assert_eq!(a.ringing(), Some(1));
     }
 
     #[test]
@@ -986,7 +985,7 @@ mod tests {
         assert_eq!(a.ringing(), Some(1));
         a.input(&r(), at_unix(ALARM + 5), Input::Stop);
         run(&mut a, &c, ALARM + 5, ALARM + 3600);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
     }
 
     #[test]
@@ -1002,7 +1001,7 @@ mod tests {
         // The first one's snooze does not come back.
         a.input(&r(), at_unix(ALARM + 301), Input::Stop);
         run(&mut a, &c, ALARM + 301, ALARM + 3600);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
     }
 
     #[test]
@@ -1013,7 +1012,7 @@ mod tests {
         assert_eq!(a.ringing(), Some(1));
         a.input(&r(), at_unix(ALARM + 181), Input::Stop);
         run(&mut a, &c, ALARM + 181, ALARM + 3600);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
     }
 
     #[test]
@@ -1024,7 +1023,7 @@ mod tests {
         let mut off = c.clone();
         off[0].enabled = false;
         a.reconfigured(&off, at_unix(ALARM + 1).local);
-        assert!(!a.is_ringing());
+        assert_eq!(a.ringing(), None);
 
         let mut a = Alarms::new(State::default());
         run(&mut a, &c, ALARM - 1, ALARM);
@@ -1047,7 +1046,7 @@ mod tests {
         a.input(&r(), at_unix(ALARM + 1), Input::Snooze);
         let mut b = Alarms::new(a.state().clone());
         b.tick(&c, &r(), at_unix(ALARM + 60));
-        assert!(!b.is_ringing());
+        assert_eq!(b.ringing(), None);
         assert_eq!(b.snoozes_left(&r()), Some(2));
     }
 
@@ -1059,8 +1058,7 @@ mod tests {
             day: d,
         };
         assert_eq!(pick_daily(5, day(9), 1), pick_daily(5, day(9), 1));
-        let picks: std::collections::BTreeSet<usize> =
-            (1..=28).map(|d| pick_daily(5, day(d), 1)).collect();
+        let picks: BTreeSet<usize> = (1..=28).map(|d| pick_daily(5, day(d), 1)).collect();
         assert_eq!(picks.len(), 5, "every file comes up within four weeks");
         assert_eq!(pick_daily(0, day(9), 1), 0);
     }

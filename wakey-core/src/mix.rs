@@ -5,7 +5,7 @@
 /// amplifier takes the left channel only, and a stereo file should not
 /// lose its right half.
 pub fn to_mono(frames: &mut [i16]) {
-    for f in frames.chunks_exact_mut(2) {
+    for f in frames.as_chunks_mut::<2>().0 {
         let m = ((i32::from(f[0]) + i32::from(f[1])) / 2) as i16;
         f[0] = m;
         f[1] = m;
@@ -21,7 +21,7 @@ pub fn add(dst: &mut [i16], src: &[i16]) {
 
 /// `dst += mono · gain` for interleaved stereo `dst`, both channels.
 pub fn add_mono(dst: &mut [i16], mono: &[i16], gain: f32) {
-    for (f, &s) in dst.chunks_exact_mut(2).zip(mono) {
+    for (f, &s) in dst.as_chunks_mut::<2>().0.iter_mut().zip(mono) {
         let v = (f32::from(s) * gain) as i16;
         f[0] = f[0].saturating_add(v);
         f[1] = f[1].saturating_add(v);

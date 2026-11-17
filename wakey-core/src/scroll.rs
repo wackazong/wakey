@@ -32,6 +32,9 @@ struct Drag {
     moved: bool,
 }
 
+/// One scrollable axis. Feed it the touch ([`Self::press`],
+/// [`Self::drag_to`], [`Self::release`]) and call [`Self::tick`] every
+/// frame while [`Self::is_moving`]; [`Self::offset`] is where to draw.
 #[derive(Debug, Clone)]
 pub struct Scroller {
     view: f32,
@@ -80,17 +83,9 @@ impl Scroller {
         self.offset
     }
 
-    pub fn velocity(&self) -> f32 {
-        self.velocity
-    }
-
     /// +1 if the content last moved towards its end, -1 if back.
     pub fn direction(&self) -> i32 {
         self.direction
-    }
-
-    pub fn is_dragging(&self) -> bool {
-        self.drag.is_some()
     }
 
     /// Dragged, flinging or springing back: the position changes over time.
@@ -103,7 +98,7 @@ impl Scroller {
     }
 
     /// Distance past the nearest end (negative above the start), 0 in range.
-    pub fn overshoot(&self) -> f32 {
+    fn overshoot(&self) -> f32 {
         let max = self.max_offset();
         if self.offset < 0.0 {
             self.offset
@@ -266,7 +261,7 @@ mod tests {
         let pulled = s.offset();
         assert!((-5.0..0.0).contains(&pulled));
         assert_eq!(s.release(305.0, 100 * MS), Some(305.0 + pulled));
-        assert_eq!(s.velocity(), 0.0);
+        assert_eq!(s.velocity, 0.0);
     }
 
     #[test]
@@ -278,10 +273,10 @@ mod tests {
             s.drag_to(600.0 - 30.0 * k as f32, k * 10 * MS);
         }
         assert_eq!(s.release(300.0, 100 * MS), None);
-        assert!(s.velocity() > 2000.0);
+        assert!(s.velocity > 2000.0);
         let released_at = s.offset();
         settle(&mut s, 100 * MS);
-        assert_eq!(s.velocity(), 0.0);
+        assert_eq!(s.velocity, 0.0);
         // v·τ ≈ 3000 · 0.35 ≈ 1050 px further.
         let glide = s.offset() - released_at;
         assert!((800.0..1300.0).contains(&glide), "{glide}");
@@ -294,7 +289,7 @@ mod tests {
         s.press(600.0, 0);
         s.drag_to(300.0, 50 * MS);
         assert_eq!(s.release(300.0, 300 * MS), None);
-        assert_eq!(s.velocity(), 0.0);
+        assert_eq!(s.velocity, 0.0);
     }
 
     #[test]
@@ -330,7 +325,7 @@ mod tests {
         s.drag_to(300.0, 10 * MS);
         s.set_offset(500.0);
         assert_eq!(s.offset(), 280.0);
-        assert!(!s.is_moving() && !s.is_dragging());
+        assert!(!s.is_moving());
         s.set_offset(-20.0);
         assert_eq!(s.offset(), 0.0);
     }

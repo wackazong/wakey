@@ -2,7 +2,8 @@
 //! played), the volume curve with fade-in, and the click of the time
 //! wheels.
 
-use std::f32::consts::TAU;
+use crate::alarm::VOLUME_MIN;
+use std::f32::consts::{PI, TAU};
 
 /// Beep pitch; a whole number of cycles per pattern period, so the table
 /// loops without a seam.
@@ -51,7 +52,7 @@ impl Beeper {
     pub fn fill(&mut self, out: &mut [i16]) {
         let len = self.table.len() as u64;
         let mut i = (self.pos % len) as usize;
-        for frame in out.chunks_exact_mut(2) {
+        for frame in out.as_chunks_mut::<2>().0 {
             let s = self.table[i];
             frame[0] = s;
             frame[1] = s;
@@ -66,9 +67,9 @@ impl Beeper {
 
 /// Linear gain for a volume of 1–100 %: roughly even loudness steps
 /// (−40 dB at 1 %, 0 dB at 100 %). An alarm is never silent: 0 % plays as
-/// 1 % ([`crate::alarm::VOLUME_MIN`]).
+/// 1 % ([`VOLUME_MIN`]).
 pub fn volume_gain(percent: u8) -> f32 {
-    let p = percent.clamp(crate::alarm::VOLUME_MIN, 100);
+    let p = percent.clamp(VOLUME_MIN, 100);
     10f32.powf((f32::from(p) / 100.0 - 1.0) * 2.0)
 }
 
@@ -97,7 +98,7 @@ pub fn click(sample_rate: u32, amplitude: f32) -> Vec<i16> {
         .map(|i| {
             let t = i as f32 / rate;
             let attack = if t < ATTACK_S {
-                0.5 - 0.5 * (core::f32::consts::PI * t / ATTACK_S).cos()
+                0.5 - 0.5 * (PI * t / ATTACK_S).cos()
             } else {
                 1.0
             };
@@ -164,8 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn beeper_phase_stays_within_one_cycle() {
-        // Same samples as the plain formula, at any position.
+    fn table_gives_the_same_samples_as_the_formula_at_any_position() {
         let mut b = Beeper::new(48_000);
         b.pos = 48_000 * 3600 + 1234;
         let mut out = [0i16; 2 * 64];

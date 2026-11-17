@@ -4,8 +4,9 @@
 
 use rubato::{FftFixedInOut, Resampler};
 
+/// A stream from one sample rate to another, fed in pieces of any size.
 pub struct Converter {
-    r: FftFixedInOut<f32>,
+    resampler: FftFixedInOut<f32>,
     /// Input frames rubato takes per block.
     in_frames: usize,
     /// Input frames not converted yet (interleaved).
@@ -16,11 +17,11 @@ pub struct Converter {
 impl Converter {
     pub fn new(from_hz: u32, to_hz: u32) -> Result<Self, String> {
         // About 1024 input frames per block; rubato rounds to the ratio.
-        let r = FftFixedInOut::<f32>::new(from_hz as usize, to_hz as usize, 1024, 2)
+        let resampler = FftFixedInOut::<f32>::new(from_hz as usize, to_hz as usize, 1024, 2)
             .map_err(|e| e.to_string())?;
-        let in_frames = r.input_frames_next();
+        let in_frames = resampler.input_frames_next();
         Ok(Self {
-            r,
+            resampler,
             in_frames,
             pending: Vec::with_capacity(in_frames * 4),
             planar_in: vec![vec![0.0; in_frames]; 2],
@@ -37,15 +38,14 @@ impl Converter {
     /// call, so output lags the input by up to one block.
     pub fn process(&mut self, input: &[i16], out: &mut Vec<i16>) {
         self.pending.extend_from_slice(input);
-        while self.pending.len() >= self.in_frames * 2 {
-            let block = &self.pending[..self.in_frames * 2];
+        let mut blocks = self.pending.chunks_exact(self.in_frames * 2);
+        for block in &mut blocks {
             for (i, frame) in block.as_chunks::<2>().0.iter().enumerate() {
                 self.planar_in[0][i] = f32::from(frame[0]) / 32768.0;
                 self.planar_in[1][i] = f32::from(frame[1]) / 32768.0;
             }
-            self.pending.drain(..self.in_frames * 2);
             let res = self
-                .r
+                .resampler
                 .process(&self.planar_in, None)
                 .expect("block has the size rubato asked for");
             for (l, r) in res[0].iter().zip(res[1].iter()) {
@@ -53,6 +53,8 @@ impl Converter {
                 out.push((r * 32767.0).clamp(-32768.0, 32767.0) as i16);
             }
         }
+        let converted = self.pending.len() - blocks.remainder().len();
+        self.pending.drain(..converted);
     }
 }
 
@@ -81,5 +83,21 @@ mod tests {
         // A sine stays a sine of the same level (after the filter delay).
         let peak = out[4000..].iter().map(|s| s.unsigned_abs()).max().unwrap();
         assert!((7500..=8500).contains(&peak), "peak {peak}");
+    }
+
+    #[test]
+    fn pieces_of_any_size_give_the_same_output() {
+        let input: Vec<i16> = (0..3000i16).flat_map(|i| [i * 7, -i]).collect();
+        let mut whole = Vec::new();
+        Converter::new(44_100, 48_000)
+            .unwrap()
+            .process(&input, &mut whole);
+        assert!(!whole.is_empty());
+        let mut c = Converter::new(44_100, 48_000).unwrap();
+        let mut pieces = Vec::new();
+        for piece in input.chunks(2 * 700) {
+            c.process(piece, &mut pieces);
+        }
+        assert_eq!(pieces, whole);
     }
 }

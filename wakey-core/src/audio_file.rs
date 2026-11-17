@@ -1,7 +1,9 @@
-//! Audio files: WAV (RIFF/WAVE) and AIFF/AIFC, uncompressed, FLAC
-//! (decoded with `claxon`; TIDAL's lossless format), and AAC or ALAC in
-//! MP4/M4A (what iPhones send), MP3 and ADTS AAC, decoded with
-//! `symphonia`.
+//! Audio file readers:
+//!
+//! - WAV (RIFF/WAVE) and AIFF/AIFC, uncompressed.
+//! - FLAC (TIDAL's lossless format), decoded with `claxon`.
+//! - AAC or ALAC in MP4/M4A (what iPhones send), MP3 and ADTS AAC, decoded
+//!   with `symphonia`.
 //!
 //! [`AudioFile::open`] reads the header; [`AudioFile::read`] returns
 //! interleaved **stereo i16** frames at the file's own sample rate: mono is
@@ -37,6 +39,7 @@ pub struct Format {
     pub container: Container,
     pub sample_rate: u32,
     pub channels: u16,
+    /// Bits per sample (16 for what `symphonia` decodes).
     pub bits: u16,
     /// Frames in the file (0 if unknown, e.g. MP3).
     pub frames: u64,
@@ -65,6 +68,7 @@ impl Format {
         self.bytes_per_sample() * usize::from(self.channels)
     }
 
+    /// 0 if the number of frames is unknown.
     pub fn duration_s(&self) -> f32 {
         self.frames as f32 / self.sample_rate as f32
     }
@@ -80,23 +84,26 @@ pub struct AudioFile<R: Read = BufReader<File>> {
 /// passes need not be (a download still being written): it goes behind a
 /// mutex, which is never contended (`&mut self` on every call). The length,
 /// if known, lets MP4 seek (rewind).
-struct Locked<R>(Mutex<R>, Option<u64>);
+struct Locked<R> {
+    reader: Mutex<R>,
+    len: Option<u64>,
+}
+
+impl<R> Locked<R> {
+    fn reader(&mut self) -> &mut R {
+        self.reader.get_mut().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 impl<R: Read> Read for Locked<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .read(buf)
+        self.reader().read(buf)
     }
 }
 
 impl<R: Seek> Seek for Locked<R> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.0
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .seek(pos)
+        self.reader().seek(pos)
     }
 }
 
@@ -105,7 +112,7 @@ impl<R: Read + Seek + Send> MediaSource for Locked<R> {
         true
     }
     fn byte_len(&self) -> Option<u64> {
-        self.1
+        self.len
     }
 }
 
@@ -157,7 +164,7 @@ fn codec_error(e: SymphoniaError) -> io::Error {
 }
 
 fn bad(msg: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg.to_string())
+    io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
 /// IEEE 754 80-bit extended (the AIFF sample rate field) → integer.
@@ -215,7 +222,7 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
             (b"RIFF", b"WAVE") => Self::parse_wav(&mut reader)?,
             (b"FORM", b"AIFF") => Self::parse_aiff(&mut reader, false)?,
             (b"FORM", b"AIFC") => Self::parse_aiff(&mut reader, true)?,
-            _ => return Err(bad("not a WAV, AIFF, FLAC, M4A or MP3 file")),
+            _ => return Err(bad("not a WAV, AIFF, FLAC, M4A, MP3 or AAC file")),
         };
         format.check()?;
         let remaining = format.frames;
@@ -262,7 +269,10 @@ impl<R: Read + Seek + Send + 'static> AudioFile<R> {
         let len = reader.seek(SeekFrom::End(0)).ok();
         reader.seek(SeekFrom::Start(0))?;
         let source = MediaSourceStream::new(
-            Box::new(Locked(Mutex::new(reader), len)),
+            Box::new(Locked {
+                reader: Mutex::new(reader),
+                len,
+            }),
             Default::default(),
         );
         let reader = probe(source, extension)?;
@@ -737,6 +747,24 @@ mod tests {
         assert_eq!(out, [1000, -1000]);
     }
 
+    #[test]
+    fn aifc_sowt_is_little_endian() {
+        let data: Vec<u8> = [1000i16, -1000]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        let mut v = aiff(2, 16, 1, &data);
+        v[8..12].copy_from_slice(b"AIFC");
+        // The compression type follows the 18 bytes of an AIFF COMM chunk.
+        let comm = v.windows(4).position(|w| w == b"COMM").unwrap();
+        v[comm + 4..comm + 8].copy_from_slice(&22u32.to_be_bytes());
+        v.splice(comm + 26..comm + 26, *b"sowt");
+        let mut f = AudioFile::from_reader(Cursor::new(v)).unwrap();
+        let mut out = [0i16; 2];
+        assert_eq!(f.read(&mut out).unwrap(), 1);
+        assert_eq!(out, [1000, -1000]);
+    }
+
     /// Decodes all of a file (read in odd-sized pieces), and once more
     /// after a rewind.
     fn decode_all(bytes: &'static [u8]) -> (Format, Vec<i16>) {
@@ -858,7 +886,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_other_files() {
+    fn rejects_what_is_not_audio() {
+        assert!(AudioFile::from_reader(Cursor::new(b"plain text, no audio".to_vec())).is_err());
+        // An ID3 tag with no MP3 behind it.
         assert!(AudioFile::from_reader(Cursor::new(b"ID3\x04 something else".to_vec())).is_err());
     }
 }
