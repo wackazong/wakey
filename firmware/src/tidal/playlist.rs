@@ -6,6 +6,7 @@ use super::{Inner, Tidal};
 use crate::config::TidalSession;
 use crate::http;
 use crate::runtime::Thread;
+use esp_idf_svc::hal::cpu::Core;
 use std::collections::BTreeSet;
 use std::time::Instant;
 use wakey_core::tidal::api::{self, PlaylistInfo, Track};
@@ -220,10 +221,14 @@ fn fetch_cover(id: &str) -> Result<()> {
 
 /// [`cover::decode`] on a thread of its own with a 64 KiB stack in PSRAM:
 /// the JPEG decoder keeps its Huffman tables in itself (~25 KB on the
-/// stack), more than the `wifi` thread's 16 KiB.
+/// stack), more than the `wifi` thread's 16 KiB. On core 1 at priority 1:
+/// unpinned it could run on core 0 above the UI and make animations
+/// stutter.
 fn decode_cover(jpeg: &[u8]) -> Result<Vec<u8>> {
     std::thread::scope(|s| {
         Thread::new(c"cover", 64 * 1024)
+            .core(Core::Core1)
+            .priority(1)
             .stack_in_psram()
             .spawn_scoped(s, || cover::decode(jpeg))?
             .join()

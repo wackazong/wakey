@@ -75,7 +75,7 @@ impl Thread {
                 .name(name.into())
                 .stack_size(self.stack_size)
                 .spawn(taskstats::named(name, f))
-        })
+        })?
     }
 
     pub fn spawn_scoped<'scope, 'env, F, T>(
@@ -92,13 +92,15 @@ impl Thread {
                 .name(name.into())
                 .stack_size(self.stack_size)
                 .spawn_scoped(scope, taskstats::named(name, f))
-        })
+        })?
     }
 
     /// Runs `spawn` with this thread's configuration set for the calling
     /// thread's spawns (ESP-IDF keeps it per thread), then restores the
-    /// previous one.
-    fn configured<R>(self, spawn: impl FnOnce(&'static str) -> R) -> R {
+    /// previous one. A configuration that cannot be set is an error: the
+    /// thread would run on any core at the default priority, which for the
+    /// decoder means stutter in the UI.
+    fn configured<R>(self, spawn: impl FnOnce(&'static str) -> R) -> std::io::Result<R> {
         let name = self.name.to_str().unwrap_or("thread");
         let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
         let defaults = ThreadSpawnConfiguration::default();
@@ -115,13 +117,17 @@ impl Thread {
             ..defaults
         };
         if let Err(e) = config.set() {
-            log::warn!("{name}: thread configuration not set: {e}");
+            // A partly set configuration is put back as well.
+            let _ = previous.set();
+            return Err(std::io::Error::other(format!(
+                "{name}: thread configuration not set: {e}"
+            )));
         }
         let result = spawn(name);
         if let Err(e) = previous.set() {
             log::warn!("{name}: thread configuration not restored: {e}");
         }
-        result
+        Ok(result)
     }
 }
 
