@@ -6,7 +6,7 @@ Rust (std) on ESP-IDF 5.5.5 with the Embassy executor, for the M5Stack Tab5. Des
 
 | Binary | What it is |
 | --- | --- |
-| `wakey` | The alarm clock: clock page (RTC time, Europe/Zurich, date, sky, next alarm, symbols for a missing speaker or network), alarm list, alarm, sound and name pages (tap the alarm line), the alarms ringing on the USB or the built-in speaker (snooze, stop), wheel clicks, TIDAL playlist and downloads, AirDrop, Wi-Fi + NTP, backlight from the camera, display sleep, touch |
+| `wakey` | The alarm clock: clock page (RTC time in the configured time zone, date, sky, next alarm, symbols for a missing speaker or network), alarm list, alarm, sound and name pages (tap the alarm line), the alarms ringing on the USB or the built-in speaker (snooze, stop), wheel clicks, TIDAL playlist and downloads, AirDrop, Wi-Fi + NTP, backlight from the camera, display sleep, touch |
 | `ui_bench` | Slint and list-layer bench: clock digits, an animation and a 300-row list to drag and fling; frame statistics on screen and in the log (target 66 fps) |
 
 ## Build and flash
@@ -24,7 +24,7 @@ cargo build --release --bins             # build only
 
 Host tests of the pure logic: `cd ../wakey-core && cargo test`.
 
-Before committing: `cargo fmt`, `cargo clippy --release --bins` (here and in `wakey-core`), and the programs you touched run on the device. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+Before committing: `cargo fmt`, `cargo clippy --release --bins` (also with `--features ui-bench,sky-demo,debug-overlay,sleep-cycle-test,task-stats` when feature-gated code changed; and `cargo clippy --all-targets` in `wakey-core`), and the programs you touched run on the device. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## SD card
 
@@ -49,12 +49,13 @@ src/
 │  ├─ name_page.rs     name keyboard view model
 │  ├─ clock_screen.rs  clock page view model (time, date, sky, alarm, missing speaker/network)
 │  ├─ power.rs         when the display sleeps and wakes, USB-A power
-│  ├─ texts.rs         German texts for what the services report
+│  ├─ texts.rs         the language's texts: the pages' labels, what the services report
 │  └─ bench.rs         scripted gestures for measuring (feature ui-bench)
 ├─ ui/
 │  ├─ platform.rs      Slint platform, windows, rendering through the PPA
 │  ├─ render_loop.rs   frame loop, FrameHook, touch routing
-│  ├─ list_layer.rs    list scrolled by 2D-DMA from a row ring, Slint when still
+│  ├─ list_layer/      list scrolled by 2D-DMA from a row ring, Slint when still:
+│  │                   mod.rs (ring, scrolling, touch), swipe.rs, corners.rs, shared.rs, timing.rs
 │  ├─ input.rs         touch thread → landscape pointer events
 │  ├─ transition.rs    page slides by 2D-DMA
 │  ├─ power.rs         display sleep request to the render loop
@@ -76,7 +77,7 @@ src/
 │                      (Wakey's peer-data messages), ota.rs (images from the c6 partition, OTA)
 ├─ ambient.rs          camera as light meter, backlight
 ├─ clock.rs            system time from the RTC, local time, RTC sync
-├─ config.rs           config.json from the SD card
+├─ config.rs           config.json on the SD card: loading, saving alarms and the TIDAL session
 ├─ sounds.rs           sounds/ on the SD card, choosing today's random file
 ├─ board/              Tab5 hardware, Board::init
 │  ├─ i2c.rs           shared system I2C bus, bus recovery
@@ -98,7 +99,7 @@ src/
 ├─ psram.rs            cache-line aligned PSRAM buffers for DMA
 ├─ taskstats.rs        CPU time per task (feature task-stats)
 └─ bin/                wakey, ui_bench
-ui/                    wakey.slint (window) + wakey/ (pages, theme, wheel), ui_bench.slint, fonts (Inter, OFL)
+ui/                    wakey.slint (window) + wakey/ (pages, theme, wheel, lang), ui_bench.slint, fonts (Inter, OFL)
 vendor/                patched Slint, esp-idf-svc and ESP-IDF's esp_lcd (see vendor/README.md)
 c6/                    the C6's images and their sources (see c6/README.md)
 scripts/               flash.sh (cargo runner)
@@ -122,7 +123,9 @@ Flash a build without the feature afterwards.
 
 **Add a page.** A component in `ui/wakey/` with a global for its data and callbacks, using the controls in `theme.slint`; a variant of the `Page` enum and an `if root.page == Page.…` in `ui/wakey.slint` (export the global there); a view model in `app/` that fills the global and handles its callbacks (`Ctx::with` for callbacks that need the window and the shared state), set up in `app/mod.rs`, and the page's depth for the slide direction (`depth` in `app/mod.rs`). Add a scene to `tools/ui-preview` and look at the PNG before flashing. Set only properties that changed, use fixed-width `Text` items for values that change on their own, and keep an edit's repaint small (see the Slint entries in `docs/pitfalls.md`). Reuse the font sizes in use (listed in `ui/wakey.slint`); characters that only come from Rust strings need a literal in a `.slint` file. Check the image size: `cargo run` prints `App/part. size`.
 
-**Look at the pages without the device.** `cd tools/ui-preview && cargo run --release -- [--by-line] [dir] [scene …]` renders every scene (sample data, some with simulated drags), or the named ones (a trailing `*` matches a prefix), to `dir` (default `target/ui-preview`) as PNGs and prints the render time per scene. Same `.slint` files, same Slint and renderer; `--by-line` renders line by line as the firmware does. It also checks that the alarm list's rows look exactly like the list layer's rendering of them (panics otherwise). Timing on the device is a different matter (~50 times slower).
+**Add a text or a language.** A text is a key in every file of `../wakey-core/lang/` and a field of `wakey_core::lang::Texts`: under `labels` (and in `ui/wakey/lang.slint` and the `slint_labels!` list) if a page shows it as it is, else a template that a view model fills with `lang::fill`. A language is a new file with the same keys, a `Language` variant and a line in the README; its characters outside ASCII must be in the glyph list in `ui/wakey.slint`. `cargo test` in `wakey-core` checks all of that; `tools/ui-preview --language=<code>` shows the pages.
+
+**Look at the pages without the device.** `cd tools/ui-preview && cargo run --release -- [--by-line] [--language=de] [dir] [scene …]` renders every scene (sample data, some with simulated drags), or the named ones (a trailing `*` matches a prefix), to `dir` (default `target/ui-preview`) as PNGs and prints the render time per scene. Same `.slint` files, same Slint and renderer; `--by-line` renders line by line as the firmware does. It also checks that the alarm list's rows look exactly like the list layer's rendering of them (panics otherwise). Timing on the device is a different matter (~50 times slower).
 
 **Watch the sky through a day.** `cargo run --release --bin wakey --features sky-demo`: the clock's sky (`wakey_core::sky`) runs through today in one minute, stepping every 200 ms; the bottom line shows that time of day and the sun's elevation instead of the next alarm.
 

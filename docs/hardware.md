@@ -8,7 +8,7 @@ M5Stack Tab5 Kit (ESP32-P4 + ESP32-C6, 5" 720×1280 touch panel, NP-F550 battery
 | --- | --- |
 | ESP32-P4 | rev **v1.3** (`espflash board-info`), 360 MHz, 32 MB PSRAM (hex, 200 MHz), 16 MB flash |
 | Panel | **ST7123** TDDI (display and touch in one chip), touch firmware 3 |
-| USB | USB-C: P4's USB Serial/JTAG at `/dev/cu.usbmodem2101` (flashing, console) |
+| USB | USB-C: P4's USB Serial/JTAG (flashing, console), `/dev/cu.usbmodem2101` on the development Mac |
 | C6 firmware | factory: M5Stack's esp_hosted slave 1.4.1, whose startup event carries no version and shows as 0.0.0. The firmware replaces it after the first Wi-Fi session: esp_hosted slave 2.13.1 with Wakey's addition ("2.13.1-wakey2") in one app slot, the AirDrop receiver in the other (see [`firmware/c6/`](../firmware/c6/README.md)). Recovery: header J1 "C6_ISP" (3V3, TXD, RXD, RST, IO9, GND), IO9 low during reset for download mode |
 | Battery | not connected |
 
@@ -25,10 +25,10 @@ Three panel variants exist across production runs; the firmware detects them fro
 | microSD (SDMMC slot 0) CLK / CMD / D0–D3 | 43 / 44 / 39–42 | IO_MUX pins, 4 bit; pin supply = on-chip LDO 4 at 3.3 V |
 | ESP32-C6 (SDMMC slot 1) CLK / CMD / D0–D3 | 12 / 13 / 11, 10, 9, 8 | GPIO matrix, 4 bit, 40 MHz |
 | C6 reset `SOC_EXTRF_RST` | 15 | → 1 kΩ → C6 EN (10 kΩ pull-up): low = reset |
-| C6 IO2 `RF_C6_IO2` | 14 | unused |
+| C6 IO2 `RF_C6_IO2` | 14 | UART1 RX at 3 Mbaud: the AirDrop receiver's frames from the C6 |
 | USB 2.0 HS OTG | dedicated | → USB-A socket: host port for the speaker |
 | USB Serial/JTAG | 24 / 25 | → USB-C socket |
-| I2S MCLK / SCLK / LRCK / DOUT / DIN | 30 / 27 / 29 / 26 / 28 | ES8388 codec (I2S0 TX: wheel click) and ES7210 mics (unused) |
+| I2S MCLK / SCLK / LRCK / DOUT / DIN | 30 / 27 / 29 / 26 / 28 | ES8388 codec (I2S0 TX: built-in speaker) and ES7210 mics (unused) |
 | UART0 TX / RX | 37 / 38 | also via the CH9102F on USB-C |
 | Strapping | 34–38 | `BOOT_GPIO35` |
 | RS-485 TX / RX / DIR | 20 / 21 / 34 | unused |
