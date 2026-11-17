@@ -108,23 +108,24 @@ The project's architecture document gives the rule in one sentence: anything tha
 
 The two `Cargo.toml` files show how the crates are connected. We begin with the firmware's manifest. Watch the two highlighted lines, an empty `[workspace]` table and the dependency on `wakey-core`.
 
-{% <code file="firmware/Cargo.toml" lines="9-36" hl="11 35" lang="toml"> %}{% raw %}
+{% <code file="firmware/Cargo.toml" lines="9-37" hl="11 36" lang="toml"> %}{% raw %}
 # The firmware is its own Cargo workspace: its target, build-std and
 # toolchain must not leak into host crates.
 [workspace]
 # ... @32
 [dependencies]
-# Hardware-independent logic (dates, audio files, resampling, descriptors,
-# config, scroll physics), tested on the host.
+# Hardware-independent logic (the alarm state machine, config, audio files,
+# resampling, TIDAL's protocol, AirDrop's frames, texts, sky, scroll
+# physics; the list is in its lib.rs), tested on the host.
 wakey-core = { path = "../wakey-core" }
 esp-idf-svc = { version = "0.53", features = ["std", "binstart", "alloc", "embassy-time-driver", "embassy-sync", "critical-section"] }
 {% endraw %}{% </code> %}
 
 Line 11 makes the firmware a Cargo workspace of its own. The comment above it says why: the settings of its build must not reach crates that are built for the host.
 
-Line 35 is the whole connection between the two crates. It is a path dependency, so Cargo compiles the source in `../wakey-core` again as part of the firmware, this time for the P4. The same code therefore exists in two builds: one for your computer, where the tests run, and one for the device.
+Line 36 is the whole connection between the two crates. It is a path dependency, so Cargo compiles the source in `../wakey-core` again as part of the firmware, this time for the P4. The same code therefore exists in two builds: one for your computer, where the tests run, and one for the device.
 
-Line 36 names `esp-idf-svc`, the Rust crate through which the code reaches ESP-IDF.
+Line 37 names `esp-idf-svc`, the Rust crate through which the code reaches ESP-IDF.
 
 {% <tip title="An empty `[workspace]` table keeps a crate to itself" id="own-workspace"> %}
 Crates in one repository often share one workspace. A `[workspace]` table with nothing in it does the opposite. It makes `firmware` the root of a workspace that contains only itself.

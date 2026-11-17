@@ -16,7 +16,7 @@ takeaways = [
   "What failed decides the treatment. Hardware the clock cannot run without stops the program, and everything optional is logged and left out.",
   "Inside a layer a failure travels as a `Result` with `?`. Drivers use `EspError`, file code uses `io::Error`, and `anyhow::Result` appears where several kinds meet.",
   "Across a layer boundary a service reports a small enum such as `net::Unavailable` or `tidal::Problem`. Only `app/texts.rs` turns it into words.",
-  "The board module's comment promises more than its code does: three kinds of chip are named when they are missing, and the other failures end in `expect(\"board init\")`.",
+  "Three kinds of chip panic with their name when they do not answer: the IO expanders, the RTC and the touch controller. The other failures of `Board::init` end in `expect(\"board init\")`.",
 ]
 +++
 
@@ -30,7 +30,7 @@ The firmware has four treatments. It stops, it passes the failure up as a `Resul
 
 A panic ends the program, and the firmware keeps it for parts without which nothing useful is left. The place to look is `Board::init`, which [chapter 6](@/wakey/06-board.md) read step by step. Here are a few of its lines again. Watch how the highlighted lines end.
 
-{% <code file="firmware/src/board/mod.rs" lines="75-85" hl="75 80-81 84-85"> %}{% raw %}
+{% <code file="firmware/src/board/mod.rs" lines="77-87" hl="77 82-83 86-87"> %}{% raw %}
         let ioexp = IoExpanders::new(i2c.clone())?;
         FreeRtos::delay_ms(10);
         ioexp.release_display_resets()?;
@@ -44,13 +44,13 @@ A panic ends the program, and the firmware keeps it for parts without which noth
         backlight.set_percent(0)?;
 {% endraw %}{% </code> %}
 
-The RTC is the real-time clock, the chip that keeps the time while the device is off. If it does not answer, the closure panics, and the message names the chip and its bus address. Two more places do the same. `IoExpanders::new`, called on line 75, checks with an `assert!` that both IO expanders answer, and its message is "IO expander 0x.. does not answer". (The expanders are two chips that switch power rails and reset lines.) The third place is `detect_panel`, which panics when no touch controller answers.
+The RTC is the real-time clock, the chip that keeps the time while the device is off. If it does not answer, the closure panics, and the message names the chip and its bus address. Two more places do the same. `IoExpanders::new`, called on line 77, checks with an `assert!` that both IO expanders answer, and its message is "IO expander 0x.. does not answer". (The expanders are two chips that switch power rails and reset lines.) The third place is `detect_panel`, which panics when no touch controller answers.
 
-Now look at how lines 75, 84 and 85 end: with `?`. An error from the expanders' register writes or from the backlight does not panic here. It leaves `Board::init` as an `anyhow::Error`, and the caller in `app::app` ends it with `Board::init().expect("board init")`. The same is true for the I2C driver and for the display.
+Now look at how lines 77, 86 and 87 end: with `?`. An error from the expanders' register writes or from the backlight does not panic here. It leaves `Board::init` as an `anyhow::Error`, and the caller in `app::app` ends it with `Board::init().expect("board init")`. The same is true for the I2C driver and for the display.
 
-This is a rough edge. The module's comment says "Required chips panic with their name". That holds for three kinds of chip: the expanders, the RTC and the touch controller. A display that does not start stops the program as well, but its panic carries the text "board init" and whatever the error says about itself. After this commit, the module's comment says so.
+The module's comment states both halves: the expanders, the RTC and the touch controller panic with their name, and other failures come back as the error of `Board::init`. So a display that does not start stops the program as well, but its panic carries the text "board init" and whatever the error says about itself.
 
-Outside the board, `app::app` stops in the same way with `expect("NVS")`, `expect("USB host")` and `expect("PPA")`, and `net::start` with `expect("wifi thread")`.
+Outside the board, `app::app` stops in the same way with `expect("NVS")`, `expect("USB host")` and `expect("PPA")`, `net::start` with `expect("wifi thread")`, and `input::start` with `expect("touch thread")`: without that thread the clock could not be operated at all. The PPA's rotator in `display/ppa.rs` stops the program on a timeout instead: a PPA that has made no progress for 2 s cannot be reset, so the rotator logs its last jobs and panics, and the reboot gives back a working clock.
 
 ## Pass it up: `Result`, and which error type where
 
@@ -63,7 +63,7 @@ Most failures are not fatal at the place where they happen, because that place d
 
 Here is the start of that function, which reads `config.json` from the memory card. Look at the return type on line 25 and at the error arms.
 
-{% <code file="firmware/src/config.rs" lines="25-51" hl="25 40 43-46"> %}{% raw %}
+{% <code file="firmware/src/config.rs" lines="25-54" hl="25 40 43-49"> %}{% raw %}
 pub fn load() -> Result<Config, String> {
     let path = sd::path(FILE);
     let mut cfg = match std::fs::read_to_string(&path) {
@@ -74,10 +74,13 @@ pub fn load() -> Result<Config, String> {
                 return Err(e.to_string());
             }
         },
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            log::info!("config: no {FILE} ({e})");
-            Config::default()
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => match recover(&path) {
+            Some(cfg) => cfg,
+            None => {
+                log::info!("config: no {FILE} ({e})");
+                Config::default()
+            }
+        },
         Err(e) => {
             log::error!("config: {FILE}: {e}");
             return Err(e.to_string());
@@ -85,12 +88,12 @@ pub fn load() -> Result<Config, String> {
     };
 {% endraw %}{% </code> %}
 
-The function meets two kinds of error: an `io::Error` from reading the file and a parse error from `Config::load`. On lines 40 and 49 it treats both alike: it logs the error and returns its text with `e.to_string()`. The doc comment says why a text is enough: the error is "in words, for the screen". The only caller shows it on an error page and never returns. [Chapter 4](@/wakey/04-startup.md#never-arm) has that call in its `never-arm` tip, and [chapter 15](@/wakey/15-state-on-device.md) explains the page.
+The function meets two kinds of error: an `io::Error` from reading the file and a parse error from `Config::load`. On lines 40 and 52 it treats both alike: it logs the error and returns its text with `e.to_string()`. The doc comment says why a text is enough: the error is "in words, for the screen". The only caller shows it on an error page and never returns. [Chapter 4](@/wakey/04-startup.md#never-arm) has that call in its `never-arm` tip, and [chapter 15](@/wakey/15-state-on-device.md) explains the page.
 
-Lines 43 to 46 are a different case. A match guard picks out one kind of `io::Error`, `NotFound`. A missing file means the first set-up, so this arm produces the defaults.
+Lines 43 to 49 are a different case. A match guard picks out one kind of `io::Error`, `NotFound`. A missing file usually means the first set-up, and then the inner `match` produces the defaults. Before that, `recover`, the function below `load`, looks for `config.tmp`. A power cut while the clock saves can leave that file behind instead of `config.json`, as [chapter 15](@/wakey/15-state-on-device.md#state-fat-rename) explains. If it parses, `recover` renames it into place, and `load` uses it.
 
 {% <tip title="`anyhow::bail!` and the format `{e:#}`" id="errors-anyhow-bail-alternate"> %}
-`net.rs` uses two small things from `anyhow`. The first is `anyhow::bail!("no NTP sync")` on line 523. It builds an error from a message and returns it at once.
+`net.rs` uses two small things from `anyhow`. The first is `anyhow::bail!("no NTP sync")` on line 525. It builds an error from a message and returns it at once.
 
 The second is `{e:#}` in the log call on line 297. An `anyhow::Error` can carry a chain of causes. The plain `{e}` prints the outermost message only, and the alternate form `{e:#}` prints the whole chain on one line.
 {% </tip> %}
@@ -140,11 +143,11 @@ The fourth policy is for everything optional. Chapter 6 showed it for the memory
 
 Where a failure is not even worth a line, the code writes `let _ = wifi.stop();`, as at the end of a Wi-Fi session in `net.rs`. `Result` is marked `#[must_use]`, and `let _ =` tells the compiler and the reader that the result is ignored on purpose.
 
-The same policy covers the camera that serves as a light meter (`ambient::start` logs and sets the backlight to full brightness) and three threads: `touch`, `ambient` and `ui-watch` log when they cannot be started. The [`full-queue-drops` pitfall](@/wakey/08-channels.md#full-queue-drops) in chapter 8 is the far end of this policy: there not even a log line is written.
+The same policy covers the camera that serves as a light meter (`ambient::start` logs and sets the backlight to full brightness) and two threads: `ambient` and `ui-watch` log when they cannot be started. The touch queue in [chapter 8](@/wakey/08-channels.md#full-queue-drops) applies the policy to single events: a lost move is counted in the log, but a press or a release is not optional and waits for room.
 
 NVS, the small key-value store ESP-IDF keeps in flash, shows two policies side by side. Taking the partition is required, as we saw. Opening the alarm's namespace in it, at the top of `AlarmClock::new`, is optional.
 
-{% <code file="firmware/src/app/alarm.rs" lines="65-68" hl="66-67"> %}{% raw %}
+{% <code file="firmware/src/app/alarm.rs" lines="69-72" hl="70-71"> %}{% raw %}
         let nvs = EspNvs::new(nvs, NVS_NAMESPACE, true)
             .inspect_err(|e| log::error!("alarm: NVS: {e}; the state will not survive a reboot"))
             .ok();
@@ -152,7 +155,7 @@ NVS, the small key-value store ESP-IDF keeps in flash, shows two policies side b
 {% endraw %}{% </code> %}
 
 {% <tip title="`inspect_err(..).ok()`: log the error, keep an `Option`" id="errors-inspect-err-ok"> %}
-Lines 66 and 67 turn a `Result` into an `Option` without losing the error. `inspect_err` runs a closure on the error and passes the `Result` on unchanged. `ok()` then drops the error and gives `Some(nvs)` or `None`.
+Lines 70 and 71 turn a `Result` into an `Option` without losing the error. `inspect_err` runs a closure on the error and passes the `Result` on unchanged. `ok()` then drops the error and gives `Some(nvs)` or `None`.
 
 The field has the type `Option<EspNvs<..>>`, and `follow` saves the state only `if let Some(nvs)`. The log line names the consequence: the state will not survive a reboot.
 {% </tip> %}

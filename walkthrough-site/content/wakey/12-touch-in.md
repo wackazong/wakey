@@ -93,7 +93,7 @@ With an enum, each case has a name and a doc comment, and the `match` in the loo
 
 Now the loop itself. Its signature ends with the parameter `mut hook: Option<&mut dyn FrameHook>`. The hook is optional, and it is a *trait object*: the loop does not know the concrete type behind it and calls its methods through a table of function pointers. The excerpt is the whole `Touch` stage. Watch the three highlighted lines: where an event comes from, who is asked, and what happens to the answer.
 
-{% <code file="firmware/src/ui/render_loop.rs" lines="251-280" hl="253 260 267"> %}{% raw %}
+{% <code file="firmware/src/ui/render_loop.rs" lines="250-279" hl="252 259 266"> %}{% raw %}
         enter(Stage::Touch);
         // Touch: route each event to the hook (e.g. list drags), or Slint.
         while let Some(ev) = woken_by.take().or_else(|| input::EVENTS.try_receive().ok()) {
@@ -104,7 +104,7 @@ Now the loop itself. Its signature ends with the parameter `mut hook: Option<&mu
                 continue;
             }
             let route = hook.as_mut().map_or(Route::Slint, |h| h.pointer(&ev));
-            // ... @267
+            // ... @266
             match route {
                 Route::Slint => {
                     dispatch(&window, &ev);
@@ -121,11 +121,11 @@ Now the loop itself. Its signature ends with the parameter `mut hook: Option<&mu
         }
 {% endraw %}{% </code> %}
 
-Line 253 takes one event per round. `woken_by` holds at most one event, and we will see where it is filled. `take()` empties it. If it was empty, `or_else` asks the channel with `try_receive`, which never waits and returns an error when the queue is empty. `ok()` turns that error into `None`, and `None` ends the `while let`.
+Line 252 takes one event per round. `woken_by` holds at most one event, and we will see where it is filled. `take()` empties it. If it was empty, `or_else` asks the channel with `try_receive`, which never waits and returns an error when the queue is empty. `ok()` turns that error into `None`, and `None` ends the `while let`.
 
-Line 260 asks the hook. Without a hook, `map_or` gives `Route::Slint`. With one, it calls `pointer`.
+Line 259 asks the hook. Without a hook, `map_or` gives `Route::Slint`. With one, it calls `pointer`.
 
-The `match` on line 267 carries the answer out. For `Route::Slint`, the helper `dispatch` translates our `TouchEvent` into the `WindowEvent` that Slint expects and hands it to the window. This is the moment a button's callback from chapter 11 runs. For `Route::Hook` there is nothing left to do. For `Route::TakeOver`, line 278 tells Slint that the pointer has left the window. A row that was shown as pressed is released without being clicked.
+The `match` on line 266 carries the answer out. For `Route::Slint`, the helper `dispatch` translates our `TouchEvent` into the `WindowEvent` that Slint expects and hands it to the window. This is the moment a button's callback from chapter 11 runs. For `Route::Hook` there is nothing left to do. For `Route::TakeOver`, line 277 tells Slint that the pointer has left the window. A row that was shown as pressed is released without being clicked.
 
 {% <tip title="`as_mut` borrows what is inside an `Option`" id="hook-as-mut"> %}
 Why `hook.as_mut().map_or(…)` and not `hook.map_or(…)`? `map_or` takes the `Option` by value. An `Option<&mut dyn FrameHook>` is not `Copy`, because two copies of a `&mut` must not exist. So the plain call would move `hook` away, and the next round of the loop would have none. The compiler rejects that.
@@ -133,12 +133,12 @@ Why `hook.as_mut().map_or(…)` and not `hook.map_or(…)`? `map_or` takes the `
 `as_mut()` takes `&mut hook` and returns a new, short-lived `Option` with a reference to the content. That one may be used up. `hook` itself stays where it is, which is why `hook.as_mut()` appears at every use in this function.
 {% </tip> %}
 
-Lines 254 to 259 and 270 to 274 belong together, and they solve one problem with the flag `drop_touch`.
+Lines 253 to 258 and 269 to 273 belong together, and they solve one problem with the flag `drop_touch`.
 
 {% <pitfall title="A press that changes the page must not release on the new one" id="touch-drop-rest"> %}
 Some buttons act when they are pressed, and some of those change the page. The finger is then still down, and its `Up` has yet to arrive. Sent to Slint, that `Up` would land on the new page, as a tap on whatever lies under the finger there.
 
-So after a `Down` is dispatched, line 270 asks `transition::pending()` whether that press requested a page change. If so, the loop sets `drop_touch`. Lines 256 to 258 then skip every later event of this touch, up to and including its `Up`. The next `Down` clears the flag.
+So after a `Down` is dispatched, line 269 asks `transition::pending()` whether that press requested a page change. If so, the loop sets `drop_touch`. Lines 255 to 257 then skip every later event of this touch, up to and including its `Up`. The next `Down` clears the flag.
 {% </pitfall> %}
 
 After the touch stage the loop calls `slint::platform::update_timers_and_animations()`. Slint has no thread of its own, so this call is where its timers fire, the ones from chapter 11 included. If a page change was requested, the loop then plays the slide and starts the next pass. Otherwise it renders and presents a frame, which is chapter 13.
@@ -147,7 +147,7 @@ After the touch stage the loop calls `slint::platform::update_timers_and_animati
 
 The next excerpt is the end of the function, where the loop decides whether to go round at once. The highlighted lines are the hook's background work and the wait.
 
-{% <code file="firmware/src/ui/render_loop.rs" lines="398-412" hl="402-404 409-411"> %}{% raw %}
+{% <code file="firmware/src/ui/render_loop.rs" lines="397-411" hl="401-403 408-410"> %}{% raw %}
         if !window.has_active_animations() && !hook_active && !other_buffer_stale {
             stats.maybe_log();
             // Background work first (one piece), then sleep until the next
@@ -165,11 +165,11 @@ The next excerpt is the end of the function, where the loop decides whether to g
         }
 {% endraw %}{% </code> %}
 
-The condition on line 398 has three parts. No Slint animation is running, the hook is not changing the screen, and no frame buffer has to catch up (chapter 13). Only then may the loop rest. First, on line 402, the hook gets a turn for one small piece of background work. If it says there is more, the loop goes round again, so a touch is noticed between two pieces.
+The condition on line 397 has three parts. No Slint animation is running, the hook is not changing the screen, and no frame buffer has to catch up (chapter 13). Only then may the loop rest. First, on line 401, the hook gets a turn for one small piece of background work. If it says there is more, the loop goes round again, so a touch is noticed between two pieces.
 
-Lines 406 to 408 work out how long to wait. Slint tells how long until its next timer is due. The loop waits that long, but never longer than `MAX_SLEEP`, 100 ms.
+Lines 405 to 407 work out how long to wait. Slint tells how long until its next timer is due. The loop waits that long, but never longer than `MAX_SLEEP`, 100 ms.
 
-Line 409 is the wait. `select` from `embassy_futures` takes two futures and finishes when the first of them does. Here they are a timer and `EVENTS.receive()`, and this is the `await` that chapter 8 pointed to. `Either::First` means the time is up. `Either::Second(ev)` means a touch arrived. `receive` has already taken that event out of the queue, so the loop keeps it in `woken_by`. Line 253 finds it there on the next pass.
+Line 408 is the wait. `select` from `embassy_futures` takes two futures and finishes when the first of them does. Here they are a timer and `EVENTS.receive()`, and this is the `await` that chapter 8 pointed to. `Either::First` means the time is up. `Either::Second(ev)` means a touch arrived. `receive` has already taken that event out of the queue, so the loop keeps it in `woken_by`. Line 252 finds it there on the next pass.
 
 [Chapter 9](@/wakey/09-flags-and-locks.md) gave the reason for the 100 ms limit: a request stored in an atomic wakes nobody. The loop has to come round and look.
 
@@ -177,7 +177,7 @@ Line 409 is the wait. `select` from `embassy_futures` takes two futures and fini
 
 The requests in question are the ones in `ui::power`. At the top of every pass the loop calls `power::take_request()`. If the request asks for a state the display is not in, the loop calls `switch_refresh`. For sleep, that function sets the `asleep` flag, waits 150 ms so that the light meter's thread can switch the backlight off, and halves the panel's refresh rate.
 
-While the display is asleep, each pass takes a short cut right after this check, in lines 231 to 250. It still runs Slint's timers. That matters, because the check that wakes the display for a ringing alarm is a Slint timer in `app/power.rs`. Then the loop looks for a touch event in the same way as the touch stage does. A `Down` calls `power::wake()` and sets `drop_touch`, so the touch that wakes the display presses nothing. Without an event, the loop waits in the same `select` as above, for `MAX_SLEEP`. Every path ends in `continue`, so nothing is drawn.
+While the display is asleep, each pass takes a short cut right after this check, in lines 230 to 249. It still runs Slint's timers. That matters, because the check that wakes the display for a ringing alarm is a Slint timer in `app/power.rs`. Then the loop looks for a touch event in the same way as the touch stage does. A `Down` calls `power::wake()` and sets `drop_touch`, so the touch that wakes the display presses nothing. Without an event, the loop waits in the same `select` as above, for `MAX_SLEEP`. Every path ends in `continue`, so nothing is drawn.
 
 The next pass finds the wake request. `switch_refresh` restores the refresh rate, and the loop sets a local flag, `waking`, so that the short cut no longer applies and the pass draws a frame. Only when that frame has been presented does the loop call `power::set_asleep(false)`.
 

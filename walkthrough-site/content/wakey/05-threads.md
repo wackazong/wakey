@@ -76,10 +76,10 @@ So far no thread has been started. That happens in `spawn`.
 
 Every call site ends its chain with `spawn` and passes it the closure that the new thread will run. `spawn` wraps the standard library's own call for starting a thread in a closure, and hands that closure to a private method named `configured`.
 
-`configured` is where the three extra settings reach the operating system. As you read it, follow the variable `previous` from line 103 to line 121.
+`configured` is where the three extra settings reach the operating system. As you read it, follow the variable `previous` from line 105 to line 127.
 
-{% <code file="firmware/src/runtime.rs" lines="101-125" hl="103 117 120-121"> %}{% raw %}
-    fn configured<R>(self, spawn: impl FnOnce(&'static str) -> R) -> R {
+{% <code file="firmware/src/runtime.rs" lines="103-131" hl="105 119-124 126-127"> %}{% raw %}
+    fn configured<R>(self, spawn: impl FnOnce(&'static str) -> R) -> std::io::Result<R> {
         let name = self.name.to_str().unwrap_or("thread");
         let previous = ThreadSpawnConfiguration::get().unwrap_or_default();
         let defaults = ThreadSpawnConfiguration::default();
@@ -96,26 +96,34 @@ Every call site ends its chain with `spawn` and passes it the closure that the n
             ..defaults
         };
         if let Err(e) = config.set() {
-            log::warn!("{name}: thread configuration not set: {e}");
+            // A partly set configuration is put back as well.
+            let _ = previous.set();
+            return Err(std::io::Error::other(format!(
+                "{name}: thread configuration not set: {e}"
+            )));
         }
         let result = spawn(name);
         if let Err(e) = previous.set() {
             log::warn!("{name}: thread configuration not restored: {e}");
         }
-        result
+        Ok(result)
     }
 {% endraw %}{% </code> %}
 
-Line 103 asks ESP-IDF for the spawn configuration that is in force right now, and keeps it in `previous`. Lines 105 to 116 then build the configuration for the new thread. Where the builder holds `None` for the priority, the code takes ESP-IDF's default. Lines 110 to 114 choose the memory for the stack, and `MallocCap::Spiram` is ESP-IDF's name for PSRAM.
+Line 105 asks ESP-IDF for the spawn configuration that is in force right now, and keeps it in `previous`. Lines 107 to 118 then build the configuration for the new thread. Where the builder holds `None` for the priority, the code takes ESP-IDF's default. Lines 112 to 116 choose the memory for the stack, and `MallocCap::Spiram` is ESP-IDF's name for PSRAM.
 
-Line 117 puts this configuration in force, line 120 runs the closure that actually spawns the thread, and line 121 restores `previous`. If setting or restoring fails, the code writes a warning to the log and carries on.
+Line 119 puts this configuration in force, line 126 runs the closure that actually spawns the thread, and line 127 restores `previous`.
+
+If the new configuration cannot be set, lines 120 to 124 put `previous` back and return an error instead of starting a thread that would run on any core at the default priority.
+
+So `configured` returns `std::io::Result<R>`, and `R` is itself the `io::Result` of the standard library's spawn call. `spawn` ends with `})?`: the `?` returns the outer error and leaves the inner `Result` as `spawn`'s value.
 
 Why save and restore at all? The comment above the function says that ESP-IDF keeps the configuration per thread.
 
 {% <pitfall title="A setting that stays behind after the call" id="spawn-config-per-thread"> %}
 The standard library's spawn call has no parameter for a core or a priority. ESP-IDF instead keeps a spawn configuration for each thread, and it applies to the threads that this thread creates from then on.
 
-So `config.set()` on line 117 is not an argument to one spawn. It changes a setting of the calling thread, and the setting stays. Without line 121, a thread that the same caller creates later by another route, for example through a library that calls `std::thread::spawn`, would also get the name, the core and the priority that were meant for one thread only. That is why `configured` puts the old values back.
+So `config.set()` on line 119 is not an argument to one spawn. It changes a setting of the calling thread, and the setting stays. Without line 127, a thread that the same caller creates later by another route, for example through a library that calls `std::thread::spawn`, would also get the name, the core and the priority that were meant for one thread only. That is why `configured` puts the old values back.
 {% </pitfall> %}
 
 The builder has a second method to start a thread, `spawn_scoped`. It goes through `configured` too, and one thread uses it.
@@ -138,19 +146,19 @@ The table lists the twelve call sites of `Thread::new`, plus the main thread, wh
 | `decoder` | 64 KiB, PSRAM | 1 | 5 | Decodes one sound. It exists while the sound plays. |
 | `card-writer` | 6 KiB | 1 | 4 | Writes blocks to the memory card during a TIDAL download. |
 | `wifi` | 16 KiB | 1 | 1 | Runs Wi-Fi sessions and the jobs that need the network. |
+| `cover` | 64 KiB, PSRAM | 1 | 1 | Decodes one album cover and is joined at once. |
 | `usb-lib` | 4 KiB | any | 5 | Runs the event loop of ESP-IDF's USB host library. |
 | `uac` | 8 KiB | any | 5 | Drives the USB speaker. |
 | `speaker` | 4 KiB | any | 5 | Mixes the sound for the built-in speaker. |
 | `ambient` | 6 KiB | any | 5 | Measures the room's light every 10 s and sets the backlight. |
 | `ui-watch` | 4 KiB | any | 5 | Reports when the render loop has stopped. |
-| `cover` | 64 KiB, PSRAM | any | 5 | Decodes one album cover and is joined at once. |
 | `task-stats` | 6 KiB | any | 5 | Logs processor time per thread every 5 s. Only with the feature `task-stats`. |
 
 {{ <svg src="img/threads.svg" caption="The threads by core and by priority. A thread higher up runs first when two on the same core are ready." /> }}
 
 ## Three placements and their reasons
 
-The picture shows four threads pinned to core 1, one above the other. The code explains each placement in a comment at its call site, and we read three of them.
+The picture shows five threads pinned to core 1. The code explains each placement in a comment at its call site, and we read three of them.
 
 **`touch`, core 1, priority 6.** [Chapter 3](@/wakey/03-executor.md) explained why touch is a thread and not a task: a task would wait behind long frames. The module comment in `ui/input.rs` adds the number. As a task, two reads of the touch controller could be up to 90 ms apart, and a quick swipe measured from so few points has no speed. The comment on `input::start` explains the priority. The decoder runs on the same core at priority 5 and could hold the touch thread off, so touch stands one step above it. One read takes well under a millisecond.
 
@@ -158,26 +166,26 @@ The picture shows four threads pinned to core 1, one above the other. The code e
 
 **`wifi`, core 1, priority 1.** The comment in `net.rs` says that a download takes about half a core. At priority 1 the thread stands below the decoder and the card writer, so that neither of them starves. And it is kept off core 0, because there, at the priority of the user interface, it makes animations stutter.
 
-Read together, the comments describe one rule: core 1 is shared in order of urgency: touch first, then sound, then the card, then the network.
+Read together, the comments describe one rule: core 1 is shared in order of urgency: touch first, then sound, then the card, then the network. The `cover` thread works for the network and sits at its level.
 
 ## A watchdog that only reads
 
 One thread in the table does no work for the clock itself: `ui-watch`. The render loop is the loop on the `app` thread that draws every frame, and [chapter 12](@/wakey/12-touch-in.md) reads it. In the excerpt, look at what the watching thread touches: the two highlighted loads.
 
-{% <code file="firmware/src/app/mod.rs" lines="357-369" hl="358 362"> %}{% raw %}
+{% <code file="firmware/src/app/mod.rs" lines="356-368" hl="357 361"> %}{% raw %}
     let watch = runtime::Thread::new(c"ui-watch", 4096).spawn(|| {
         let mut last = render_loop::ITERATIONS.load(Relaxed);
         let mut still = 0u32;
         loop {
             std::thread::sleep(Duration::from_secs(1));
             let now = render_loop::ITERATIONS.load(Relaxed);
-            // ... @368
+            // ... @367
             still += 1;
             if still == 2 || still.is_multiple_of(10) {
 {% endraw %}{% </code> %}
 
 Once a second the thread reads `render_loop::ITERATIONS`. This is an atomic counter in a `static`, and the render loop adds one to it each time it goes round. If the number has changed, the skipped lines reset `still` to zero. If it has not, `still` counts the seconds. After two seconds, and then every ten, the thread writes an error to the log. The message names the stage the render loop is in, the number of frames the panel has shown, and whether the touch thread is in the middle of a read. All three come from atomics as well.
 
-The thread does not restart or repair anything. It only reports, and it needs neither a channel nor a handle to the user interface for that. The render loop writes a number, and another thread reads it.
+The thread repairs nothing. It only reads a number that the render loop writes, with no channel and no handle to the user interface.
 
 For our two questions: the parts work together as up to thirteen threads on two cores, and their priorities settle who waits for whom. The state that the watchdog reads lives in atomics in `static`s. [Chapter 8](@/wakey/08-channels.md) and [chapter 9](@/wakey/09-flags-and-locks.md) look at how these threads talk to each other. First, the [next chapter](@/wakey/06-board.md) returns to the hardware they share.

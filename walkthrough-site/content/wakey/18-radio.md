@@ -59,7 +59,7 @@ Two variables, declared above the loop, decide whether a session starts. `due` i
 
 Line 271 starts a session if either is the case. Line 274 runs it, and line 275 switches the C6 off afterwards, whatever the result was. The `match` then decides how long to wait before the next session.
 
-Below the excerpt, an inner loop waits until AirDrop is wanted, the next session is due, or a job arrives in the channel. It waits with `self.jobs.recv_timeout`, so a new job ends the wait at once.
+Below the excerpt, an inner loop waits until AirDrop is wanted, the next session is due, or a job arrives in the channel. It waits with `self.jobs.recv_timeout`, so a new job ends the wait at once. A job that a session gave back unrun, as below, ends the wait before it starts: `job` holds only one, and a new job received into it would push the old one out without an answer.
 
 The diagram shows what happens inside one session that was started for a job.
 

@@ -108,8 +108,8 @@ A `fn` pointer takes only what captures nothing. An `impl Fn` parameter takes an
 `Box<dyn …>` gives every closure the one type that a channel needs. `FnOnce` lets the job move its captures out, and `Send` lets it cross to the `wifi` thread.
 {% </tip> %}
 
-{% <tip title="A closure that keeps its own state" id="sound-closure-counter" chapter="17-sound"> %}
-The source closure owns its counter `frames`, so the counter needs no lock. Changing it makes the closure an `FnMut`.
+{% <tip title="An atomic that is changed under a lock" id="sound-played-under-lock" chapter="17-sound"> %}
+An atomic can be changed through `&`, but a `load` and a `store` are two steps. The fade-in's count is read and written under the ring's lock, so a reset cannot fall between them.
 {% </tip> %}
 
 ## Handles, shared state and threads
@@ -124,8 +124,8 @@ A service returns a small `Clone` struct with an `Arc` or a channel sender insid
 `UsbAudio` keeps its `Sender` and its command enum private and offers methods. The protocol between the two threads stays in one module.
 {% </tip> %}
 
-{% <pitfall title="A full queue drops the event, even the last one" id="full-queue-drops" chapter="08-channels"> %}
-`try_send` fails when the touch queue is full, and `let _ =` discards the event. A lost `Up` is a rough edge, because the thread never sends it again.
+{% <pitfall title="A full queue: drop a move, wait for the rest" id="full-queue-drops" chapter="08-channels"> %}
+`try_send` fails when the touch queue is full. A `Move` is dropped and counted, because the next one follows. A `Down` or an `Up` must arrive, so the thread retries until there is room.
 {% </pitfall> %}
 
 {% <tip title="`swap` takes a value and leaves an empty one behind" id="atomic-swap-take" chapter="09-flags-and-locks"> %}
@@ -201,7 +201,7 @@ In `session` the Wi-Fi driver must go before the transport. Rust's drop rules gi
 {% </pitfall> %}
 
 {% <pitfall title="FAT cannot rename onto an existing file" id="state-fat-rename" chapter="15-state-on-device"> %}
-`sd::replace` must remove the old file before it renames the temporary one. A power failure in between leaves only `config.tmp`, and the next start uses the defaults.
+`sd::replace` must remove the old file before it renames the temporary one. A power failure in between leaves only `config.tmp`, so `config::load` looks for it and puts it back.
 {% </pitfall> %}
 
 {% <pitfall title="Do not measure a duration with wall-clock time" id="alarm-two-clocks" chapter="14-state-machine"> %}

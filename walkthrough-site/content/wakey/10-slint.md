@@ -46,10 +46,10 @@ The words in front of `property` say who may do that. An `in` property is set fr
 
 A window is not the only place for properties. The pages keep theirs in *globals*. The next excerpt is the global of the alarm list page. Watch for one property and one callback.
 
-{% <code file="firmware/ui/wakey/alarm_list.slint" lines="72-85" hl="73 83" lang="slint"> %}{% raw %}
+{% <code file="firmware/ui/wakey/alarm_list.slint" lines="72-88" hl="73 86" lang="slint"> %}{% raw %}
 export global AlarmList {
     in property <[AlarmRow]> rows;
-    // ... @80
+    // ... @83
     callback back();
     callback add();
     callback open(int);
@@ -60,7 +60,7 @@ export global AlarmList {
 
 A global is a group of properties and callbacks that exists once per window and has a name, here `AlarmList`. Every element of the page can read it, and so can Rust. Line 73 is the list's content: `rows` is an array of `AlarmRow`, a struct that the same file declares.
 
-Line 83 is a *callback*. A callback is the opposite direction of a property. The Slint side calls it when something happens, and Rust supplies the code that runs. `toggle(int, bool)` is called when the user taps the switch of an alarm, with the alarm's id and the new position of the switch.
+Line 86 is a *callback*. A callback is the opposite direction of a property. The Slint side calls it when something happens, and Rust supplies the code that runs. `toggle(int, bool)` is called when the user taps the switch of an alarm, with the alarm's id and the new position of the switch.
 
 That is all the Slint we need. A page is a component, it reads its content from the properties of a global, and it reports what the user did through the callbacks of the same global.
 

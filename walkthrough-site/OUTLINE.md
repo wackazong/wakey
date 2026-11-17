@@ -1,6 +1,6 @@
 # Wakey walkthrough: outline
 
-Status: approved; chapters re-cut after the language review (see Chapters). Describes commit `0fdbf78` (`0fdbf78c309dc42f31156f35a182ff552810e6bb`, `main`).
+Status: approved; chapters re-cut after the language review (see Chapters). First written for commit `0fdbf78`; the walkthrough now describes `888a2a1` (the review fixes), see `commit` in `content/wakey/_index.md`.
 
 ## What I read
 

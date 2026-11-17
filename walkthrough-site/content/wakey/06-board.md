@@ -39,7 +39,7 @@ So there can be only one `Peripherals` in the program. Its fields can be moved o
 
 Before we read the function, we look at its result. The struct `Board` has nine fields, and their types tell us a good deal.
 
-{% <code file="firmware/src/board/mod.rs" lines="42-60"> %}{% raw %}
+{% <code file="firmware/src/board/mod.rs" lines="44-62"> %}{% raw %}
 pub struct Board {
     /// The system I2C bus (touch polling uses it directly).
     pub i2c: SharedI2c,
@@ -71,7 +71,7 @@ The remaining two, `i2c` and `ioexp`, are the shared ones. I2C is a two-wire bus
 
 Now the function itself. It is numbered by its own comments from 1 to 7, and the next excerpt shows steps 1 to 6. Watch the highlighted lines: the `take`, two pins that are converted, the clock chip that must answer, and the detection of the panel.
 
-{% <code file="firmware/src/board/mod.rs" lines="64-94" hl="64 69-70 80-81 90"> %}{% raw %}
+{% <code file="firmware/src/board/mod.rs" lines="66-96" hl="66 71-72 82-83 92"> %}{% raw %}
         let p = Peripherals::take()?;
 
         // 1. I2C with bus recovery.
@@ -105,9 +105,9 @@ Now the function itself. It is numbered by its own comments from 1 to 7, and the
         let display = Display::new(p.dsi, variant)?;
 {% endraw %}{% </code> %}
 
-Line 64 is the one `Peripherals::take` of the whole firmware. Everything else in the function moves fields out of `p`.
+Line 66 is the one `Peripherals::take` of the whole firmware. Everything else in the function moves fields out of `p`.
 
-Step 1 creates the driver for the I2C bus from the controller `p.i2c0` and two pins, and wraps it in `Arc<Mutex<…>>`. Step 2 creates the handle for the IO expanders and gives it a clone of the bus. According to the comment, this first switches the power rails off and holds the screen and the touch controller in reset. After 10 ms, the shortest reset pulse those chips accept, line 77 releases the resets.
+Step 1 creates the driver for the I2C bus from the controller `p.i2c0` and two pins, and wraps it in `Arc<Mutex<…>>`. Step 2 creates the handle for the IO expanders and gives it a clone of the bus. According to the comment, this first switches the power rails off and holds the screen and the touch controller in reset. After 10 ms, the shortest reset pulse those chips accept, line 79 releases the resets.
 
 Step 3 sets up the real-time clock, and here we meet the first of two policies for missing hardware. `Rx8130::new` returns a `Result`. If the chip does not answer, `unwrap_or_else` runs a closure that panics, and the message names the chip and its bus address. The module's comment calls such chips required. A panic that says "RX8130 RTC at 0x32 does not answer" tells whoever reads the log which part to look at.
 
@@ -118,17 +118,17 @@ Step 5 solves a problem that only real products have. The module's comment says 
 The IO expanders in step 2 are treated the same way: `IoExpanders::new` checks that both answer and panics with the address of the one that does not. The remaining failures are not named. The I2C driver, the writes to the expanders, the backlight and the display end in `?`, so an error there travels up to `app::app`, which stops at its `expect("board init")`. [Chapter 20](@/wakey/20-errors.md) compares these policies.
 
 {% <tip title="`degrade_input_output`: one type for any pin" id="degrade-pin"> %}
-`p.pins.gpio31` has the type `Gpio31`. That is what makes the single-owner check work, but a function that should accept any pin cannot name one such type. Lines 69 and 70 call `degrade_input_output()`, which turns the pin into an `AnyIOPin`. Afterwards the pin number is no longer part of the type.
+`p.pins.gpio31` has the type `Gpio31`. That is what makes the single-owner check work, but a function that should accept any pin cannot name one such type. Lines 71 and 72 call `degrade_input_output()`, which turns the pin into an `AnyIOPin`. Afterwards the pin number is no longer part of the type.
 
 With the erased type, `SysI2c::new` and the fields of `CodecPins` do not have to name pin numbers in their signatures. `SdPins` in `board/sd.rs` goes the other way and keeps the exact types, `Gpio39` to `Gpio44`. Ownership is the same in both cases: the pin has been moved, and `p` no longer has it.
 {% </tip> %}
 
 The seventh step is the memory card, and it shows the second policy.
 
-{% <code file="firmware/src/board/mod.rs" lines="96-116" hl="112-115"> %}{% raw %}
+{% <code file="firmware/src/board/mod.rs" lines="98-118" hl="114-117"> %}{% raw %}
         // 7. microSD (optional).
         let sd = match sd::mount(
-        // ... @107
+        // ... @109
         ) {
             Ok(card) => {
                 log::info!("board: microSD mounted at {}", sd::MOUNT_POINT);

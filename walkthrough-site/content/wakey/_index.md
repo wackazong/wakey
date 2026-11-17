@@ -8,7 +8,7 @@ weight = 1
 kicker = "Rust · embedded · walkthrough"
 tags = ["Rust", "ESP-IDF", "Embassy", "Slint", "ESP32-P4"]
 # The commit every excerpt is taken from, and where the file names link to.
-commit = "0fdbf78c309dc42f31156f35a182ff552810e6bb"
+commit = "888a2a19da0f9dc0081ce345797b496f491d0d94"
 repo = "https://github.com/wackazong/wakey"
 # The "where we are" map, in this folder.
 map = "map.svg"

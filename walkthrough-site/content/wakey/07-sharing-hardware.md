@@ -88,9 +88,9 @@ The `SAFETY` comment claims one thing: the pin drivers made from the reborrowed 
 
 Two chips on the bus are *IO expanders*. An IO expander gives the processor eight more pins, which the firmware sets by writing a register over I2C. These pins switch power supplies and reset lines, for example the 3.3 V of the Wi-Fi chip and the 5 V of the USB port. Several services need one, so the expanders are shared as well. The next excerpt shows two types. We start with the second.
 
-{% <code file="firmware/src/board/ioexp.rs" lines="72-91" hl="72 89-90"> %}{% raw %}
+{% <code file="firmware/src/board/ioexp.rs" lines="73-92" hl="73 90-91"> %}{% raw %}
 pub type Switch = Box<dyn Fn(bool) -> Result<(), EspError> + Send>;
-// ... @87
+// ... @88
 #[derive(Clone)]
 pub struct IoExpanders {
     bus: SharedI2c,
@@ -100,9 +100,9 @@ pub struct IoExpanders {
 
 `IoExpanders` has two fields. `bus` is a clone of the shared bus. `images` is a pair of `Image` values, one per chip, behind a second `Arc<Mutex<..>>`. An `Image` is the firmware's copy of one chip's registers. The comment on `Image` gives the reason for the copy: the firmware is the only writer, so the copy stays in sync with the chip, and every change is a single register write.
 
-`#[derive(Clone)]` on line 87 makes the handle cheap to copy. A clone copies two `Arc`s, so all clones share one bus and one pair of images. Next we see how a pin is set through such a handle.
+`#[derive(Clone)]` on line 88 makes the handle cheap to copy. A clone copies two `Arc`s, so all clones share one bus and one pair of images. Next we see how a pin is set through such a handle.
 
-{% <code file="firmware/src/board/ioexp.rs" lines="134-171" hl="136 142 169-170"> %}{% raw %}
+{% <code file="firmware/src/board/ioexp.rs" lines="135-172" hl="137 143 170-171"> %}{% raw %}
     /// Runs `f` with the bus and the register image of expander `addr`.
     fn with<R>(&self, addr: u8, f: impl FnOnce(&mut SysI2c, u8, &mut Image) -> R) -> R {
         let mut images = self.images.lock().unwrap_or_else(|e| e.into_inner());
@@ -113,7 +113,7 @@ pub struct IoExpanders {
         };
         f(&mut i2c::lock(&self.bus), addr, img)
     }
-    // ... @154
+    // ... @155
     /// Drives an output pin.
     pub fn set(&self, pin: Pin, level: bool) -> Result<(), EspError> {
         let (addr, bit) = pin.location();
@@ -134,19 +134,19 @@ pub struct IoExpanders {
     }
 {% endraw %}{% </code> %}
 
-Start with `set` on line 155. It asks the pin for its chip's address and its bit number. Then it calls `with` and passes a closure. The closure changes one bit in the cached output byte and writes the whole byte to the chip.
+Start with `set` on line 156. It asks the pin for its chip's address and its bit number. Then it calls `with` and passes a closure. The closure changes one bit in the cached output byte and writes the whole byte to the chip.
 
-`with`, on line 135, does the locking. Line 136 locks the images, and the lines after it pick the image of the right chip. Line 142 then locks the bus and calls the closure with both.
+`with`, on line 136, does the locking. Line 137 locks the images, and the lines after it pick the image of the right chip. Line 143 then locks the bus and calls the closure with both.
 
 {% <pitfall title="Change the copy and the chip under one lock" id="cached-register"> %}
 An output register holds eight pins in one byte. Imagine two threads that each change a different pin of the same chip. If each took the byte, changed its bit and wrote it back with no lock around all three steps, the later write could undo the earlier one.
 
-`with` prevents this. The guard `images` from line 136 lives until the function returns, so it is still held while the byte is written. A second thread waits there and then starts from the new byte.
+`with` prevents this. The guard `images` from line 137 lives until the function returns, so it is still held while the byte is written. A second thread waits there and then starts from the new byte.
 {% </pitfall> %}
 
 ## A switch is a closure
 
-Now back to `Switch`, on line 72 of the earlier excerpt. It is a boxed closure that takes `true` or `false` and may fail with an `EspError`. The method `switch`, on lines 168 to 171, makes one: it clones the handle and moves the clone and the pin into a closure.
+Now back to `Switch`, on line 73 of the earlier excerpt. It is a boxed closure that takes `true` or `false` and may fail with an `EspError`. The method `switch`, on lines 169 to 172, makes one: it clones the handle and moves the clone and the pin into a closure.
 
 Two services get a `Switch`: Wi-Fi the one for `Pin::WlanPwrEn`, the USB speaker the one for `Pin::Usb5vEn`. Each turns its own supply on and off by calling the closure, as in `(self.power)(true)`. Neither can reach the other pins or the bus, because the type gives them no way to name these. The `+ Send` lets the closure move to the service's thread. [Chapter 2](@/wakey/02-layers.md) gave the rule behind this: a service gets what it needs as an argument.
 
@@ -154,7 +154,7 @@ Two services get a `Switch`: Wi-Fi the one for `Pin::WlanPwrEn`, the USB speaker
 
 The modem is the handle that stands for the radio, and only the `wifi` thread owns it. The sharing happens inside that thread, over time. Each Wi-Fi session builds a new driver with `EspWifi::new`, which takes a modem by value. The thread's loop needs the modem again for the next session.
 
-{% <code file="firmware/src/net.rs" lines="350-359" hl="353-355"> %}{% raw %}
+{% <code file="firmware/src/net.rs" lines="352-361" hl="355-357"> %}{% raw %}
     fn session(&self, modem: &mut Modem<'static>, job: JobGuard) -> anyhow::Result<Outcome> {
         let t = Instant::now();
         let transport = self.c6.connect()?;
@@ -167,7 +167,7 @@ The modem is the handle that stands for the radio, and only the `wifi` thread ow
         )?;
 {% endraw %}{% </code> %}
 
-`session` receives `&mut Modem` from the loop. Line 355 turns that reference into a modem value with a shorter lifetime, and line 357 gives it to the driver. Further down, the driver is moved into the code that does the session's work and is dropped there.
+`session` receives `&mut Modem` from the loop. Line 357 turns that reference into a modem value with a shorter lifetime, and line 359 gives it to the driver. Further down, the driver is moved into the code that does the session's work and is dropped there.
 
 {% <unsafe title="One modem, one driver at a time" id="unsafe-modem-reborrow"> %}
 `modem.reborrow()` creates a second handle to the same modem, as the pin reborrow did.

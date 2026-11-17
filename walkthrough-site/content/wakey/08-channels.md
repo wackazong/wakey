@@ -13,8 +13,8 @@ goals = [
   "why a boxed closure can be a message, and why some closures are handed over only once",
 ]
 takeaways = [
-  "`input::EVENTS` is the only channel that leads into the `async` task. The `touch` thread fills it with `try_send`, which never waits. The task takes the events out with `try_receive` and, when it is idle, waits on `receive()`.",
-  "A queue with a limit forces a decision when it is full. The firmware drops touch events and wheel clicks, and it waits for everything that must arrive.",
+  "`input::EVENTS` is the only channel that leads into the `async` task. The `touch` thread fills it with `try_send`, which never waits; only a full queue makes the thread wait, and only for a press or a release. The task takes the events out with `try_receive` and, when it is idle, waits on `receive()`.",
+  "A queue with a limit forces a decision when it is full. The firmware drops touch moves and wheel clicks, and it waits for everything that must arrive, a touch's press and release included.",
   "`UsbAudio`, `BuiltinSpeaker` and `Wifi` are handles. Each keeps its `Sender` private and offers methods instead. The two speakers keep their message type private as well.",
   "A `Job` is a boxed closure sent through a channel, so the `wifi` thread runs code it knows nothing about. `Source` and `on_time_synced` are closures that are handed over once and then called many times.",
 ]
@@ -30,42 +30,47 @@ The picture shows every message path in the firmware.
 
 ## The one channel into the task
 
-We begin with touch. The `touch` thread asks the touch controller for a finger position every 10 ms, and the user interface runs on the `app` thread inside the one `async` task. Something has to carry the events across. In the next excerpt, look at the declaration on line 69 and at the two highlighted lines of `release`, which reports a lifted finger.
+We begin with touch. The `touch` thread asks the touch controller for a finger position every 10 ms, and the user interface runs on the `app` thread inside the one `async` task. Something has to carry the events across. In the next excerpt, look at the declaration on line 69 and at `queue`, the function every touch event goes through.
 
-{% <code file="firmware/src/ui/input.rs" lines="68-91" hl="69 83 89"> %}{% raw %}
+{% <code file="firmware/src/ui/input.rs" lines="68-104" hl="69 90 93-98 100-103"> %}{% raw %}
 /// The touch events, oldest first; the render loop takes them out.
 pub static EVENTS: Channel<CriticalSectionRawMutex, TouchEvent, 32> = Channel::new();
-// ... @81
-fn release(down: &mut bool, last: (f32, f32)) {
-    if *down {
-        let _ = EVENTS.try_send(TouchEvent {
-            phase: Phase::Up,
-            x: last.0,
-            y: last.1,
-            at: Instant::now(),
-        });
-        *down = false;
+// ... @89
+fn queue(event: TouchEvent) {
+    if EVENTS.try_send(event).is_ok() {
+        return;
+    }
+    if event.phase == Phase::Move {
+        let dropped = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+        if dropped.is_power_of_two() {
+            log::warn!("touch: queue full, {dropped} moves dropped so far");
+        }
+        return;
+    }
+    log::warn!("touch: queue full, waiting to deliver {:?}", event.phase);
+    while EVENTS.try_send(event).is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 {% endraw %}{% </code> %}
 
 Line 69 is the whole channel. It comes from `embassy_sync`, one of the Embassy crates, and it has three parameters. The first names the lock that guards the queue inside, and this one may be used from any thread. The second is the type of the messages. The third is the room: 32 events. The channel is a `static`, so both sides reach it by its name and nobody has to pass a handle around.
 
-Line 83 is the sending side. `try_send` puts the event in the queue if there is room and returns at once in either case. The thread never waits here, so nothing delays its next poll 10 ms later.
+Line 90 is the sending side. `try_send` puts the event in the queue if there is room and returns at once in either case. Normally there is room, the function returns, and nothing delays the thread's next poll 10 ms later.
 
 The receiving side is in the render loop, the loop on the `app` thread that draws the user interface. When it has nothing to draw, it waits on `EVENTS.receive()` and on a timer together, and whichever is ready first wakes the task. The Embassy channel makes this possible, because its `receive` is a future. [Chapter 12](@/wakey/12-touch-in.md) reads that loop.
 
-{% <pitfall title="A full queue drops the event, even the last one" id="full-queue-drops"> %}
-When all 32 places are taken, `try_send` returns an error. The `let _ =` on line 83 throws that result away, so the event is lost silently.
+{% <pitfall title="A full queue: drop a move, wait for the rest" id="full-queue-drops"> %}
+When all 32 places are taken, `try_send` returns an error, and the kind of event decides what happens next.
 
-For a `Move` event this costs little, because the next one follows 10 ms later. For the `Up` event it is a rough edge. Line 89 sets `down` to `false` whether or not the event went out, so the thread never sends it again. The user interface would keep a pressed finger until the next touch.
+A `Move` may be lost (lines 93 to 98): the next one follows 10 ms later. The code counts the losses and logs at the 1st, 2nd, 4th, 8th and so on.
 
-Fixed after this commit: only `Move` events are dropped now, and a `Down` or `Up` waits for room.
+A `Down` or an `Up` may not. A lost `Up` would leave the user interface with a pressed finger until the next touch. So lines 100 to 103 try again every 10 ms until there is room. The thread waits meanwhile, but the user interface is not keeping up anyway.
 
 The queue fills only if the render loop takes nothing out for at least 32 polls, about a third of a second, while the finger moves the whole time.
 {% </pitfall> %}
 
-So touch events travel through a small queue that never makes the sender wait. Commands to the other threads use a different kind of channel.
+So touch events travel through a small queue that makes the sender wait only in an emergency, and only for the events that matter. Commands to the other threads use a different kind of channel.
 
 ## Commands behind a handle
 

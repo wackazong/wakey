@@ -92,24 +92,22 @@ The parameter `f` is a `fn` pointer, the first of the three ways to pass a funct
 
 `with_arg` and `with_args` are the same method for callbacks that carry one or two arguments from Slint. Here is `with_args` in use in the alarm list.
 
-{% <code file="firmware/src/app/alarm_list.rs" lines="79-85" hl="80 84"> %}{% raw %}
+{% <code file="firmware/src/app/alarm_list.rs" lines="80-84" hl="81 83"> %}{% raw %}
     list.on_toggle(ctx.with_args(|window, ctx, id: i32, on: bool| {
         let result = ctx.alarm.borrow_mut().set_enabled(id as u32, on);
-        if let Err(e) = result {
-            log::error!("alarm list: saving: {e}");
-        }
+        show_result(window, result);
         refresh(window, &ctx.alarm.borrow());
     }));
 {% endraw %}{% </code> %}
 
 These lines are from `alarm_list::start`, which `app::app` calls once. `list` is the Slint global `AlarmList`, and `on_toggle` is the setter that Slint generated for its callback `toggle(int, bool)`. The inner `ctx` is a parameter of the closure, not a capture, so the closure captures nothing and fits a `fn` pointer.
 
-The `toggle` handler runs when the user flips an alarm's switch. Line 80 borrows the `AlarmClock` mutably and switches the alarm on or off. Line 84 borrows it again, this time shared, and passes it to `refresh`, which rebuilds the rows of the list.
+The `toggle` handler runs when the user flips an alarm's switch. Line 81 borrows the `AlarmClock` mutably and switches the alarm on or off. Line 82 hands the result to `show_result`, which shows a failed save on the page ([chapter 16](@/wakey/16-one-touch.md) follows it). Line 83 borrows it again, this time shared, and passes it to `refresh`, which rebuilds the rows of the list.
 
 {% <pitfall title="A `RefCell` checks its borrows at run time" id="ctx-refcell-two-statements"> %}
 `borrow_mut` panics if any other borrow of the same `RefCell` is still alive. The compiler cannot warn about that, because the check happens while the program runs.
 
-Lines 80 and 84 are safe because they are two statements. The guard from `borrow_mut` in line 80 has no name, so it is dropped at the end of that statement, as [chapter 7](@/wakey/07-sharing-hardware.md#temporary-guard) showed for a `MutexGuard`.
+Lines 81 and 83 are safe because they are two statements. The guard from `borrow_mut` in line 81 has no name, so it is dropped at the end of that statement, as [chapter 7](@/wakey/07-sharing-hardware.md#temporary-guard) showed for a `MutexGuard`.
 {% </pitfall> %}
 
 The diagram shows the whole path of this one callback.
@@ -127,6 +125,7 @@ sequenceDiagram
     C->>F: f(window, ctx, id, on)
     F->>A: borrow_mut, set_enabled
     A-->>F: result, borrow ends
+    F->>W: show_result sets the error text
     F->>A: borrow
     F->>W: refresh sets the changed rows
     F-->>S: return

@@ -85,7 +85,7 @@ Look at the types in lines 177 and 186. `c6_power` is a `Switch`, which we come 
 
 The answers are filled in by `app`, in the start-up function.
 
-{% <code file="firmware/src/app/mod.rs" lines="189-200" hl="192 197 199"> %}{% raw %}
+{% <code file="firmware/src/app/mod.rs" lines="188-199" hl="191 196 198"> %}{% raw %}
     let wifi = net::start(
         net::Setup {
             modem,
@@ -100,21 +100,21 @@ The answers are filled in by `app`, in the start-up function.
     );
 {% endraw %}{% </code> %}
 
-Line 197 gives `net` the function `asleep` from the module `ui::power`. It is an ordinary function that reads a flag, and [chapter 9](@/wakey/09-flags-and-locks.md) looks at the flag. The important point is that this line is in `app`, so `app` is the module that knows both `ui` and `net`. The file `net.rs` does not import `ui` at all. Note that `ui` is a service like `net`, so the layer rule alone would allow the import. The code is stricter here than its own rule.
+Line 196 gives `net` the function `asleep` from the module `ui::power`. It is an ordinary function that reads a flag, and [chapter 9](@/wakey/09-flags-and-locks.md) looks at the flag. The important point is that this line is in `app`, so `app` is the module that knows both `ui` and `net`. The file `net.rs` does not import `ui` at all. Note that `ui` is a service like `net`, so the layer rule alone would allow the import. The code is stricter here than its own rule.
 
-Line 199 is the third thing. It is a closure, the second argument of `net::start`. The board has an RTC, a real-time clock chip that keeps the time for the next boot. After every successful NTP sync, the `wifi` thread calls this closure, and the closure writes the fresh time to the RTC. The closure owns the `rtc` handle, because `move` has moved it in. So `net` never sees the RTC. It only has something to call.
+Line 198 is the third thing. It is a closure, the second argument of `net::start`. The board has an RTC, a real-time clock chip that keeps the time for the next boot. After every successful NTP sync, the `wifi` thread calls this closure, and the closure writes the fresh time to the RTC. The closure owns the `rtc` handle, because `move` has moved it in. So `net` never sees the RTC. It only has something to call.
 
 ## A `Switch` instead of the expander
 
-Now back to line 192 and the type `Switch`. First the hardware behind it. An IO expander is a small chip that gives the processor more output pins. This board has two of them, with eight pins each. Their pins switch, among others, the speaker amplifier, the 5 V of the USB port and the 3.3 V of the C6.
+Now back to line 191 and the type `Switch`. First the hardware behind it. An IO expander is a small chip that gives the processor more output pins. This board has two of them, with eight pins each. Their pins switch, among others, the speaker amplifier, the 5 V of the USB port and the 3.3 V of the C6.
 
-The handle for both expanders is called `IoExpanders`, and it can drive every one of those pins. The `wifi` thread needs exactly one. The next excerpt shows the type that makes this possible, in line 72, and the method that creates a value of it.
+The handle for both expanders is called `IoExpanders`, and it can drive every one of those pins. The `wifi` thread needs exactly one. The next excerpt shows the type that makes this possible, in line 73, and the method that creates a value of it.
 
-{% <code file="firmware/src/board/ioexp.rs" lines="70-171" hl="72 169-170"> %}{% raw %}
+{% <code file="firmware/src/board/ioexp.rs" lines="71-172" hl="73 170-171"> %}{% raw %}
 /// A power switch on an expander pin, for services that manage their own
 /// supply (the USB-A 5 V, the C6's 3.3 V).
 pub type Switch = Box<dyn Fn(bool) -> Result<(), EspError> + Send>;
-    // ... @167
+    // ... @168
     /// A [`Switch`] driving `pin`.
     pub fn switch(&self, pin: Pin) -> Switch {
         let this = self.clone();
@@ -124,7 +124,7 @@ pub type Switch = Box<dyn Fn(bool) -> Result<(), EspError> + Send>;
 
 A `Switch` is a boxed closure. It takes `true` or `false` and reports whether the switching worked. The `+ Send` allows it to be moved to another thread, and the `wifi` thread will own this one.
 
-The method `switch` clones the handle in line 169. Line 170 moves the clone into a new closure, together with one `pin`. The expander, the bus and the pin number are hidden inside the closure. So when `app` passes `ioexp.switch(Pin::WlanPwrEn)`, `net` receives the power switch of the C6 and nothing else. [Chapter 7](@/wakey/07-sharing-hardware.md) opens up `IoExpanders` and shows why cloning it is safe.
+The method `switch` clones the handle in line 170. Line 171 moves the clone into a new closure, together with one `pin`. The expander, the bus and the pin number are hidden inside the closure. So when `app` passes `ioexp.switch(Pin::WlanPwrEn)`, `net` receives the power switch of the C6 and nothing else. [Chapter 7](@/wakey/07-sharing-hardware.md) opens up `IoExpanders` and shows why cloning it is safe.
 
 {% <tip title="Three ways to pass a function" id="passing-functions"> %}
 `fn() -> bool` is a function pointer. It accepts only functions and closures that capture nothing. In exchange it is `Copy` and one pointer in size.
@@ -167,6 +167,6 @@ When several parts of a program need to reach one thread or one piece of shared 
 
 ## What only `app` knows
 
-We end with the top layer. The `use` lines at the top of `app/mod.rs` name eleven of the other sixteen modules, and no module imports `app`. The project's documentation says what belongs here: `app` is the only place that knows the whole product. That means the order of the start-up, which page shows what, and in which words. The `wifi` thread and the display's sleep flag meet in line 197 of `app/mod.rs`, and nowhere else.
+We end with the top layer. The `use` lines at the top of `app/mod.rs` name eleven of the other sixteen modules, and no module imports `app`. The project's documentation says what belongs here: `app` is the only place that knows the whole product. That means the order of the start-up, which page shows what, and in which words. The `wifi` thread and the display's sleep flag meet in line 196 of `app/mod.rs`, and nowhere else.
 
 For our two questions, this chapter gives a first answer to each. The parts work together because `app` connects them, by passing small things downwards: a function pointer, a closure, a `Switch`. The state of a service lives inside the service, and the rest of the program reaches it through a handle. The [next chapter](@/wakey/03-executor.md) starts the program.

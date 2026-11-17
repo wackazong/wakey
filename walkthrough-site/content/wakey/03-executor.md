@@ -54,7 +54,7 @@ Notice that the closure calls `app(spawner)` like a normal function, although we
 
 Now we look at the function that was called. In the next excerpt, the highlighted lines are the ones to watch: a `static` at the top, and the thread that is spawned in the middle.
 
-{% <code file="firmware/src/runtime.rs" lines="128-157" hl="128 147-153"> %}{% raw %}
+{% <code file="firmware/src/runtime.rs" lines="134-163" hl="134 153-159"> %}{% raw %}
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 /// Stack of the executor task (Slint rendering runs on it).
@@ -89,7 +89,7 @@ pub fn start(init: impl FnOnce(Spawner) + Send + 'static) -> ! {
 
 The function begins with two lines of platform set-up. `link_patches` makes sure that a few fixes the `esp-idf-sys` crate adds to ESP-IDF are not thrown away by the linker. ESP-IDF is the manufacturer's software framework that this firmware is built on, and it includes the operating system, FreeRTOS. The second line sends everything written with the `log` crate to the serial console.
 
-Then, from line 147, the function spawns a thread named `app`. `Thread` is the firmware's own small builder for threads, and [chapter 5](@/wakey/05-threads.md) reads it closely. For now it is enough to see what the new thread does in lines 151 and 152. It creates the executor and calls `run` on it. `run` never returns, so the thread never ends, and that is why the last two lines of `start` can wait for it with `join` and then declare the rest `unreachable!`.
+Then, from line 153, the function spawns a thread named `app`. `Thread` is the firmware's own small builder for threads, and [chapter 5](@/wakey/05-threads.md) reads it closely. For now it is enough to see what the new thread does in lines 157 and 158. It creates the executor and calls `run` on it. `run` never returns, so the thread never ends, and that is why the last two lines of `start` can wait for it with `join` and then declare the rest `unreachable!`.
 
 Why a new thread at all? We are already on a thread, the one that runs `main`. The comment above the function gives the reason, and it is a very typical one for embedded work: memory at one particular moment. The user interface is drawn on this thread, and the drawing code needs a large stack of 64 KiB. The stack of the main thread is reserved very early during boot. At that point a temporary start-up stack still exists and the Wi-Fi component has already taken its share, so 64 KiB in one piece is not available. A little later, once `main` is running, the start-up stack has been freed. A thread created at that point gets its 64 KiB without trouble.
 
@@ -103,7 +103,7 @@ The other half is the *waker*. When a timer runs out, or an interrupt arrives, o
 
 {{ <svg src="img/executor.svg" caption="The executor's loop on the `app` thread, and the three events that wake it up in this firmware." /> }}
 
-One detail in the excerpt deserves a closer look. Line 128 declares the executor's home as a `static`, and line 151 fills it. The executor is not an ordinary local variable, and there is a reason.
+One detail in the excerpt deserves a closer look. Line 134 declares the executor's home as a `static`, and line 157 fills it. The executor is not an ordinary local variable, and there is a reason.
 
 {% <tip title="`StaticCell`: a `&'static mut` without `static mut`" id="static-cell"> %}
 `Executor::run` is declared with `&'static mut self`. Spawners and wakers keep a pointer to the executor, so it must stay at the same address for as long as the program runs. A local variable cannot promise that.

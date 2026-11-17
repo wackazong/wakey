@@ -98,10 +98,13 @@ A snooze of nine minutes must last nine minutes. Local time cannot promise that,
 
 The machine is the struct `Alarms`. It holds a `State` and the `Now` of the previous tick. The firmware calls its method `tick` about once a second. The first half of `tick` moves the current phase forward. Watch the guard at the top and the ring timeout below it.
 
-{% <code file="wakey-core/src/alarm.rs" lines="352-379" hl="355-356 366-368"> %}{% raw %}
+{% <code file="wakey-core/src/alarm.rs" lines="352-383" hl="358-359 369-371"> %}{% raw %}
     pub fn tick(&mut self, alarms: &[AlarmConfig], ring: &RingConfig, now: Now) {
         let s = &mut self.state;
         s.phase = match s.phase {
+            // Already done for its day. No transition here leads to this;
+            // a guard against an inconsistent state, such as one read back
+            // from NVS.
             Phase::Ringing { id, day, .. } | Phase::Snoozed { id, day, .. }
                 if s.done.get(&id) == Some(&day) =>
             {
@@ -119,18 +122,18 @@ The machine is the struct `Alarms`. It holds a `State` and the `Now` of the prev
                 } else {
                     // A clock set back must not stretch the ringing.
                     let until = until.min(now.unix + ring.timeout_s());
-                // ... @378
-                }
+            // ... @382
             }
+            Phase::Snoozed {
 {% endraw %}{% </code> %}
 
 Look at the signature in line 352 first. The alarms, the ringing settings and the time all arrive as arguments. The function reads no clock and no file, and it starts no sound. It only changes `self`.
 
 Line 354 matches on `s.phase`. `Phase` is `Copy`, so the patterns copy its fields out, and the arms are free to change `s.done` while they decide. Each arm produces the new phase.
 
-The first arm, in lines 355 and 356, covers two variants with one pattern and adds a guard with `if`. It applies when an alarm is ringing or snoozed and the `done` map already says that this alarm has finished for that day. The phase then becomes `Idle`.
+The first arm, in lines 358 and 359, covers two variants with one pattern and adds a guard with `if`. It applies when an alarm is ringing or snoozed and the `done` map already says that this alarm has finished for that day. The phase then becomes `Idle`. The comment above it says why the arm exists: no transition of the machine leads there. It is a guard against a state that does not fit together, such as one read back from NVS, the flash store [chapter 15](@/wakey/15-state-on-device.md) shows.
 
-The second arm is the ringing alarm. In line 366 the Unix time has reached `until`, so nobody answered for the whole timeout. The alarm is marked done and the phase becomes `Idle`. Otherwise it keeps ringing. Line 371 covers the case of a clock that was set back in the meantime: `until` is never allowed to be further away than one full timeout from now.
+The second arm is the ringing alarm. In line 369 the Unix time has reached `until`, so nobody answered for the whole timeout. The alarm is marked done and the phase becomes `Idle`. Otherwise it keeps ringing. Line 374 covers the case of a clock that was set back in the meantime: `until` is never allowed to be further away than one full timeout from now.
 
 The arm for `Snoozed` has the same shape. When `until` has passed, the phase becomes `Ringing` with a fresh timeout. There is one exception: if the snooze ended longer ago than a whole ring timeout, which a comment explains with a late reboot, the alarm is marked done and does not ring.
 
@@ -140,7 +143,7 @@ The second half of `tick` looks for alarms that become due. A helper, `due`, say
 
 The second method handles the two buttons of the ringing screen, `Snooze` and `Stop`. Watch what its `match` matches on.
 
-{% <code file="wakey-core/src/alarm.rs" lines="437-459" hl="439 445 453"> %}{% raw %}
+{% <code file="wakey-core/src/alarm.rs" lines="440-462" hl="442 448 456"> %}{% raw %}
     pub fn input(&mut self, ring: &RingConfig, now: Now, input: Input) {
         let s = &mut self.state;
         match (s.phase, input) {
@@ -166,9 +169,9 @@ The second method handles the two buttons of the ringing screen, `Snooze` and `S
     }
 {% endraw %}{% </code> %}
 
-Line 439 builds a tuple of the phase and the input and matches on both at once.
+Line 442 builds a tuple of the phase and the input and matches on both at once.
 
-The first arm is "ringing, and Snooze". It has a guard in line 445, so it applies only while snoozes are left. The new phase is `Snoozed`, with the count raised by one and `until` set from `now.unix`. The second arm, in line 453, is "ringing or snoozed, and Stop". It marks the alarm done and returns to `Idle`. Line 457 catches everything else and does nothing. A press on Snooze after the last allowed snooze fails the guard and lands there, so it is ignored.
+The first arm is "ringing, and Snooze". It has a guard in line 448, so it applies only while snoozes are left. The new phase is `Snoozed`, with the count raised by one and `until` set from `now.unix`. The second arm, in line 456, is "ringing or snoozed, and Stop". It marks the alarm done and returns to `Idle`. Line 460 catches everything else and does nothing. A press on Snooze after the last allowed snooze fails the guard and lands there, so it is ignored.
 
 {% <tip title="Match on a tuple to write a transition table" id="alarm-tuple-match"> %}
 When a decision depends on two values, a tuple `(a, b)` puts both into one pattern, so each arm reads as "in this state, on this input". A guard after the pattern adds a condition that a pattern cannot express, and if it fails, matching continues with the next arm.
@@ -189,7 +192,7 @@ stateDiagram-v2
 
 The module's documentation promises that an alarm still rings after a boot if its time is less than the ring timeout ago. On the device, testing that means cutting the power before 06:30 and restoring it at 06:35. Here is that test in the `tests` module at the end of the file.
 
-{% <code file="wakey-core/src/alarm.rs" lines="718-728"> %}{% raw %}
+{% <code file="wakey-core/src/alarm.rs" lines="721-731"> %}{% raw %}
     #[test]
     fn boot_catches_up_within_the_ring_timeout() {
         let c = cfg();
@@ -205,7 +208,7 @@ The module's documentation promises that an alarm still rings after a boot if it
 
 `cfg()` is one alarm at 06:30 on every day, `r()` is the default ringing settings with a timeout of ten minutes, and `ALARM` is the Unix time of 06:30 on a Monday. `at_unix` turns a Unix time into a `Now`.
 
-Line 721 creates a new machine, and that is the reboot. It has no previous tick, so `due` accepts an alarm time up to one ring timeout back. Line 722 gives it a first tick five minutes after the alarm time, and the alarm rings. The second half does the same eleven minutes late, and the alarm stays silent.
+Line 724 creates a new machine, and that is the reboot. It has no previous tick, so `due` accepts an alarm time up to one ring timeout back. Line 725 gives it a first tick five minutes after the alarm time, and the alarm rings. The second half does the same eleven minutes late, and the alarm stays silent.
 
 The test can do this because the time is an argument. If `tick` read the clock itself, a test would have to wait for 06:30. Other tests in this file run an hour of ticks in a loop, jump to the next morning, and step across both daylight saving changes of 2026.
 

@@ -14,7 +14,7 @@ goals = [
 takeaways = [
   "Only the first hop runs on the `touch` thread. From the moment the event leaves `EVENTS`, everything runs on the `app` thread.",
   "The list layer lets a tap pass to Slint, and the page's own touch area fires `toggle` when the finger lifts. The switch in the row only draws.",
-  "`set_alarms` writes `config.json` inside the callback, so the render loop stands still until the card has answered. At this commit, a failed write from the list is only logged.",
+  "`set_alarms` writes `config.json` inside the callback, so the render loop stands still until the card has answered. A failed write leaves the list in memory as it was, and the page says “save failed” in its header.",
   "One changed row of the model is all that Slint hears. The switch then slides over several frames, and each frame goes through the PPA and a flip.",
 ]
 +++
@@ -37,14 +37,14 @@ sequenceDiagram
     participant D as display
     Note over F: the finger comes down
     T->>F: I2C read, every 10 ms
-    T->>Q: try_send(Down)
+    T->>Q: queue(Down)
     Q-->>L: the select ends
     L->>H: pointer(Down)
     H-->>L: Route Slint
     L->>S: dispatch, pointer pressed
     Note over F: the finger lifts
     T->>F: three empty reads
-    T->>Q: try_send(Up)
+    T->>Q: queue(Up)
     Q-->>L: the select ends
     L->>H: pointer(Up)
     H-->>L: Route Slint
@@ -65,13 +65,13 @@ sequenceDiagram
 
 The journey starts on the `touch` thread. Every 10 ms its function `poll` in `ui/input.rs` locks the I2C bus, the two-wire bus that the board's small chips share, and calls `touch::read_point`. The lock is held for that one statement, as [chapter 7](@/wakey/07-sharing-hardware.md#temporary-guard) showed. No interrupt announces the finger. The module's comment says that the interrupt pin is not used, so the thread asks.
 
-This time the answer is a point. Watch what the thread remembers in line 153.
+This time the answer is a point. Watch what the thread remembers in line 177.
 
-{% <code file="firmware/src/ui/input.rs" lines="143-154" hl="144 146 153"> %}{% raw %}
+{% <code file="firmware/src/ui/input.rs" lines="167-178" hl="168 170 177"> %}{% raw %}
                 let (x, y) = to_landscape(px, py);
                 let phase = if down { Phase::Move } else { Phase::Down };
                 if phase == Phase::Down || (x, y) != last {
-                    let _ = EVENTS.try_send(TouchEvent {
+                    queue(TouchEvent {
                         phase,
                         x,
                         y,
@@ -82,7 +82,7 @@ This time the answer is a point. Watch what the thread remembers in line 153.
                 last = (x, y);
 {% endraw %}{% </code> %}
 
-Line 144 decides what kind of event this is. `down` is a local variable of `poll`, and it is still `false`, so the phase is `Down`. Line 146 puts the event into `EVENTS`, the static channel from [chapter 8](@/wakey/08-channels.md), without waiting. Line 153 then sets `down`. That `bool` is the first place where our touch is state.
+Line 168 decides what kind of event this is. `down` is a local variable of `poll`, and it is still `false`, so the phase is `Down`. Line 170 hands the event to `queue`, which puts it into `EVENTS`, the static channel from [chapter 8](@/wakey/08-channels.md). There is room, so nothing waits. Line 177 then sets `down`. That `bool` is the first place where our touch is state.
 
 ## Across the thread border
 
@@ -120,12 +120,12 @@ When the finger leaves, the controller reports no point. As chapter 12 explained
 
 The loop wakes as before. This time the list layer reaches line 692, forgets the touch and answers `Route::Slint`. `dispatch` sends `PointerReleased`, and now the page acts. This is the part of `ta`'s handler for the release.
 
-{% <code file="firmware/ui/wakey/alarm_list.slint" lines="295-308" hl="297-298 304" lang="slint"> %}{% raw %}
+{% <code file="firmware/ui/wakey/alarm_list.slint" lines="310-323" hl="312-313 319" lang="slint"> %}{% raw %}
                 } else if (e.kind == PointerEventKind.up) {
                     let i = view.touched;
                     let toggles = view.gesture == Gesture.undecided && i >= 0
                         && self.mouse-x > self.width - view.switch-area;
-                    // ... @302
+                    // ... @317
                     if (view.gesture == Gesture.undecided && i >= 0) {
                         if (toggles) {
                             AlarmList.toggle(AlarmList.rows[i].id, !AlarmList.rows[i].enabled);
@@ -135,11 +135,11 @@ The loop wakes as before. This time the list layer reaches line 692, forgets the
                     }
 {% endraw %}{% </code> %}
 
-Lines 297 and 298 are the decision. The tap toggles if the gesture is still undecided, if a row was under the finger when it came down, and if the finger is within `switch-area`, 220 pixels, of the list's right edge. Then line 304 calls the callback `toggle` of the global `AlarmList` with the row's id and the opposite of its `enabled`.
+Lines 312 and 313 are the decision. The tap toggles if the gesture is still undecided, if a row was under the finger when it came down, and if the finger is within `switch-area`, 220 pixels, of the list's right edge. Then line 319 calls the callback `toggle` of the global `AlarmList` with the row's id and the opposite of its `enabled`.
 
 So the callback fires on the release, and the page fires it. The switch itself does nothing with the touch.
 
-{% <code file="firmware/ui/wakey/alarm_list.slint" lines="166-172" hl="169-170" lang="slint"> %}{% raw %}
+{% <code file="firmware/ui/wakey/alarm_list.slint" lines="169-175" hl="172-173" lang="slint"> %}{% raw %}
         Switch {
             x: parent.width - self.width - 40px;
             y: (parent.height - self.height) / 2;
@@ -149,13 +149,13 @@ So the callback fires on the release, and the page fires it. The switch itself d
         }
 {% endraw %}{% </code> %}
 
-This is the switch inside a row. Line 170 turns its own touch handling off. Line 169 binds what it shows to the row's data, so it moves only when Rust changes that data.
+This is the switch inside a row. Line 173 turns its own touch handling off. Line 172 binds what it shows to the row's data, so it moves only when Rust changes that data.
 
 ## The handler changes the state
 
 Slint now calls the closure that `Ctx::with_args` built, and the closure runs the handler in `app/alarm_list.rs`, which [chapter 11](@/wakey/11-view-models.md#ctx-refcell-two-statements) showed. Its first statement borrows the `AlarmClock` and calls this method.
 
-{% <code file="firmware/src/app/alarm.rs" lines="126-132" hl="127 131"> %}{% raw %}
+{% <code file="firmware/src/app/alarm.rs" lines="131-137" hl="132 136"> %}{% raw %}
     pub fn set_enabled(&mut self, id: u32, enabled: bool) -> std::io::Result<()> {
         let mut list = self.alarms.clone();
         if let Some(a) = list.iter_mut().find(|a| a.id == id) {
@@ -165,7 +165,7 @@ Slint now calls the closure that `Ctx::with_args` built, and the closure runs th
     }
 {% endraw %}{% </code> %}
 
-Line 127 clones the list of alarms. The `if let` finds our alarm in the clone and changes its `enabled`. Line 131 hands the clone to `set_alarms`. The `AlarmClock` itself is still unchanged.
+Line 132 clones the list of alarms. The `if let` finds our alarm in the clone and changes its `enabled`. Line 136 hands the clone to `set_alarms`. The `AlarmClock` itself is still unchanged.
 
 {% <tip title="Change a copy, then commit it in one place" id="one-touch-copy-commit"> %}
 `set_enabled`, `save` and `delete` have the same shape. Each builds a new list and ends in `set_alarms`.
@@ -178,10 +178,10 @@ So one function validates, saves and applies every change. And a failed write ca
 {% <pitfall title="A callback runs inside the loop that called it" id="one-touch-callback-blocks"> %}
 The render loop called `dispatch`, Slint called the closure, and the closure called down to `std::fs`. All of it is one call stack on the `app` thread, and the file calls block.
 
-Until the card has answered, the loop draws nothing and fires no timer. The `touch` thread keeps running, and its events wait in the 32 places of `EVENTS`. The write is small, but it is a rough edge of the journey.
+Until the card has answered, the loop draws nothing and fires no timer. The `touch` thread keeps running, and its events wait in the 32 places of `EVENTS`; after about a third of a second, moves would be dropped and a press or release would wait ([chapter 8](@/wakey/08-channels.md#full-queue-drops)). The write is small, but it is a rough edge of the journey.
 {% </pitfall> %}
 
-A second rough edge is in the handler. If the write fails, the handler only logs the error. The list in memory is as before, so the switch stays where it was, and the screen does not say why (fixed after this commit).
+If the write fails, the list in memory is as before, so the switch stays where it was, and `show_result` puts "save failed" in the page's header, as the alarm page does.
 
 ## Back to the screen
 

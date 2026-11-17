@@ -7,13 +7,14 @@ weight = 9
 map = ["ui", "ambient", "audio"]
 map_note = "The examples are the sleep flag and the dimming factor in `ui`, the light meter in `ambient`, and the player's ring in `audio`."
 goals = [
-  "how an atomic in a `static` lets one thread leave a value for another, and what `Ordering::Relaxed` promises",
+  "how an atomic in a `static` lets one thread leave a value for another, what `Ordering::Relaxed` promises, and when `Release` and `Acquire` are needed",
   "how a counter beside a value tells every reader that it changed",
   "when the code uses a `Mutex` instead, and how it keeps the lock short",
   "how a `Condvar` lets a thread sleep until shared data changes, and how a wake-up can get lost",
 ]
 takeaways = [
   "A value that fits in an integer and is complete on its own lives in a `static` atomic with `Ordering::Relaxed`. It wakes nobody.",
+  "Two atomics that form one message need `Release` on the writer's last store and `Acquire` on the reader's load.",
   "`swap` reads and replaces in one step, so `take_request` neither misses a request stored at that moment nor carries one out twice.",
   "Data that does not fit in an atomic sits in an `Arc<Mutex<…>>` behind a handle, and the lock is held only long enough to copy the value.",
   "The waiting thread checks its condition under the lock. `Player::stop` takes the same lock before it notifies, so its wake-up cannot fall between the check and the wait.",
@@ -30,17 +31,18 @@ The firmware uses three tools for shared state, and we take them in order of wei
 
 The display can be asleep, which means that the backlight is off and nothing is drawn. `ui/power.rs` keeps this in two statics declared at its top: `ASLEEP`, an `AtomicBool`, and `REQUEST`, an `AtomicU8`. Watch the highlighted `load` and `swap`.
 
-{% <code file="firmware/src/ui/power.rs" lines="33-50" hl="34 49"> %}{% raw %}
+{% <code file="firmware/src/ui/power.rs" lines="33-53" hl="34 52"> %}{% raw %}
 pub fn asleep() -> bool {
     ASLEEP.load(Ordering::Relaxed)
 }
 
-/// Asks the render loop to put the display to sleep (any thread).
+/// Asks the render loop to put the display to sleep. Called from the UI
+/// thread (the app's power timer, the render loop itself); the request is
+/// an atomic, so another thread could call it too.
 pub fn sleep() {
     REQUEST.store(Request::Sleep as u8, Ordering::Relaxed);
 }
-
-// ... @47
+// ... @50
 /// The request since the last call, if any.
 pub(super) fn take_request() -> Option<Request> {
     Request::from_u8(REQUEST.swap(0, Ordering::Relaxed))
@@ -51,7 +53,7 @@ A `static` exists once and every thread can reach it, but an ordinary `static` c
 
 `asleep` on line 34 is the reading side. The Wi-Fi thread calls it because it starts no periodic session while the display sleeps, and the light meter's thread, `ambient`, calls it to switch the backlight off. Both received it at start-up as a plain `fn() -> bool`, as [chapter 2](@/wakey/02-layers.md) showed. The writing side is the render loop, the loop on the `app` thread that draws the screen. It reports through `set_asleep`.
 
-`REQUEST` goes towards the render loop. `sleep` stores a number that stands for a wish, and so does `wake`, which the excerpt leaves out. 0 means that there is no wish, and a newer wish replaces an older one. The render loop collects the wish with `take_request` on line 49. The comments allow `sleep` and `wake` from any thread. At this commit their callers are a timer in `app/power.rs` and the render loop itself, when a touch wakes the display, and both run on the `app` thread.
+`REQUEST` goes towards the render loop. `sleep` stores a number that stands for a wish, and so does `wake`, which the excerpt leaves out. 0 means that there is no wish, and a newer wish replaces an older one. The render loop collects the wish with `take_request` on line 52. The comment on `sleep` names the callers: a timer in `app/power.rs`, and the render loop itself when a touch wakes the display. Both run on the `app` thread. Because the wish is an atomic, another thread could leave one as well.
 
 {% <tip title="`swap` takes a value and leaves an empty one behind" id="atomic-swap-take"> %}
 `REQUEST.swap(0, …)` writes 0 and returns what was there before, in one indivisible step.
@@ -67,16 +69,24 @@ A flag has one cost: storing a request wakes nobody. Here that does no harm, bec
 
 In a dark room the firmware darkens every pixel by a factor. The `ambient` thread sets that factor through `dim::set`, and the drawing code on the `app` thread reads it. But a new factor only affects what is drawn afterwards, so something has to notice the change and repaint the screen. A second static, `EPOCH`, makes that possible.
 
-{% <code file="firmware/src/ui/dim.rs" lines="30-53" hl="33-34"> %}{% raw %}
+{% <code file="firmware/src/ui/dim.rs" lines="30-56" hl="33 37 49"> %}{% raw %}
 /// Sets the brightness factor in 1/256 (any thread; [`FULL`] = undimmed).
 pub fn set(factor: u16) {
     let factor = factor.min(FULL);
     if FACTOR.swap(factor, Ordering::Relaxed) != factor {
-        EPOCH.fetch_add(1, Ordering::Relaxed);
+        // Release, paired with the acquire in `epoch`: a reader on the
+        // other core that sees the new epoch also sees the new factor, and
+        // does not stamp rows of the old brightness with it.
+        EPOCH.fetch_add(1, Ordering::Release);
         log::debug!("dim: {factor}/256");
     }
 }
-// ... @49
+// ... @47
+/// Counts the changes: drawn content from another epoch is stale.
+pub fn epoch() -> u32 {
+    EPOCH.load(Ordering::Acquire)
+}
+
 /// True once if the dimming changed since `seen` (updated).
 pub fn changed_since(seen: &mut u32) -> bool {
     let now = epoch();
@@ -84,17 +94,19 @@ pub fn changed_since(seen: &mut u32) -> bool {
 }
 {% endraw %}{% </code> %}
 
-`set` swaps the new factor in on line 33 and gets the old one back. Only if the two differ does line 34 add one to `EPOCH`, so `EPOCH` counts the changes.
+`set` swaps the new factor in on line 33 and gets the old one back. Only if the two differ does line 37 add one to `EPOCH`, so `EPOCH` counts the changes.
 
 `changed_since` is the reader's half. The caller keeps a number of its own, `seen`, with the count it saw last. The function loads the current count through `epoch()`, puts it into `seen` with `mem::replace`, and returns whether the two differed. In `app/mod.rs`, a timer on the `app` thread calls it every 100 ms and repaints the whole window when the answer is `true`.
 
 A counter is used, and not a flag that the reader clears, because there is more than one reader. The module's comment names a second one, the list layer, which draws the scrolling lists. Each reader compares the counter with its own remembered count, so neither takes the news away from the other.
 
-{% <pitfall title="Two atomics are two messages" id="two-atomics"> %}
-`FACTOR` and `EPOCH` belong together, but with `Relaxed` each travels on its own. A reader on the other core could see the new count with the old factor, and repaint nothing until the next change.
+Unlike `ASLEEP`, one atomic is not the whole message here: `FACTOR` and `EPOCH` belong together.
 
-Fixed after this commit: `set` adds to `EPOCH` with `Release` and `epoch` loads it with `Acquire`, so a reader that sees the new count also sees the factor stored before it.
-{% </pitfall> %}
+{% <concept title="`Release` and `Acquire`: two atomics as one message" id="release-acquire"> %}
+The `ambient` thread may run on the other core. With `Relaxed` everywhere, a reader there could see the new count with the old factor. It would draw rows at the old brightness and stamp them with the new count, so they would count as current until the next change.
+
+`Release` and `Acquire` work as a pair. A read with `Acquire` that sees a write made with `Release` also sees everything the writer stored before it. So `set` stores the factor on line 33 and counts with `Release` on line 37, and `epoch` reads the count with `Acquire` on line 49. `FACTOR` itself can stay `Relaxed`.
+{% </concept> %}
 
 ## A lock behind a handle
 
@@ -133,7 +145,7 @@ A condition variable, `Condvar` in Rust, is a place where threads sleep until an
 
 The ring is a struct with a `Mutex<VecDeque<i16>>` named `samples`, a `Condvar` named `space`, and a few atomic flags, among them `stop`. This is the start of the decoder's `push`; the highlighted lines are the wait.
 
-{% <code file="firmware/src/audio/player.rs" lines="303-311" hl="305-309"> %}{% raw %}
+{% <code file="firmware/src/audio/player.rs" lines="322-330" hl="324-328"> %}{% raw %}
 fn push(ring: &Ring, mut samples: &[i16]) {
     while !samples.is_empty() {
         let mut q = ring.samples.lock().unwrap();
@@ -145,11 +157,11 @@ fn push(ring: &Ring, mut samples: &[i16]) {
         }
 {% endraw %}{% </code> %}
 
-Line 305 takes the lock. The loop on line 306 asks two questions: is the ring full, and has nobody asked us to stop? While both answers are yes, line 307 waits on `space`. The speaker's side is in `Player::source`. After it has taken samples out, it drops its guard and calls `space.notify_one()`. That wakes the decoder, and the loop asks its two questions again. Line 309 looks at `stop` once more, because the wake-up may have come from there.
+Line 324 takes the lock. The loop on line 325 asks two questions: is the ring full, and has nobody asked us to stop? While both answers are yes, line 326 waits on `space`. The speaker's side is in `Player::source`. After it has taken samples out, it drops its guard and calls `space.notify_one()`. That wakes the decoder, and the loop asks its two questions again. Line 328 looks at `stop` once more, because the wake-up may have come from there.
 
-That other wake-up is sent by `Player::stop`, which the `app` thread calls when a sound should end. Watch line 131, which takes the lock and gives it back at once.
+That other wake-up is sent by `Player::stop`, which the `app` thread calls when a sound should end. Watch line 136, which takes the lock and gives it back at once.
 
-{% <code file="firmware/src/audio/player.rs" lines="125-133" hl="131"> %}{% raw %}
+{% <code file="firmware/src/audio/player.rs" lines="130-138" hl="136"> %}{% raw %}
     /// Stops the current file (the ring drains within a second).
     pub fn stop(&self) {
         self.ring.stop.store(true, Ordering::Release);
@@ -161,17 +173,17 @@ That other wake-up is sent by `Player::stop`, which the `app` thread calls when 
     }
 {% endraw %}{% </code> %}
 
-Line 127 sets the flag and line 132 wakes the decoder. The line between them seems to do nothing, and its comment says what it is for.
+Line 132 sets the flag and line 137 wakes the decoder. The line between them seems to do nothing, and its comment says what it is for.
 
 {% <pitfall title="A wake-up sent between the check and the wait is lost" id="lost-wakeup"> %}
 A notification is not stored. If no thread is waiting when it is sent, it does nothing.
 
-Imagine `stop` without line 131. The decoder runs line 306, reads `stop` as `false` and finds the ring full. At that moment the `app` thread stores `true` and calls `notify_all`. Nobody is waiting yet, so nothing happens. Then the decoder reaches line 307 and goes to sleep, although it was told to stop. Only a speaker that takes samples would wake it now.
+Imagine `stop` without line 136. The decoder runs line 325, reads `stop` as `false` and finds the ring full. At that moment the `app` thread stores `true` and calls `notify_all`. Nobody is waiting yet, so nothing happens. Then the decoder reaches line 326 and goes to sleep, although it was told to stop. Only a speaker that takes samples would wake it now.
 
 The decoder holds the lock from its check until `wait` releases it. Because `stop` takes the same lock, it cannot run in that gap. Either it gets the lock first, and the decoder's check then reads `true`. Or it gets the lock when the decoder is already waiting, and the notification arrives.
 {% </pitfall> %}
 
-`audio/player.rs` is also a place where other orderings appear. The flags `stop` and `playing` are stored with `Release` and loaded with `Acquire`, and one `swap` uses `AcqRel`, which is both. This pair is the stronger promise from earlier: a thread whose `Acquire` load reads the value of a `Release` store also sees what the storing thread wrote before that store. The file's comments do not say which data this is for.
+`audio/player.rs` uses the `Release` and `Acquire` pair from `dim` as well: its flags `stop` and `playing` are stored with `Release` and loaded with `Acquire`. The file's comments do not say which data the promise is for.
 
 ## Written once, and written by an interrupt
 

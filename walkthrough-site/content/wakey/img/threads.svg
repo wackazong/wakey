@@ -1,4 +1,4 @@
-<svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The firmware's threads on the two processor cores, ordered by priority. Core 0: main and app at priority 1. Core 1: touch at priority 6, decoder at 5, card-writer at 4, wifi at 1. On any core, all at priority 5: usb-lib, uac, speaker, ui-watch, ambient, cover and task-stats.">
+<svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The firmware's threads on the two processor cores, ordered by priority. Core 0: main and app at priority 1. Core 1: touch at priority 6, decoder at 5, card-writer at 4, wifi and cover at 1. On any core, all at priority 5: usb-lib, uac, speaker, ui-watch, ambient and task-stats.">
   <title>The threads by core and priority</title>
   <rect class="d-box--dashed" x="84" y="8" width="216" height="372" rx="6"/>
   <rect class="d-box--dashed" x="308" y="8" width="216" height="372" rx="6"/>
@@ -29,8 +29,6 @@
   <text class="d-text d-text--mono" x="654" y="162">ui-watch</text>
   <rect class="d-box--soft" x="542" y="178" width="94" height="30" rx="4"/>
   <text class="d-text d-text--mono" x="552" y="198">ambient</text>
-  <rect class="d-box--dashed" x="644" y="178" width="94" height="30" rx="4"/>
-  <text class="d-text d-text--mono" x="654" y="198">cover</text>
   <rect class="d-box--dashed" x="542" y="214" width="94" height="30" rx="4"/>
   <text class="d-text d-text--mono" x="552" y="234">task-stats</text>
   <rect class="d-box--dashed" x="318" y="262" width="196" height="44" rx="4"/>
@@ -42,9 +40,12 @@
   <rect class="d-box--accent" x="196" y="328" width="94" height="44" rx="4"/>
   <text class="d-text d-text--mono d-text--on-accent" x="206" y="346">app</text>
   <text class="d-text d-text--small d-text--on-accent" x="206" y="363">executor, UI</text>
-  <rect class="d-box--soft" x="318" y="328" width="196" height="44" rx="4"/>
+  <rect class="d-box--soft" x="318" y="328" width="94" height="44" rx="4"/>
   <text class="d-text d-text--mono" x="330" y="346">wifi</text>
-  <text class="d-text d-text--small" x="330" y="363">Wi-Fi sessions and their jobs</text>
+  <text class="d-text d-text--small" x="330" y="363">sessions, jobs</text>
+  <rect class="d-box--dashed" x="420" y="328" width="94" height="44" rx="4"/>
+  <text class="d-text d-text--mono" x="430" y="346">cover</text>
+  <text class="d-text d-text--small" x="430" y="363">one picture</text>
   <rect class="d-box--dashed" x="84" y="394" width="28" height="16" rx="3"/>
   <text class="d-text d-text--small" x="122" y="407">dashed box: the thread exists only while its job runs, or only in a special build</text>
 </svg>

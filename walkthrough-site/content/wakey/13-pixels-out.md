@@ -43,16 +43,16 @@ flowchart TD
 
 If the loop drew into the buffer that the DMA is sending, the panel would show half-finished pictures. So there are two buffers. The *front* buffer is the one on screen. The *back* buffer is the one the loop may draw into. When a frame is finished they change roles, and that is called a *flip*.
 
-Here is the place in the loop where the output half begins. Line 308 is the one to watch.
+Here is the place in the loop where the output half begins. Line 307 is the one to watch.
 
-{% <code file="firmware/src/ui/render_loop.rs" lines="306-309" hl="308"> %}{% raw %}
+{% <code file="firmware/src/ui/render_loop.rs" lines="305-308" hl="307"> %}{% raw %}
         // Waits for the previous flip, so this paces to the panel refresh.
         enter(Stage::BackBuffer);
         let fb = display.back_buffer().await.as_mut_ptr();
         let target = Target::frame_buffer(Picture::frame_buffer(fb));
 {% endraw %}{% </code> %}
 
-Line 308 asks the display for the back buffer and waits for it. The loop takes only a raw pointer from the slice, and line 309 wraps it in a `Target`, the description of a picture the PPA can write into.
+Line 307 asks the display for the back buffer and waits for it. The loop takes only a raw pointer from the slice, and line 308 wraps it in a `Target`, the description of a picture the PPA can write into.
 
 When the frame is drawn, the loop calls `display.present`. That function hands the driver a pointer to the back buffer. The driver recognises its own buffer and only switches to it; it copies nothing. Then `present` notes what it has done in two fields of `Display`: `front` now names the other buffer, and `pending_flip` holds the number of frames the panel has completed so far.
 
@@ -113,7 +113,7 @@ Line 554 builds a `&mut [u16]` from a raw pointer. The comment names what makes 
 
 Now the loop has a buffer, and Slint can draw. Its software renderer can draw line by line into memory we lend it. These lines come from the body of a closure that the loop passes to `window.draw_if_needed`, and it runs only if a redraw is due. Look at the three calls at the end.
 
-{% <code file="firmware/src/ui/render_loop.rs" lines="331-340" hl="334 338-340"> %}{% raw %}
+{% <code file="firmware/src/ui/render_loop.rs" lines="330-339" hl="333 337-339"> %}{% raw %}
             renderer.set_repaint_buffer_type(if full_repaints > 0 {
                 RepaintBufferType::NewBuffer
             } else {
@@ -126,7 +126,7 @@ Now the loop has a buffer, and Slint can draw. Its software renderer can draw li
             rot.finish();
 {% endraw %}{% </code> %}
 
-Lines 331 to 335 choose a repaint mode, which is the subject of the next section. Line 337 tells Slint not to rotate; the PPA does that. Then come three steps: `rot.begin(target)` tells the rotator where the picture goes, `render_by_line` lets Slint draw, and `rot.finish()` waits until the PPA has written everything.
+Lines 330 to 334 choose a repaint mode, which is the subject of the next section. Line 336 tells Slint not to rotate; the PPA does that. Then come three steps: `rot.begin(target)` tells the rotator where the picture goes, `render_by_line` lets Slint draw, and `rot.finish()` waits until the PPA has written everything.
 
 `render_by_line` takes a value that implements Slint's trait `LineBufferProvider`, here `PpaLines`. Slint calls its one method for every line it wants to draw.
 
@@ -158,20 +158,20 @@ What happens to a full strip is in `display/ppa.rs`. The rotator hands the strip
 
 Slint repaints only what changed. With two buffers that is not enough. Say the minute changes and Slint draws the new digits into buffer A. Buffer B still holds the old minute, and after the next flip the panel would show it again.
 
-`RepaintBufferType::SwappedBuffers` on line 334 tells Slint about this. In that mode Slint repaints what changed in the last two frames, so each buffer receives every change once. The other mode, `NewBuffer`, repaints everything; the loop uses it twice after the display wakes from sleep, because both buffers are blank then.
+`RepaintBufferType::SwappedBuffers` on line 333 tells Slint about this. In that mode Slint repaints what changed in the last two frames, so each buffer receives every change once. The other mode, `NewBuffer`, repaints everything; the loop uses it twice after the display wakes from sleep, because both buffers are blank then.
 
 One problem remains. After a change, the second buffer is only brought up to date by the *next* render. If a touch causes that render, the touch pays for the old work as well. The comment at the variable gives a figure of about 60 ms for a page switch. So the loop does not wait.
 
-{% <code file="firmware/src/ui/render_loop.rs" lines="380-388" hl="380 388"> %}{% raw %}
+{% <code file="firmware/src/ui/render_loop.rs" lines="379-387" hl="379 387"> %}{% raw %}
         other_buffer_stale = slint_box.is_some() && !catching_up;
         if slint_rendered || hook_started {
-            // ... @388
+            // ... @387
             display.present(0..1).expect("present");
 {% endraw %}{% </code> %}
 
-Line 380 sets `other_buffer_stale` when Slint drew something and this frame was not itself the catch-up. Then the loop does not go to sleep. On its next turn it copies the flag into `catching_up` and calls `window.request_redraw()`, so Slint repaints the same region into the other buffer while nothing else is happening.
+Line 379 sets `other_buffer_stale` when Slint drew something and this frame was not itself the catch-up. Then the loop does not go to sleep. On its next turn it copies the flag into `catching_up` and calls `window.request_redraw()`, so Slint repaints the same region into the other buffer while nothing else is happening.
 
-Line 388 is the flip. Its argument names the rows that the CPU wrote and that must be flushed from its cache to PSRAM first. The CPU wrote none, the PPA did, so the loop passes a single row, the least the driver accepts.
+Line 387 is the flip. Its argument names the rows that the CPU wrote and that must be flushed from its cache to PSRAM first. The CPU wrote none, the PPA did, so the loop passes a single row, the least the driver accepts.
 
 ## Two extensions
 

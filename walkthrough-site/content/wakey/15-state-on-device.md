@@ -32,28 +32,47 @@ There is one `AlarmClock`. It lives on the UI thread, in `Ctx`, the struct that 
 
 That function is `follow`, and we read it in two halves. The first half is about storage. Watch what the code compares before it writes.
 
-{% <code file="firmware/src/app/alarm.rs" lines="270-279" hl="273-278"> %}{% raw %}
+{% <code file="firmware/src/app/alarm.rs" lines="275-301" hl="277-278 282-285 292 298"> %}{% raw %}
     /// Saves a changed state and makes the speaker follow it.
     fn follow(&mut self) {
         let state = self.machine.state();
         if *state != self.saved {
-            log::info!("alarm: {:?}", state.phase);
-            if let Some(nvs) = &self.nvs {
-                save_state(nvs, state);
+            if !self.save_failed {
+                log::info!("alarm: {:?}", state.phase);
             }
-            self.saved = state.clone();
+            let written = match &self.nvs {
+                Some(nvs) => nvs.set_str(NVS_KEY, &state.to_json()),
+                None => Ok(()),
+            };
+            match written {
+                Ok(()) => {
+                    if self.save_failed {
+                        log::info!("alarm: state saved after all");
+                    }
+                    self.save_failed = false;
+                    self.saved = state.clone();
+                }
+                Err(e) => {
+                    if !self.save_failed {
+                        log::error!("alarm: saving the state: {e}; trying again every tick");
+                    }
+                    self.save_failed = true;
+                }
+            }
         }
 {% endraw %}{% </code> %}
 
-Line 272 asks the machine for its `State`. As chapter 14 showed, that is the `Phase` (idle, ringing or snoozed) and a map with the last day on which each alarm finished. Line 273 compares it with `self.saved`, the copy that `AlarmClock` keeps of the state it wrote last. Only when the two differ does line 276 write the state to NVS, and line 278 remembers it as the saved one. A failed write is only logged. Line 278 runs all the same, so the write is not tried again until the state changes.
+Line 277 asks the machine for its `State`. That is the `Phase` and the map of finished days from chapter 14. Line 278 compares it with `self.saved`, the copy that `AlarmClock` keeps of the state that is in NVS. Only when the two differ do lines 282 to 285 write the state.
+
+If the write succeeds, line 292 makes the new state the saved copy. If it fails, `self.saved` stays as it was, so on the next tick line 278 finds the same difference and the write is tried again. The flag `save_failed` (line 298) only keeps the log short.
 
 NVS is a small key-value store that ESP-IDF, the manufacturer's framework, keeps in the board's flash memory. The firmware stores the `State` there as a JSON string under one key, `alarms`. `AlarmClock::new` reads that key when the clock starts and gives the result to `Alarms::new`. So a snoozed alarm survives a reboot.
 
-The `if let` on line 275 is there because `nvs` is an `Option`. If the store cannot be opened at start-up, the clock logs an error and runs without it.
+The `match` on line 282 is there because `nvs` is an `Option`: if the store could not be opened at start-up, there is nothing to write.
 
 The second half is about sound, and it has the same shape: compare, and act only on a difference.
 
-{% <code file="firmware/src/app/alarm.rs" lines="280-306" hl="281-284 295-296 302"> %}{% raw %}
+{% <code file="firmware/src/app/alarm.rs" lines="302-328" hl="303-306 317-318 324"> %}{% raw %}
         let ringing = self.machine.ringing();
         if ringing == self.sounding {
             return;
@@ -64,11 +83,11 @@ The second half is about sound, and it has the same shape: compare, and act only
         self.cancel_stream();
         match ringing.and_then(|id| self.get(id)).cloned() {
             Some(cfg) => {
-                // ... @294
+                // ... @316
                 self.output.set_streaming(true);
                 self.player
                     .ring(sound, tone::volume_gain(cfg.volume), cfg.fade_in_s);
-            // ... @300
+            // ... @322
             }
             None => {
                 self.player.stop();
@@ -78,9 +97,9 @@ The second half is about sound, and it has the same shape: compare, and act only
     }
 {% endraw %}{% </code> %}
 
-Line 280 asks the machine which alarm is ringing right now. The answer is an `Option<u32>`: the alarm's id, or `None`. The field `sounding` holds the answer from the last change, so it says what the speaker is doing now. If the two are equal, line 282 returns.
+Line 302 asks the machine which alarm is ringing right now. The answer is an `Option<u32>`: the alarm's id, or `None`. The field `sounding` holds the answer from the last change, so it says what the speaker is doing now. If the two are equal, line 304 returns.
 
-Otherwise line 284 records the new answer, and the next lines end a preview from the sound page, if one is playing. The `match` on line 288 then looks up the ringing alarm's configuration. If there is one, the lines left out pick its sound, a file from the card or the built-in tone, and lines 294 to 296 tell the output to stream and the player to ring. If no alarm is ringing, lines 302 and 303 stop both. [Chapter 17](@/wakey/17-sound.md) follows these calls into the player.
+Otherwise line 306 records the new answer, and the next lines end a preview from the sound page, if one is playing. The `match` on line 310 then looks up the ringing alarm's configuration. If there is one, the lines left out pick its sound, a file from the card or the built-in tone, and lines 316 to 318 tell the output to stream and the player to ring. If no alarm is ringing, lines 324 and 325 stop both. [Chapter 17](@/wakey/17-sound.md) follows these calls into the player.
 
 {% <tip title="Remember what you did last, and compare" id="state-follow-compare"> %}
 `follow` does not ask what brought it here. It looks at where the machine is now and compares that with two remembered values, `saved` and `sounding`.
@@ -92,7 +111,7 @@ So the function can be called as often as the caller likes. `tick` calls it ever
 
 When a person saves, deletes or switches an alarm, the code builds a new list and hands it to `set_alarms`. The order of its lines is the point.
 
-{% <code file="firmware/src/app/alarm.rs" lines="97-104" hl="99-101"> %}{% raw %}
+{% <code file="firmware/src/app/alarm.rs" lines="102-109" hl="104-106"> %}{% raw %}
     pub fn set_alarms(&mut self, mut alarms: Vec<AlarmConfig>) -> std::io::Result<()> {
         alarm::sanitize_list(&mut alarms);
         config::save_alarms(&alarms)?;
@@ -103,10 +122,10 @@ When a person saves, deletes or switches an alarm, the code builds a new list an
     }
 {% endraw %}{% </code> %}
 
-Line 98 brings out-of-range values into range. Line 99 writes the list to `config.json` on the memory card. Only then does line 100 tell the machine about the new list, and line 101 replace the list in memory. Line 102 calls `follow`, because `reconfigured` may have changed the state. If the ringing alarm was deleted, the machine goes back to idle, and `follow` saves that and stops the sound.
+Line 103 brings out-of-range values into range. Line 104 writes the list to `config.json` on the memory card. Only then does line 105 tell the machine about the new list, and line 106 replace the list in memory. Line 107 calls `follow`, because `reconfigured` may have changed the state. If the ringing alarm was deleted, the machine goes back to idle, and `follow` saves that and stops the sound.
 
 {% <pitfall title="Write the file before you change memory" id="state-file-before-memory"> %}
-The `?` on line 99 returns from the function when the write fails. At that point nothing in `self` has been touched, so the clock and the card still agree.
+The `?` on line 104 returns from the function when the write fails. At that point nothing in `self` has been touched, so the clock and the card still agree.
 
 With the opposite order, a failed write would leave a list in memory that the card does not have. The alarm would ring as edited until the next reboot, and then come back as it was before.
 {% </pitfall> %}
@@ -160,7 +179,7 @@ A new alarm has no original, so line 68 answers `true`. For an existing alarm, a
 
 The firmware itself writes two parts of `config.json`: the alarm list, and the login for the music service TIDAL. Both go through one function in `firmware/src/config.rs`. (At start-up, `config::load` also adds settings that the file lacks.)
 
-{% <code file="firmware/src/config.rs" lines="103-112" hl="104 111"> %}{% raw %}
+{% <code file="firmware/src/config.rs" lines="128-137" hl="129 136"> %}{% raw %}
 fn rewrite(edit: impl FnOnce(Option<&str>) -> String) -> io::Result<()> {
     let _writer = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let path = sd::path(FILE);
@@ -175,20 +194,20 @@ fn rewrite(edit: impl FnOnce(Option<&str>) -> String) -> io::Result<()> {
 
 `rewrite` reads the whole file, lets the closure `edit` produce the new text, and writes that. For the alarms, `edit` replaces the `alarms` list and keeps every other field.
 
-Line 104 takes a lock first. `WRITE` is a `static Mutex<()>`, a mutex that protects no data, only this stretch of code. There are two writers: the UI thread saves alarms, and the `wifi` thread saves the TIDAL login. Without the lock both could read the same old text, and the second write would undo the first. The guard is bound to a name, `_writer`, so it lives until the function ends.
+Line 129 takes a lock first. `WRITE` is a `static Mutex<()>`, a mutex that protects no data, only this stretch of code. There are two writers: the UI thread saves alarms, and the `wifi` thread saves the TIDAL login. Without the lock both could read the same old text, and the second write would undo the first. The guard is bound to a name, `_writer`, so it lives until the function ends.
 
-Line 111 does not write to `config.json` directly. `sd::replace` in `board/sd.rs` first writes the new text to a file beside it, `config.tmp`. If that fails, the old file is untouched.
+Line 136 does not write to `config.json` directly. `sd::replace` in `board/sd.rs` first writes the new text to a file beside it, `config.tmp`. If that fails, the old file is untouched.
 
 {% <pitfall title="FAT cannot rename onto an existing file" id="state-fat-rename"> %}
 Renaming the temporary file over the old one would finish the job in one step. The comment on `sd::replace` says that the card's file system, FAT, cannot do that. So the function removes the old file and then renames the temporary one.
 
-That leaves a short moment with no `config.json` on the card. If the power fails exactly then, the new text exists only as `config.tmp`. No code looks for that file, so the next start finds no `config.json` and uses the defaults.
+That leaves a short moment with no `config.json` on the card. If the power fails exactly then, the new text exists only as `config.tmp`. Without help, the next start would find no `config.json`, take it for a first set-up and run on the defaults, and the next save would write those over everything.
 
-Fixed after this commit: `config::load` now puts a `config.tmp` that parses back into place.
+So when `config.json` is missing, `config::load` looks for `config.tmp`, and if it parses, renames it into place and uses it. [Chapter 20](@/wakey/20-errors.md) shows that arm of `load`.
 {% </pitfall> %}
 
 ## A broken `config.json`
 
-A file that people edit by hand can be broken. For `config::load`, a missing file is a first setup, and the clock starts with the defaults. A file that exists but cannot be read or parsed makes `load` return `Err(String)`, the error in words. The comment gives the reason: the clock must not run on defaults and overwrite the file later. So, as [chapter 4](@/wakey/04-startup.md) showed, start-up calls `config_error`, which shows the text on a page of its own and goes no further: no alarms, no Wi-Fi, nothing written. [Chapter 20](@/wakey/20-errors.md) places this among the firmware's error policies.
+A file that people edit by hand can be broken. For `config::load`, a missing file with no `config.tmp` to recover is a first setup, and the clock starts with the defaults. A file that exists but cannot be read or parsed makes `load` return `Err(String)`, the error in words. The comment gives the reason: the clock must not run on defaults and overwrite the file later. So, as [chapter 4](@/wakey/04-startup.md) showed, start-up calls `config_error`, which shows the text on a page of its own and goes no further: no alarms, no Wi-Fi, nothing written. [Chapter 20](@/wakey/20-errors.md) places this among the firmware's error policies.
 
-For our two questions, this chapter is about the second, where the state lives. The alarm state is in the machine, inside one `AlarmClock` on the UI thread, and the draft is beside it in `Ctx`. What must outlast the power is on the card or in flash. The file is written only through `sd::replace`, and the alarm state only by `save_state`. The [next chapter](@/wakey/16-one-touch.md) follows a single touch through all of this.
+For our two questions, this chapter is about the second, where the state lives. The alarm state is in the machine, inside one `AlarmClock` on the UI thread, and the draft is beside it in `Ctx`. What must outlast the power is on the card or in flash. The file is written only through `sd::replace`, and the alarm state only in `follow`. The [next chapter](@/wakey/16-one-touch.md) follows a single touch through all of this.

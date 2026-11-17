@@ -29,7 +29,7 @@ It is worth reading closely for a second reason. The start-up is the one place i
 
 We begin with the first half of the function. Watch for two highlighted places: a field of the board that is renamed, and a `match` with an unusual second arm.
 
-{% <code file="firmware/src/app/mod.rs" lines="163-188" hl="176 182-185"> %}{% raw %}
+{% <code file="firmware/src/app/mod.rs" lines="163-187" hl="176 181-184"> %}{% raw %}
 #[embassy_executor::task]
 async fn app(
     // Only the UI bench spawns a task here (its scripted gestures).
@@ -45,7 +45,6 @@ async fn app(
         c6_link,
         sd: _sd, // stays mounted
         codec,
-        ..
     } = Board::init().expect("board init");
 
     clock::init(&rtc);
@@ -58,7 +57,7 @@ async fn app(
     let nvs = EspDefaultNvsPartition::take().expect("NVS");
 {% endraw %}{% </code> %}
 
-The task's first statement is `Board::init()`. It switches on and sets up the board's hardware, and it returns a struct with one field per piece of hardware. [Chapter 6](@/wakey/06-board.md) follows that function. Here we only see its result being taken apart again straight away, into nine separate variables. The reason is that each handle is about to be given to a different part of the program, and a struct cannot be handed out in pieces while it is still whole.
+The task's first statement is `Board::init()`. It switches on and sets up the board's hardware, and it returns a struct with one field per piece of hardware. [Chapter 6](@/wakey/06-board.md) follows that function. Here we only see its result being taken apart again straight away, into nine separate variables. The reason is that each handle is about to be given to a different part of the program, and a struct cannot be handed out in pieces while it is still whole. The pattern names all nine fields and ends without `..`, the pattern for "and the rest". So if someone adds a field to `Board` later, this line stops compiling until the new handle gets a place here, and it cannot be dropped, and its hardware switched off, unnoticed.
 
 Line 176 renames one field while taking it out: `sd: _sd`. This is the handle for the memory card. Nothing in the task needs it, but the card is unmounted when the handle is dropped. Binding it to a variable keeps it alive for as long as the task runs, and the underscore at the front of the name tells the compiler not to warn about a variable that is never used.
 
@@ -68,10 +67,10 @@ The lines that follow read like a script, and their order is not a matter of tas
 - `config::load` reads the file `config.json` from the memory card. This is why the card had to be mounted first, inside `Board::init`.
 - `texts::init` and `clock::set_time_zone` use two settings from that file, the language and the time zone.
 
-The time zone line has a second, hidden reason to stand exactly here. It sets an environment variable called `TZ`. Environment variables belong to the whole program and not to one thread, and the C library does not protect a thread that reads them while another one changes them. The code avoids the problem by its position. At line 187 the firmware has not started any thread of its own besides the `app` thread that is running this code. The first service thread is started two lines later.
+The time zone line has a second, hidden reason to stand exactly here. It sets an environment variable called `TZ`. Environment variables belong to the whole program and not to one thread, and the C library does not protect a thread that reads them while another one changes them. The code avoids the problem by its position. At line 186 the firmware has not started any thread of its own besides the `app` thread that is running this code. The first service thread is started two lines later.
 
 {% <tip title="A branch that never returns fits any `match`" id="never-arm"> %}
-Look at lines 182 to 185. The first arm of the `match` produces a `Config`. The second arm calls `config_error`, which shows an error page and then runs forever. Its return type is `!`.
+Look at lines 181 to 184. The first arm of the `match` produces a `Config`. The second arm calls `config_error`, which shows an error page and then runs forever. Its return type is `!`.
 
 An expression of type `!` never produces a value, so Rust lets it stand wherever a value of any type is expected. That is why the two arms are allowed to "disagree".
 
@@ -82,7 +81,7 @@ The borrow checker reasons the same way. The second arm moves `display` and `bac
 
 The second half of the start-up creates the firmware's services. A service here means a part such as the network or the sound output that does its work on a thread of its own. As you read the next excerpt, look at the arguments of each call. They show which piece of hardware goes where.
 
-{% <code file="firmware/src/app/mod.rs" lines="189-213" hl="199 203-206"> %}{% raw %}
+{% <code file="firmware/src/app/mod.rs" lines="188-212" hl="198 202-205"> %}{% raw %}
     let wifi = net::start(
         net::Setup {
             modem,
@@ -114,9 +113,9 @@ We go through the calls in order.
 
 `net::start` creates the thread that looks after Wi-Fi. Its first argument is a struct named `Setup`, and three of its fields are hardware we just took out of the board: the modem, a power switch, and a serial link. The Wi-Fi radio is a second chip on the board, the ESP32-C6, and the power switch and the serial link both lead to it. From this line on, those three handles belong to the Wi-Fi thread and nothing else can use them.
 
-The second argument, on line 199, is a closure that the Wi-Fi thread will call whenever it has fetched the exact time from the internet. The closure writes that time into the real-time clock. The keyword `move` gives the closure ownership of `rtc`. Now we can see why `clock::init` only borrowed it earlier: the task needed the clock once, for a moment, and here it gives the clock away for good.
+The second argument, on line 198, is a closure that the Wi-Fi thread will call whenever it has fetched the exact time from the internet. The closure writes that time into the real-time clock. The keyword `move` gives the closure ownership of `rtc`. Now we can see why `clock::init` only borrowed it earlier: the task needed the clock once, for a moment, and here it gives the clock away for good.
 
-Lines 203 to 206 create the sound and touch parts. The `Player` decodes sound files, and it is created first because both speakers ask it for a *source*, a closure that hands out audio samples. `BuiltinSpeaker::start`, `input::start` and `UsbAudio::start` each spawn a thread.
+Lines 202 to 205 create the sound and touch parts. The `Player` decodes sound files, and it is created first because both speakers ask it for a *source*, a closure that hands out audio samples. `BuiltinSpeaker::start` and `input::start` each spawn a thread, and `UsbAudio::start` spawns two, `usb-lib` and `uac`.
 
 Several of these calls receive `i2c.clone()` or `ioexp.clone()`. Cloning here does not copy any hardware. I2C is a two-wire bus that connects many of the board's chips, and the handle `i2c` is an `Arc<Mutex<…>>` around its one driver. Cloning it creates another reference to the same bus. Whoever wants to talk to a chip locks the mutex for a moment.
 
@@ -145,7 +144,7 @@ sequenceDiagram
 
 After this, about fifty lines create the window and connect the pages of the user interface. They are the subject of [chapter 10](@/wakey/10-slint.md) and [chapter 11](@/wakey/11-view-models.md), and we skip them here. The task ends like this.
 
-{% <code file="firmware/src/app/mod.rs" lines="267-273" hl="272"> %}{% raw %}
+{% <code file="firmware/src/app/mod.rs" lines="266-272" hl="271"> %}{% raw %}
     watch_render_loop();
     #[cfg(feature = "task-stats")]
     crate::taskstats::start();
@@ -155,7 +154,7 @@ After this, about fifty lines create the window and connect the pages of the use
 }
 {% endraw %}{% </code> %}
 
-Line 272 is the last line the task ever reaches. `render_loop::run` draws the user interface, frame after frame, and never returns. It takes `display` by value, so the render loop is the final owner of the screen.
+Line 271 is the last line the task ever reaches. `render_loop::run` draws the user interface, frame after frame, and never returns. It takes `display` by value, so the render loop is the final owner of the screen.
 
 ## Where the task first waits
 
