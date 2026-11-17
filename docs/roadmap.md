@@ -14,6 +14,25 @@ Known limitations of the firmware as it is, and possible next steps. The design 
 - **Audio:** AAC sounds keep the encoder delay and padding, so a repeated AAC sound has a gap of ~0.1 s.
 - **Toolchain:** the firmware builds only on one pinned nightly until rust-lang/libc#5662 is in a nightly ([upgrades.md](upgrades.md#rust-toolchain)).
 
+## To check on a device
+
+A code review (commit `0fdbf78`) found the problems below; they are fixed in the code but not yet tried on a Tab5. Each entry says what changed and how to see it work. The review's full list, including entries judged harmless, is in [walkthrough-site/NOTES.md](../walkthrough-site/NOTES.md).
+
+- **`config.json` survives a power cut while saving.** If power failed between removing the old file and renaming the new one, the card held only `config.tmp` and the clock started on defaults, losing Wi-Fi, TIDAL and the alarms at the next save. `config::load` now renames a `config.tmp` that parses into place. Test: rename `config.json` to `config.tmp` on the card and boot; the log says "recovered" and the alarms are there.
+- **A sound file of unknown length repeats.** ADTS AAC (and an MP3 without a usable header) played once and then the alarm rang in silence. Test: an `.aac` file as the alarm sound, rung for longer than the file.
+- **A Wi-Fi job given back by a session interrupted for AirDrop runs before new ones are taken.** Before, a new job could replace it unrun, and TIDAL stayed "busy" until reboot. Test: open the Files tab during a TIDAL sync, leave it with the display going to sleep, then use the TIDAL tab.
+- **A full touch queue drops only moves; a press or a release waits for room.** Before, a lost release left the UI thinking the finger was down. Test: drag a list during a page change; the log shows "moves dropped" at most, and nothing stays pressed.
+- **`Player::start` waits at most 1 s for the previous decoder** instead of freezing the UI without limit; a decoder that does not stop keeps the ring and nothing new starts (logged).
+- **The fade-in's frame count is in the shared ring**, so unplugging the USB speaker during an alarm continues the fade on the built-in one instead of restarting or skipping it. Test: an alarm with a 30 s fade-in, unplug the speaker after 10 s.
+- **A failed write of the alarm state to NVS is tried again on the next tick** instead of waiting for the next change.
+- **A PPA wait without progress for 2 s panics** (the reboot gives back a working clock, a ringing alarm resumes from NVS) instead of freezing the screen for good.
+- **The alarm list shows "save failed"** in its header when a switch or delete cannot be saved. Test: remove the card, then toggle an alarm.
+- **The `touch` thread is required:** a failed start panics like the other essential threads.
+- **A thread whose core and priority cannot be set is not started** (an error) instead of running with the defaults.
+- **The `cover` thread runs on core 1 at priority 1**, below the UI, like the `wifi` thread that starts it. Test: a TIDAL sync with new covers while scrolling a list.
+- **The dimming factor is published before its change counter** (release/acquire), so list rows are not stamped with a stale brightness.
+- **Smaller ones:** `Board` is taken apart without `..` in the app, so a new field cannot be dropped unnoticed; `Stage` and its list are generated from one macro, so the stuck-UI report cannot name a stage "start" by mistake; the eight comments the review found wrong are corrected.
+
 ## Possible next steps
 
 - **Light sleep with double-tap wake:** the ST7123's Smart Wake Up reports a double tap from light sleep; with the display link rebuilt after waking this would save an estimated 0.1–0.2 W more than display sleep, at the cost of a single tap no longer waking the clock.
