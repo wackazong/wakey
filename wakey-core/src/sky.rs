@@ -7,10 +7,35 @@
 //! a little ([`sun_rising`]). The daylight colours are sampled from macOS's
 //! Solar Gradients wallpaper; night and twilight are darker and redder.
 
-/// Zurich, the place the clock's time zone belongs to (degrees, east and
-/// north positive).
-pub const LATITUDE: f32 = 47.37;
-pub const LONGITUDE: f32 = 8.54;
+use crate::datetime::DateTime;
+use serde::{Deserialize, Serialize};
+use std::f64::consts::PI;
+
+/// Where the clock stands (the `location` section of `config.json`), in
+/// degrees, north and east positive.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Location {
+    pub latitude: f32,
+    pub longitude: f32,
+}
+
+impl Default for Location {
+    /// Zurich, as the default time zone.
+    fn default() -> Self {
+        Self {
+            latitude: 47.37,
+            longitude: 8.54,
+        }
+    }
+}
+
+impl Location {
+    pub(crate) fn sanitize(&mut self) {
+        self.latitude = self.latitude.clamp(-90.0, 90.0);
+        self.longitude = self.longitude.clamp(-180.0, 180.0);
+    }
+}
 
 /// An sRGB colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,14 +45,13 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 pub type Gradient = [Rgb; 5];
 
 /// The sun's elevation in degrees (negative: below the horizon) at Unix
-/// time `unix` seen from `lat`/`lon`, accurate to a fraction of a degree
+/// time `unix` seen from `place`, accurate to a fraction of a degree
 /// (NOAA's approximation; refraction ignored).
-pub fn sun_elevation(unix: i64, lat: f32, lon: f32) -> f32 {
-    use core::f64::consts::PI;
+pub fn sun_elevation(unix: i64, place: Location) -> f32 {
     let days = unix as f64 / 86_400.0;
     // Day of the year (0-based) and fraction of the day, UTC.
-    let date = crate::datetime::DateTime::from_unix(unix);
-    let year_start = crate::datetime::DateTime {
+    let date = DateTime::from_unix(unix);
+    let year_start = DateTime {
         month: 1,
         day: 1,
         hour: 0,
@@ -51,16 +75,16 @@ pub fn sun_elevation(unix: i64, lat: f32, lon: f32) -> f32 {
         - 0.002697 * (3.0 * g).cos()
         + 0.00148 * (3.0 * g).sin();
     // True solar time, minutes; hour angle, radians.
-    let solar_min = hours * 60.0 + eq_time + 4.0 * f64::from(lon);
+    let solar_min = hours * 60.0 + eq_time + 4.0 * f64::from(place.longitude);
     let hour_angle = (solar_min / 4.0 - 180.0).to_radians();
-    let lat = f64::from(lat).to_radians();
+    let lat = f64::from(place.latitude).to_radians();
     let cos_zenith = lat.sin() * decl.sin() + lat.cos() * decl.cos() * hour_angle.cos();
     (90.0 - cos_zenith.clamp(-1.0, 1.0).acos().to_degrees()) as f32
 }
 
 /// True while the sun climbs (morning).
-pub fn sun_rising(unix: i64, lat: f32, lon: f32) -> bool {
-    sun_elevation(unix + 300, lat, lon) > sun_elevation(unix, lat, lon)
+pub fn sun_rising(unix: i64, place: Location) -> bool {
+    sun_elevation(unix + 300, place) > sun_elevation(unix, place)
 }
 
 const fn hex(c: u32) -> Rgb {
@@ -177,7 +201,6 @@ pub fn bottom_is_light(g: &Gradient) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datetime::DateTime;
 
     fn unix(y: u16, mo: u8, d: u8, h: u8, mi: u8) -> i64 {
         DateTime {
@@ -194,7 +217,8 @@ mod tests {
 
     #[test]
     fn sun_over_zurich() {
-        let at = |t| sun_elevation(t, LATITUDE, LONGITUDE);
+        let zurich = Location::default();
+        let at = |t| sun_elevation(t, zurich);
         // Summer solstice, solar noon (~11:25 UTC): 90 − 47.4 + 23.4 ≈ 66°.
         let noon = at(unix(2026, 6, 21, 11, 25));
         assert!((noon - 66.0).abs() < 1.0, "{noon}");
@@ -205,8 +229,8 @@ mod tests {
         assert!(at(unix(2026, 6, 21, 23, 25)) < -18.0);
         let sunrise = at(unix(2026, 6, 21, 3, 30));
         assert!(sunrise.abs() < 1.5, "{sunrise}");
-        assert!(sun_rising(unix(2026, 6, 21, 6, 0), LATITUDE, LONGITUDE));
-        assert!(!sun_rising(unix(2026, 6, 21, 17, 0), LATITUDE, LONGITUDE));
+        assert!(sun_rising(unix(2026, 6, 21, 6, 0), zurich));
+        assert!(!sun_rising(unix(2026, 6, 21, 17, 0), zurich));
     }
 
     #[test]

@@ -5,23 +5,40 @@
 //!
 //! ```json
 //! {
-//!   "wifi": { "ssid": "MeinNetz", "password": "geheim" },
+//!   "language": "en",
+//!   "time_zone": "CET-1CEST,M3.5.0,M10.5.0/3",
+//!   "location": { "latitude": 47.37, "longitude": 8.54 },
+//!   "wifi": { "ssid": "MyNetwork", "password": "secret" },
 //!   "sync_interval_h": 24,
 //!   "alarms": [ { "id": 1, "enabled": true, "hour": 6, "minute": 30, … } ],
 //!   "ringing": { "snooze_min": 9, "max_snoozes": 3, "ring_timeout_min": 10 },
 //!   "display": { "night_pixels_percent": 35 },
 //!   "power": { "sleep_after_s": 60, "sleep_when": "dark" },
-//!   "tidal": { "client_id": "…", "client_secret": "…", "playlist": "Wecker" }
+//!   "tidal": { "client_id": "…", "client_secret": "…", "playlist": "Wakey" }
 //! }
 //! ```
 
 use crate::alarm::{self, AlarmConfig, RingConfig};
+use crate::lang::Language;
+use crate::sky::Location;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Europe/Zurich: CET, summer time from the last Sunday of March (02:00)
+/// to the last Sunday of October (03:00).
+pub const DEFAULT_TIME_ZONE: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+/// The whole file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// The screen's language: one of [`Language`]'s codes.
+    pub language: Language,
+    /// The time zone as a POSIX `TZ` rule (the C library has no zone
+    /// database, so not a name like "Europe/Zurich").
+    pub time_zone: String,
+    /// Where the clock stands: the sky follows the sun there.
+    pub location: Location,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wifi: Option<WifiConfig>,
     /// Hours between clock syncs over Wi-Fi (1–168); Wi-Fi is off in
@@ -38,6 +55,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: Language::default(),
+            time_zone: DEFAULT_TIME_ZONE.into(),
+            location: Location::default(),
             wifi: None,
             sync_interval_h: 24,
             alarms: Vec::new(),
@@ -66,6 +86,12 @@ impl Default for DisplayConfig {
     }
 }
 
+impl DisplayConfig {
+    fn sanitize(&mut self) {
+        self.night_pixels_percent = self.night_pixels_percent.clamp(10, 100);
+    }
+}
+
 /// The `power` section: when the clock goes to light sleep (display off,
 /// woken by a touch or an alarm).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +111,15 @@ impl Default for PowerConfig {
     }
 }
 
+impl PowerConfig {
+    fn sanitize(&mut self) {
+        self.sleep_after_s = self.sleep_after_s.clamp(10, 3600);
+        if self.sleep_when == SleepWhen::Unknown {
+            self.sleep_when = SleepWhen::Dark;
+        }
+    }
+}
+
 /// When light sleep is allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -98,25 +133,10 @@ pub enum SleepWhen {
     Unknown,
 }
 
-impl DisplayConfig {
-    fn sanitize(&mut self) {
-        self.night_pixels_percent = self.night_pixels_percent.clamp(10, 100);
-    }
-}
-
-impl PowerConfig {
-    fn sanitize(&mut self) {
-        self.sleep_after_s = self.sleep_after_s.clamp(10, 3600);
-        if self.sleep_when == SleepWhen::Unknown {
-            self.sleep_when = SleepWhen::Dark;
-        }
-    }
-}
-
 /// The `tidal` section: the app credentials the device login uses (copied
-/// into `config.json` by hand), the playlist the alarms take
-/// their songs from, and the session the clock writes after logging in.
-/// Anyone with the SD card can use the session: it is the account.
+/// into `config.json` by hand), the playlist the alarms take their songs
+/// from, and the session the clock writes after logging in. Anyone with
+/// the SD card can use the session: it is the account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TidalConfig {
@@ -133,7 +153,7 @@ impl Default for TidalConfig {
         Self {
             client_id: String::new(),
             client_secret: String::new(),
-            playlist: "Wecker".into(),
+            playlist: "Wakey".into(),
             session: None,
         }
     }
@@ -158,6 +178,7 @@ pub struct TidalSession {
     pub country_code: String,
 }
 
+/// The `wifi` section: the network the clock joins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WifiConfig {
     pub ssid: String,
@@ -174,6 +195,13 @@ impl Config {
 
     fn from_value(value: Value) -> Result<Self, serde_json::Error> {
         let mut c: Self = serde_json::from_value(value)?;
+        if c.language == Language::Unknown {
+            c.language = Language::default();
+        }
+        if !plausible_time_zone(&c.time_zone) {
+            c.time_zone = DEFAULT_TIME_ZONE.into();
+        }
+        c.location.sanitize();
         alarm::sanitize_list(&mut c.alarms);
         c.ringing.sanitize();
         c.sync_interval_h = c.sync_interval_h.clamp(1, 168);
@@ -239,6 +267,24 @@ impl Config {
     }
 }
 
+/// What a POSIX `TZ` rule starts with: a zone name of three or more letters
+/// (or one in angle brackets) and its offset. The C library reads anything
+/// else as UTC without a word.
+fn plausible_time_zone(rule: &str) -> bool {
+    let after_name = match rule.strip_prefix('<') {
+        Some(quoted) => quoted.split_once('>').map(|(_, rest)| rest),
+        None => {
+            let name = rule.chars().take_while(char::is_ascii_alphabetic).count();
+            (name >= 3).then(|| &rule[name..])
+        }
+    };
+    rule.len() <= 64
+        && rule.chars().all(|c| c.is_ascii_graphic())
+        && after_name
+            .map(|rest| rest.trim_start_matches(['+', '-']))
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+}
+
 /// The file's text as a JSON object; the defaults if there is no file or
 /// it is not an object.
 fn object_or_default(json: Option<&str>) -> Value {
@@ -277,7 +323,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn display_and_power_sections() {
+    fn time_zone_and_location_are_checked() {
+        let c = Config::parse(
+            r#"{ "time_zone": "Europe/Berlin", "location": { "latitude": 123, "longitude": -200 } }"#,
+        )
+        .unwrap();
+        assert_eq!(c.time_zone, DEFAULT_TIME_ZONE);
+        assert_eq!((c.location.latitude, c.location.longitude), (90.0, -180.0));
+        for rule in ["EST5EDT,M3.2.0,M11.1.0", "<+0530>-5:30", "UTC0", "JST-9"] {
+            let c = Config::parse(&format!(r#"{{ "time_zone": "{rule}" }}"#)).unwrap();
+            assert_eq!(c.time_zone, rule);
+        }
+        for rule in ["", "CET", "X1", "<+05", "CET-1 CEST"] {
+            assert!(!plausible_time_zone(rule), "{rule}");
+        }
+    }
+
+    #[test]
+    fn missing_sections_get_defaults_and_values_are_brought_into_range() {
         // Missing: defaults, written back.
         let (c, text) = Config::load(r#"{ "alarms": [] }"#).unwrap();
         assert_eq!(c.display, DisplayConfig::default());
@@ -285,12 +348,15 @@ mod tests {
         let text = text.unwrap();
         assert!(text.contains("\"night_pixels_percent\": 35"), "{text}");
         assert!(text.contains("\"sleep_when\": \"dark\""), "{text}");
+        assert_eq!(c.language, Language::En);
+        assert!(text.contains("\"language\": \"en\""), "{text}");
         // Out of range or unknown: into range.
         let c = Config::parse(
-            r#"{ "display": { "night_pixels_percent": 0 },
+            r#"{ "language": "tlh", "display": { "night_pixels_percent": 0 },
                  "power": { "sleep_after_s": 1, "sleep_when": "sometimes" } }"#,
         )
         .unwrap();
+        assert_eq!(c.language, Language::En);
         assert_eq!(c.display.night_pixels_percent, 10);
         assert_eq!(c.power.sleep_after_s, 10);
         assert_eq!(c.power.sleep_when, SleepWhen::Dark);
@@ -362,6 +428,35 @@ mod tests {
         assert_eq!(c.alarms[0].id, 1);
     }
 
+    /// A file with a known section, a changed setting and an unknown field.
+    const FILE: &str =
+        r#"{ "wifi": { "ssid": "Netz" }, "ringing": { "snooze_min": 4 }, "x": [1] }"#;
+
+    #[test]
+    fn tidal_session_written_into_the_file_and_removed() {
+        let session = TidalSession {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: 5,
+            user_id: 7,
+            country_code: "CH".into(),
+        };
+        let with = Config::with_tidal_session(Some(FILE), Some(&session));
+        let c = Config::parse(&with).unwrap();
+        assert_eq!(c.tidal.session.as_ref(), Some(&session));
+        assert_eq!(c.tidal.playlist, "Wakey");
+        assert_eq!(c.wifi.as_ref().unwrap().ssid, "Netz");
+        let without = Config::with_tidal_session(Some(&with), None);
+        let c = Config::parse(&without).unwrap();
+        assert_eq!(c.tidal.session, None);
+        assert_eq!(c.wifi.unwrap().ssid, "Netz");
+        // No `tidal` section yet, or no file: one is added.
+        for json in [None, Some(r#"{ "tidal": 3 }"#)] {
+            let c = Config::parse(&Config::with_tidal_session(json, Some(&session))).unwrap();
+            assert_eq!(c.tidal.session.as_ref(), Some(&session));
+        }
+    }
+
     #[test]
     fn alarms_written_into_the_file() {
         let alarms = vec![AlarmConfig {
@@ -371,22 +466,7 @@ mod tests {
             weekdays: [0, 0, 0, 0, 0, 1, 1],
             ..AlarmConfig::default()
         }];
-        let text = r#"{ "wifi": { "ssid": "Netz" }, "ringing": { "snooze_min": 4 }, "x": [1] }"#;
-        let session = TidalSession {
-            access_token: "a".into(),
-            refresh_token: "r".into(),
-            expires_at: 5,
-            user_id: 7,
-            country_code: "CH".into(),
-        };
-        let with = Config::with_tidal_session(Some(text), Some(&session));
-        let c = Config::parse(&with).unwrap();
-        assert_eq!(c.tidal.session.as_ref(), Some(&session));
-        assert_eq!(c.tidal.playlist, "Wecker");
-        assert_eq!(c.wifi.as_ref().unwrap().ssid, "Netz");
-        let without = Config::with_tidal_session(Some(&with), None);
-        assert_eq!(Config::parse(&without).unwrap().tidal.session, None);
-        let out = Config::with_alarms(Some(text), &alarms);
+        let out = Config::with_alarms(Some(FILE), &alarms);
         let c = Config::parse(&out).unwrap();
         assert_eq!(c.alarms, alarms);
         assert_eq!(c.ringing.snooze_min, 4);

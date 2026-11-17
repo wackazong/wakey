@@ -3,14 +3,19 @@
 //! software renderer, same RGB565 pixels as on the Tab5, so layout, fonts
 //! and missing glyphs show up here first.
 //!
-//! `cargo run --release -- [--by-line] [output dir] [scene name …]`
+//! `cargo run --release -- [--by-line] [--language=de] [output dir] [scene name …]`
 //!
-//! The output dir defaults to `target/ui-preview`. Without scene names every
+//! The texts are English or those of `--language` (a code of
+//! `wakey-core/lang/`). The output dir defaults to `target/ui-preview`. Without scene names every
 //! scene is saved; with names only those (exact names such as `1-list`, or a
 //! prefix ending in `*` such as `0-clock-sky-*`). `--by-line` renders line
 //! by line through a `LineBufferProvider`, as the firmware does, instead of
-//! into one buffer (same pixels; the timing then follows the device's code
-//! path).
+//! into one buffer (the timing then follows the device's code path; the
+//! pictures are the same but for a few edge pixels of the icon on the
+//! clock's sky).
+//!
+//! Slint's time is the preview's own, a 16 ms step per frame, so a scene
+//! caught in the middle of an animation is the same picture on every run.
 //!
 //! Links Slint, which is GPL-3.0, Slint Royalty-free or commercially
 //! licensed; this tool is for development only and not distributed.
@@ -20,41 +25,61 @@ use slint::platform::{PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{
     ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalSize, SharedString, VecModel,
 };
+use std::cell::{Cell, RefCell};
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wakey_core::alarm::{self, AlarmConfig};
+use wakey_core::datetime::DateTime;
+use wakey_core::lang::{Language, Texts, fill};
+use wakey_core::sky;
 
 slint::include_modules!();
 
 const W: usize = 1280;
 const H: usize = 720;
 
+/// One step of the preview's clock: a frame at 60 fps.
+const STEP: Duration = Duration::from_millis(16);
+
 /// Hands out the prepared windows in order: the main window, then the
-/// alarm list's row window (as the firmware's `ui::platform`).
-struct Platform(std::cell::RefCell<Vec<Rc<MinimalSoftwareWindow>>>);
+/// alarm list's row window (as the firmware's `ui::platform`). Slint's time
+/// is the preview's clock, not the host's: a scene shows the same frame of
+/// an animation on every run.
+struct Platform {
+    windows: RefCell<Vec<Rc<MinimalSoftwareWindow>>>,
+    clock: Rc<Cell<Duration>>,
+}
 
 impl slint::platform::Platform for Platform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-        let mut w = self.0.borrow_mut();
+        let mut w = self.windows.borrow_mut();
         if w.is_empty() {
             return Err(slint::PlatformError::Other("no window prepared".into()));
         }
         Ok(w.remove(0))
     }
+
+    fn duration_since_start(&self) -> Duration {
+        self.clock.get()
+    }
 }
 
 struct Preview {
     /// Renders like the firmware: only what changed, into two buffers in
-    /// turn (`RepaintBufferType::SwappedBuffers`), once per 16 ms step.
+    /// turn (`RepaintBufferType::SwappedBuffers`), once per [`STEP`].
     window: Rc<MinimalSoftwareWindow>,
-    buffers: std::cell::RefCell<[Vec<Rgb565Pixel>; 2]>,
+    buffers: RefCell<[Vec<Rgb565Pixel>; 2]>,
     /// The buffer rendered last (what the panel would show).
-    front: std::cell::Cell<usize>,
+    front: Cell<usize>,
+    /// Slint's time (see [`Platform`]).
+    clock: Rc<Cell<Duration>>,
     ui: AppWindow,
     /// The alarm list's row as the list layer renders it.
     row_window: Rc<MinimalSoftwareWindow>,
     row_view: AppWindow,
+    texts: Texts,
     out: PathBuf,
     /// Scenes to save; all if empty.
     names: Vec<String>,
@@ -62,6 +87,48 @@ struct Preview {
 }
 
 impl Preview {
+    /// Sets up Slint with the main window and the row view, as the firmware
+    /// does.
+    fn new(texts: Texts, out: PathBuf, names: Vec<String>, by_line: bool) -> Self {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
+        window.set_size(PhysicalSize::new(W as u32, H as u32));
+        let row_window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        let clock = Rc::new(Cell::new(Duration::ZERO));
+        slint::platform::set_platform(Box::new(Platform {
+            windows: RefCell::new(vec![window.clone(), row_window.clone()]),
+            clock: clock.clone(),
+        }))
+        .expect("platform");
+        let ui = AppWindow::new().expect("UI");
+        set_texts(&ui, &texts);
+        ui.show().expect("show");
+        let layout = ui.global::<AlarmListLayout>();
+        row_window.set_size(PhysicalSize::new(
+            layout.get_width() as u32,
+            layout.get_pitch() as u32,
+        ));
+        let row_view = AppWindow::new().expect("row view");
+        set_texts(&row_view, &texts);
+        row_view.set_page(Page::AlarmListRow);
+        row_view.show().expect("show row view");
+        Self {
+            window,
+            buffers: RefCell::new([
+                vec![Rgb565Pixel::default(); W * H],
+                vec![Rgb565Pixel::default(); W * H],
+            ]),
+            front: Cell::new(0),
+            clock,
+            ui,
+            row_window,
+            row_view,
+            texts,
+            out,
+            names,
+            by_line,
+        }
+    }
+
     /// True if scene `name` is to be saved.
     fn wanted(&self, name: &str) -> bool {
         self.names.is_empty()
@@ -71,10 +138,15 @@ impl Preview {
             })
     }
 
-    /// Lets timers and animations run for `ms` (in 16 ms steps).
+    /// Moves Slint's time on by `by`, without a frame.
+    fn advance(&self, by: Duration) {
+        self.clock.set(self.clock.get() + by);
+    }
+
+    /// Lets timers and animations run for `ms`, a frame every [`STEP`].
     fn run(&self, ms: u64) {
-        for _ in 0..ms / 16 {
-            std::thread::sleep(Duration::from_millis(16));
+        for _ in 0..ms / STEP.as_millis() as u64 {
+            self.advance(STEP);
             self.frame();
         }
     }
@@ -87,7 +159,7 @@ impl Preview {
         let back = 1 - self.front.get();
         let mut buffers = self.buffers.borrow_mut();
         let buf = &mut buffers[back];
-        let t = std::time::Instant::now();
+        let t = Instant::now();
         let drawn = self.window.draw_if_needed(|r| {
             if self.by_line {
                 r.render_by_line(Lines(buf));
@@ -121,6 +193,12 @@ impl Preview {
             position,
             button: PointerEventButton::Left,
         });
+        self.cancel();
+    }
+
+    /// The pointer leaves the window: what the page gets when the list
+    /// layer takes a touch over.
+    fn cancel(&self) {
         self.window.dispatch_event(WindowEvent::PointerExited);
     }
 
@@ -152,12 +230,7 @@ impl Preview {
             if top < 0 || top + pitch > view_h {
                 continue;
             }
-            self.row_view.set_list_row(rows.row_data(i).unwrap());
-            let mut row = vec![Rgb565Pixel::default(); (w * pitch) as usize];
-            self.row_window.request_redraw();
-            self.row_window.draw_if_needed(|r| {
-                r.render(&mut row, w as usize);
-            });
+            let row = self.render_row(rows.row_data(i).unwrap(), 0.0, false, false);
             for y in 0..pitch {
                 let s = ((y0 + top + y) * W as i32 + x0) as usize;
                 let r = (y * w) as usize;
@@ -232,33 +305,37 @@ impl Preview {
                 };
             }
         }
-        let path = self.out.join(format!("{name}.png"));
-        write_png(&path, &screen);
+        let path = self.save(name, &screen);
         println!("         {}", path.display());
     }
 
     /// Renders until the running animations (e.g. the tab bar's slide) have
-    /// ended, so the next shot shows the settled page.
+    /// ended, at most 2 s, so the next shot shows the settled page.
     fn settle(&self) {
-        let start = std::time::Instant::now();
+        let end = self.clock.get() + Duration::from_secs(2);
         loop {
             self.frame();
-            if !self.window.has_active_animations() || start.elapsed().as_secs() >= 2 {
+            if !self.window.has_active_animations() || self.clock.get() >= end {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            self.advance(STEP);
         }
     }
 
+    /// Saves the screen as scene `name`, if wanted, with its render time.
     fn shot(&self, name: &str) {
         if !self.wanted(name) {
             return;
         }
         let ms = self.frame().unwrap_or(0.0);
-        let buf = self.buffers.borrow()[self.front.get()].clone();
-        let path = self.out.join(format!("{name}.png"));
-        write_png(&path, &buf);
+        let path = self.save(name, &self.buffers.borrow()[self.front.get()]);
         println!("{ms:6.2} ms {}", path.display());
+    }
+
+    fn save(&self, name: &str, screen: &[Rgb565Pixel]) -> PathBuf {
+        let path = self.out.join(format!("{name}.png"));
+        write_png(&path, screen);
+        path
     }
 }
 
@@ -364,7 +441,7 @@ fn track(title: &str, artist: &str, selected: bool, a: [u8; 3], b: [u8; 3]) -> S
 }
 
 /// The list card's corner caps, as the firmware makes them
-/// (`sound_page::set_corner_caps`, `list_layer::corner_alpha`).
+/// (`sound_page::rows::set_corner_caps`, `list_layer::corner_alpha`).
 fn set_corner_caps(ui: &AppWindow) {
     let r = ui.global::<SoundListLayout>().get_corner_radius().round() as usize;
     let rf = r as f32;
@@ -403,77 +480,85 @@ fn set_corner_caps(ui: &AppWindow) {
         }
         slint::Image::from_rgba8(buf)
     };
-    let sp = ui.global::<SoundPicker>();
-    sp.set_corner_tl(cap(false, false));
-    sp.set_corner_tr(cap(true, false));
-    sp.set_corner_bl(cap(false, true));
-    sp.set_corner_br(cap(true, true));
+    let picker = ui.global::<SoundPicker>();
+    picker.set_corner_tl(cap(false, false));
+    picker.set_corner_tr(cap(true, false));
+    picker.set_corner_bl(cap(false, true));
+    picker.set_corner_br(cap(true, true));
+}
+
+/// Gives `window` the fixed texts, as the firmware does (`app/texts.rs`).
+fn set_texts(window: &AppWindow, texts: &Texts) {
+    fn strings(texts: &[String]) -> ModelRc<SharedString> {
+        let texts: Vec<SharedString> = texts.iter().map(SharedString::from).collect();
+        ModelRc::new(VecModel::from(texts))
+    }
+    fn rows(rows: &[Vec<String>]) -> ModelRc<ModelRc<SharedString>> {
+        let rows: Vec<_> = rows.iter().map(|row| strings(row)).collect();
+        ModelRc::new(VecModel::from(rows))
+    }
+    let lang = window.global::<Lang>();
+    lang.set_labels(wakey_core::slint_labels!(Labels, texts.labels));
+    lang.set_weekdays(strings(&texts.weekdays_short));
+    let (lower, upper) = texts.keyboard_rows();
+    lang.set_keys_lower(rows(&lower));
+    lang.set_keys_upper(rows(&upper));
 }
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let by_line = args.iter().any(|a| a == "--by-line");
-    args.retain(|a| a != "--by-line");
+    let language = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--language="))
+        .map_or(Language::default(), |code| {
+            Language::from_code(code).expect("a language of wakey-core/lang")
+        });
+    args.retain(|a| !a.starts_with("--"));
     let mut args = args.into_iter();
     let out = PathBuf::from(args.next().unwrap_or_else(|| "target/ui-preview".into()));
     let names: Vec<String> = args.collect();
     std::fs::create_dir_all(&out).expect("output dir");
 
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
-    window.set_size(PhysicalSize::new(W as u32, H as u32));
-    let row_window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Platform(std::cell::RefCell::new(vec![
-        window.clone(),
-        row_window.clone(),
-    ]))))
-    .expect("platform");
-    let ui = AppWindow::new().expect("UI");
-    ui.show().expect("show");
-    let layout = ui.global::<AlarmListLayout>();
-    row_window.set_size(PhysicalSize::new(
-        layout.get_width() as u32,
-        layout.get_pitch() as u32,
-    ));
-    let row_view = AppWindow::new().expect("row view");
-    row_view.set_page(Page::AlarmListRow);
-    row_view.show().expect("show row view");
-    let p = Preview {
-        window,
-        ui,
-        row_window,
-        row_view,
-        buffers: std::cell::RefCell::new([
-            vec![Rgb565Pixel::default(); W * H],
-            vec![Rgb565Pixel::default(); W * H],
-        ]),
-        front: std::cell::Cell::new(0),
-        out,
-        names,
-        by_line,
-    };
-    let ui = &p.ui;
+    let p = Preview::new(language.texts(), out, names, by_line);
+    clock_scenes(&p);
+    alarm_list_scenes(&p);
+    alarm_page_scenes(&p);
+    sound_page_scenes(&p);
+    name_page_scenes(&p);
+    umlaut_scenes(&p);
+}
 
-    // Clock.
+/// A text as the clock takes it: one model entry per character.
+fn chars(s: &str) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(
+        s.chars()
+            .map(|c| SharedString::from(c.to_string()))
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn clock_scenes(p: &Preview) {
+    let ui = &p.ui;
     let clock = ui.global::<Clock>();
-    let chars = |s: &str| {
-        ModelRc::new(VecModel::from(
-            s.chars()
-                .map(|c| SharedString::from(c.to_string()))
-                .collect::<Vec<_>>(),
-        ))
-    };
     let time = chars("06:12");
     clock.set_time(time.clone());
     clock.set_seconds(chars("41"));
-    clock.set_date("Dienstag, 10. November 2026".into());
-    clock.set_alarm("Morgen 06:30".into());
+    let texts = &p.texts;
+    let tuesday = DateTime::from_unix(1_794_290_400); // 2026-11-10
+    clock.set_date(texts.date(&tuesday).into());
+    let next = [
+        ("day", &texts.clock.tomorrow as &dyn Display),
+        ("time", &"06:30"),
+    ];
+    clock.set_alarm(fill(&texts.clock.next_alarm, &next).into());
     ui.set_page(Page::Clock);
     p.run(500);
     p.shot("0-clock");
     // The minute changes: its last digit rolls (old up and out, new up
     // from below), the date as a whole.
     time.set_row_data(4, "3".into());
-    clock.set_date("Mittwoch, 11. November 2026".into());
+    clock.set_date(texts.date(&tuesday.add_days(1)).into());
     p.run(160);
     p.shot("0-clock-rolling");
     p.run(400);
@@ -484,6 +569,19 @@ fn main() {
     p.shot("0-clock-missing");
     clock.set_no_speaker(false);
     clock.set_no_network(false);
+    // Ringing: the stop button in the alarm line's place, then held half
+    // of its 1.5 s.
+    clock.set_alarm_phase(AlarmPhase::Ringing);
+    clock.set_snoozes_left(2);
+    clock.set_snooze_hint(fill(&texts.clock.snooze_hint, &[("n", &2)]).into());
+    p.run(500);
+    p.shot("0-clock-ringing");
+    p.press(640.0, 652.0);
+    p.run(750);
+    p.shot("0-clock-stop-held");
+    p.release(640.0, 652.0);
+    clock.set_alarm_phase(AlarmPhase::Idle);
+    p.run(500);
     // The sky through 21 June in Zurich (UTC times; CEST is +2 h).
     for (name, h, m, time) in [
         ("night", 23, 0, "01:00"),
@@ -498,8 +596,7 @@ fn main() {
         ("dusk", 20, 0, "22:00"),
         ("late", 20, 40, "22:40"),
     ] {
-        use wakey_core::sky;
-        let unix = wakey_core::datetime::DateTime {
+        let unix = DateTime {
             year: 2026,
             month: 6,
             day: 21,
@@ -509,29 +606,33 @@ fn main() {
             weekday: 0,
         }
         .to_unix();
-        let e = sky::sun_elevation(unix, sky::LATITUDE, sky::LONGITUDE);
-        let g = sky::gradient(e, sky::sun_rising(unix, sky::LATITUDE, sky::LONGITUDE));
-        let [a, b, c, d, f] = g.map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
-        clock.set_sky_top(a);
-        clock.set_sky_upper(b);
-        clock.set_sky_middle(c);
-        clock.set_sky_lower(d);
-        clock.set_sky_bottom(f);
-        clock.set_bottom_light(sky::bottom_is_light(&g));
+        let zurich = sky::Location::default();
+        let elevation = sky::sun_elevation(unix, zurich);
+        let gradient = sky::gradient(elevation, sky::sun_rising(unix, zurich));
+        let [top, upper, middle, lower, bottom] =
+            gradient.map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
+        clock.set_sky_top(top);
+        clock.set_sky_upper(upper);
+        clock.set_sky_middle(middle);
+        clock.set_sky_lower(lower);
+        clock.set_sky_bottom(bottom);
+        clock.set_bottom_light(sky::bottom_is_light(&gradient));
         clock.set_time(chars(time));
         p.run(500);
-        println!("         sky {name}: sun at {e:.1}°");
+        println!("         sky {name}: sun at {elevation:.1}°");
         p.shot(&format!("0-clock-sky-{name}"));
     }
+}
 
-    // Alarm list.
+fn alarm_list_scenes(p: &Preview) {
+    let ui = &p.ui;
     let list = ui.global::<AlarmList>();
     let alarms = [
-        alarm_cfg(1, 6, 30, "Arbeit", [1, 1, 0, 0, 0, 0, 0], true),
+        alarm_cfg(1, 6, 30, "Work", [1, 1, 0, 0, 0, 0, 0], true),
         alarm_cfg(2, 7, 15, "", [0, 0, 1, 1, 1, 0, 0], true),
         alarm_cfg(3, 16, 45, "Yoga", [1, 0, 0, 0, 0, 0, 0], true),
-        alarm_cfg(4, 8, 30, "Wochenende", [0, 0, 0, 0, 0, 1, 1], false),
-        alarm_cfg(5, 22, 0, "Medikamente", [1; 7], true),
+        alarm_cfg(4, 8, 30, "Weekend", [0, 0, 0, 0, 0, 1, 1], false),
+        alarm_cfg(5, 22, 0, "Medication", [1; 7], true),
     ];
     // In the list's order, as the firmware shows it.
     let rows: Vec<AlarmRow> = alarm::sorted(&alarms)
@@ -553,31 +654,31 @@ fn main() {
     p.press(600.0, 207.0);
     p.run(130);
     p.shot("1-list-first-press");
-    p.window.dispatch_event(WindowEvent::PointerExited);
+    p.cancel();
     p.run(300);
     // Hold a row: it lights up after 40 ms. Then the touch is taken over
     // (a scroll): the page gets a cancel and the highlight fades.
     p.press(600.0, 207.0);
     p.run(160);
     p.shot("1-list-pressed");
-    p.window.dispatch_event(WindowEvent::PointerExited);
+    p.cancel();
     p.run(300);
     p.check_rows("after a cancelled press");
     // Hold a switch: the row does not light up (a toggle).
     p.press(1150.0, 369.0);
     p.run(160);
     p.shot("1-list-switch-held");
-    p.window.dispatch_event(WindowEvent::PointerExited);
+    p.cancel();
     p.run(300);
     // The second row halfway to deleting, as the list layer draws it.
     p.shot_swipe("1-list-swiped", 1, 500);
     // A press that turns into a scroll, as the firmware hands it over: the
-    // list layer takes the touch (the page gets a cancel: pointer left),
-    // scrolls, and hands the list back where it stopped.
+    // list layer takes the touch (the page gets a cancel), scrolls, and
+    // hands the list back where it stopped.
     p.press(600.0, 600.0);
     p.move_to(600.0, 590.0);
     p.run(50);
-    p.window.dispatch_event(WindowEvent::PointerExited);
+    p.cancel();
     list.set_layer_active(true);
     p.run(50);
     list.set_scroll(310.0);
@@ -585,7 +686,7 @@ fn main() {
     p.run(300);
     p.shot("1-list-scrolled");
     p.check_rows("scrolled list");
-    // Tap a switch and a row.
+    // Tap a switch: `toggle` is printed.
     p.press(1150.0, 207.0);
     p.release(1150.0, 207.0);
     p.run(50);
@@ -593,18 +694,22 @@ fn main() {
     list.set_rows(ModelRc::new(VecModel::from(Vec::<AlarmRow>::new())));
     ui.set_page(Page::AlarmList);
     p.shot("1-list-empty");
+}
 
-    // Alarm page.
-    let ed = ui.global::<AlarmEditor>();
-    ed.set_hour(16);
-    ed.set_minute(45);
-    ed.set_name("Yoga".into());
-    ed.set_days(days([1, 0, 0, 0, 0, 0, 0]));
-    ed.set_any_day(true);
-    ed.set_relative("Klingelt in 6 Tg. 4 Std. 33 Min.".into());
-    ed.set_sound("Morgenlicht".into());
-    ed.set_volume_bars(3);
-    ed.set_fade("10 s".into());
+fn alarm_page_scenes(p: &Preview) {
+    let ui = &p.ui;
+    let editor = ui.global::<AlarmEditor>();
+    editor.set_hour(16);
+    editor.set_minute(45);
+    editor.set_name("Yoga".into());
+    editor.set_days(days([1, 0, 0, 0, 0, 0, 0]));
+    editor.set_any_day(true);
+    let texts = &p.texts;
+    let rings_in = texts.duration(6 * 1440 + 4 * 60 + 33);
+    editor.set_relative(fill(&texts.alarm.rings_in, &[("time", &rings_in)]).into());
+    editor.set_sound("Morning light".into());
+    editor.set_volume_bars(3);
+    editor.set_fade("10 s".into());
     ui.set_page(Page::Alarm);
     p.shot("2-alarm");
     // Drag the minute wheel up by two and a half rows, mid-drag.
@@ -617,66 +722,93 @@ fn main() {
     p.release(420.0, 132.0);
     p.run(1500);
     p.shot("2-alarm-settled");
+    // A new alarm. The page is left for a frame, as on the device: a page
+    // still shown would keep its wheels where they were dragged to.
     ui.set_page(Page::Clock);
-    ed.set_name("".into());
-    ed.set_hour(7);
-    ed.set_minute(0);
-    ed.set_days(days([0; 7]));
-    ed.set_any_day(false);
-    ed.set_sound("Eingebauter Ton".into());
+    p.render();
+    editor.set_name("".into());
+    editor.set_hour(7);
+    editor.set_minute(0);
+    editor.set_days(days([0; 7]));
+    editor.set_any_day(false);
+    editor.set_sound(texts.sound.built_in.as_str().into());
     ui.set_page(Page::Alarm);
     p.shot("2-alarm-new-no-days");
+}
 
-    // Sound page.
-    let sp = ui.global::<SoundPicker>();
-    set_corner_caps(ui);
-    sp.set_rows(ModelRc::new(VecModel::from(vec![
+fn sound_page_scenes(p: &Preview) {
+    let ui = &p.ui;
+    let picker = ui.global::<SoundPicker>();
+    let texts = &p.texts;
+    let random = || {
         sound(
-            "Zufällig",
-            "wechselt jeden Tag",
+            &texts.sound.random,
+            &texts.sound.random_note,
             false,
             SoundRowKind::Random,
-        ),
-        sound("Morgenlicht", "", true, SoundRowKind::File),
-        sound("Vogelstimmen", "", false, SoundRowKind::File),
-        sound("Kirchenglocken", "", false, SoundRowKind::File),
-        sound("Meeresrauschen", "", false, SoundRowKind::File),
+        )
+    };
+    set_corner_caps(ui);
+    picker.set_rows(ModelRc::new(VecModel::from(vec![
+        random(),
+        sound("Morning light", "", true, SoundRowKind::File),
+        sound("Birdsong", "", false, SoundRowKind::File),
+        sound("Church bells", "", false, SoundRowKind::File),
+        sound("Ocean waves", "", false, SoundRowKind::File),
     ])));
-    sp.set_volume(60);
-    sp.set_can_save(true);
-    sp.set_fade(1);
+    picker.set_volume(60);
+    picker.set_can_save(true);
+    picker.set_fade(1);
     ui.set_page(Page::Sound);
     p.shot("3-sound");
-    sp.set_previewing(true);
+    picker.set_previewing(true);
     p.shot("3-sound-previewing");
-    sp.set_previewing(false);
-    // The tab bar's highlight dragged from „Datei“ towards „TIDAL“.
+    picker.set_previewing(false);
+    // The tab bar's highlight dragged from the files towards TIDAL.
     p.press(205.0, 176.0);
     p.move_to(290.0, 176.0);
     p.move_to(380.0, 176.0);
     p.shot("3-sound-tab-dragging");
     p.release(380.0, 176.0);
-    // Back to „Datei“ (nothing here switches the tab), animation done.
-    std::thread::sleep(Duration::from_millis(300));
+    // Back to the files (nothing here switches the tab), animation done.
+    p.advance(Duration::from_millis(300));
     // No sound files: only AirDrop's note (the built-in tone is no choice).
-    sp.set_rows(ModelRc::new(VecModel::from(vec![sound(
-        "AirDrop bereit für neue Klänge",
+    picker.set_rows(ModelRc::new(VecModel::from(vec![sound(
+        &texts.airdrop.ready,
         "",
         false,
         SoundRowKind::AirdropNote,
     )])));
     p.shot("3-sound-no-files");
-    sp.set_tab(SoundTab::Tidal);
-    sp.set_shown_tab(SoundTab::Tidal);
-    sp.set_tidal_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
-    sp.set_tidal_empty("TIDAL ist noch nicht eingerichtet.".into());
+    picker.set_tab(SoundTab::Tidal);
+    picker.set_shown_tab(SoundTab::Tidal);
+    picker.set_tidal_rows(ModelRc::new(VecModel::from(Vec::<SoundRow>::new())));
+    picker.set_tidal_empty(texts.tidal.no_credentials.as_str().into());
     p.settle();
     p.shot("3-sound-tidal");
-    // TIDAL tracks: one selected, one downloading, one selected and
-    // downloading (the selection must show next to the progress bar).
+
+    let coffee = |selected| {
+        track(
+            "Coffee by the Window",
+            "The Early Risers",
+            selected,
+            [240, 200, 80],
+            [200, 90, 40],
+        )
+    };
+    let queued = |artist: &str| fill(&texts.tidal.queued, &[("artist", &artist)]);
+    let removed = |artist: &str| fill(&texts.tidal.removed, &[("artist", &artist)]);
+    let golden = |sub: &str| track("Golden Fields", sub, false, [250, 170, 60], [90, 40, 120]);
+    let failed = |sub: &str, selected| {
+        let mut row = track("Morning Tide", sub, selected, [120, 90, 60], [30, 50, 40]);
+        row.failed = true;
+        row
+    };
+    // TIDAL tracks: one selected, one failed, one downloading, one selected
+    // and downloading (the selection must show next to the progress bar).
     let mut loading = track(
         "Paper Lanterns",
-        "Juno Hale · wird geladen",
+        &queued("Juno Hale"),
         false,
         [40, 40, 40],
         [200, 60, 50],
@@ -684,115 +816,63 @@ fn main() {
     loading.progress = 0.45;
     let mut both = sound(
         "Slow Sunrise",
-        "Ada Lindqvist · wird geladen",
+        &queued("Ada Lindqvist"),
         true,
         SoundRowKind::TidalTrack,
     );
     both.progress = 0.7;
-    let mut failed_row = track(
-        "Morning Tide",
-        "Nicht mehr in der Playlist · Elin Moor",
-        false,
-        [120, 90, 60],
-        [30, 50, 40],
-    );
-    failed_row.failed = true;
-    sp.set_tidal_empty("".into());
-    sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
-        sound(
-            "Zufällig",
-            "wechselt jeden Tag",
-            false,
-            SoundRowKind::Random,
-        ),
-        track(
-            "Kaffee am Fenster",
-            "Die Frühaufsteher",
-            true,
-            [240, 200, 80],
-            [200, 90, 40],
-        ),
-        failed_row,
+    picker.set_tidal_empty("".into());
+    picker.set_tidal_rows(ModelRc::new(VecModel::from(vec![
+        random(),
+        coffee(true),
+        failed(&removed("Elin Moor"), false),
         loading,
         both,
-        track(
-            "Golden Fields",
-            "Nicht mehr in der Playlist · The Harbour Lights",
-            false,
-            [250, 170, 60],
-            [90, 40, 120],
-        ),
+        golden(&removed("The Harbour Lights")),
     ])));
+    // The scrolling second lines at their start, as when the tab opens.
+    picker.set_marquee_ms(0);
     p.shot("3-sound-tidal-list");
     // The alarm's track failed to download: still selected (the alarm rings
     // the built-in tone), shown failed.
-    let mut picked_failed = track(
-        "Morning Tide",
-        "Elin Moor",
-        true,
-        [120, 90, 60],
-        [30, 50, 40],
-    );
-    picked_failed.failed = true;
-    sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
-        sound(
-            "Zufällig",
-            "wechselt jeden Tag",
-            false,
-            SoundRowKind::Random,
-        ),
-        track(
-            "Kaffee am Fenster",
-            "Die Frühaufsteher",
-            false,
-            [240, 200, 80],
-            [200, 90, 40],
-        ),
-        picked_failed,
-        track(
-            "Golden Fields",
-            "The Harbour Lights",
-            false,
-            [250, 170, 60],
-            [90, 40, 120],
-        ),
+    picker.set_tidal_rows(ModelRc::new(VecModel::from(vec![
+        random(),
+        coffee(false),
+        failed("Elin Moor", true),
+        golden("The Harbour Lights"),
     ])));
     p.shot("3-sound-tidal-picked-failed");
     // The selected row at the top of the card: its corners stay round.
-    sp.set_tidal_rows(ModelRc::new(VecModel::from(vec![
-        track(
-            "Kaffee am Fenster",
-            "Die Frühaufsteher",
-            true,
-            [240, 200, 80],
-            [200, 90, 40],
-        ),
-        track(
-            "Golden Fields",
-            "The Harbour Lights",
-            false,
-            [250, 170, 60],
-            [90, 40, 120],
-        ),
+    picker.set_tidal_rows(ModelRc::new(VecModel::from(vec![
+        coffee(true),
+        golden("The Harbour Lights"),
     ])));
     p.shot("3-sound-tidal-corners");
+}
 
-    // Name.
-    let ne = ui.global::<NameEditor>();
-    ne.set_text("Arbeit".into());
+fn name_page_scenes(p: &Preview) {
+    let ui = &p.ui;
+    let editor = ui.global::<NameEditor>();
+    editor.set_text("Work".into());
     ui.set_page(Page::Name);
     p.shot("4-name");
-    ne.set_text("".into());
-    ne.set_shift(true);
+    editor.set_text("".into());
+    editor.set_shift(true);
     p.shot("4-name-empty-shift");
-    ne.set_numbers(true);
+    editor.set_numbers(true);
     p.shot("4-name-numbers");
-    ne.set_numbers(false);
-    ne.set_text("Übung Ärger Öl äöü ß".into());
+    editor.set_numbers(false);
+    editor.set_text("Übung Ärger Öl äöü ß".into());
     p.shot("4-name-umlauts");
-    ed.set_name("Übung Ärger Öl".into());
+}
+
+/// Umlauts at 40 px on the other pages: a glyph not embedded shows here.
+fn umlaut_scenes(p: &Preview) {
+    let ui = &p.ui;
+    ui.global::<AlarmEditor>().set_name("Übung Ärger Öl".into());
     ui.set_page(Page::Alarm);
     p.shot("2-alarm-umlauts");
+    let clock = ui.global::<Clock>();
     clock.set_alarm("40px: ÜÄÖ üäö".into());
     clock.set_date("40px: ÜÄÖ üäö".into());
     ui.set_page(Page::Clock);

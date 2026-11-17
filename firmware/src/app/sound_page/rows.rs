@@ -5,21 +5,21 @@
 use crate::app::screens::{
     AppWindow, Page, SoundListLayout, SoundPicker, SoundRow, SoundTab, Theme, TidalView,
 };
-use crate::ui::list_layer::{Buffers, Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
-use crate::ui::platform;
-use slint::{ComponentHandle, Image, Model, ModelRc, SharedPixelBuffer, Weak};
-use std::hash::{Hash, Hasher};
+use crate::ui::list_layer::{self, Buffers, Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
+use crate::ui::{platform, rgb565};
+use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, Weak};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
 /// The caps over the list card's corners: the page background outside the
 /// rounding, with the weights the list layer blends
-/// ([`corner_alpha`](crate::ui::list_layer::corner_alpha)).
+/// ([`list_layer::corner_alpha`]).
 pub(super) fn set_corner_caps(window: &AppWindow) {
     let bg = window.global::<Theme>().get_background();
     let r = corner_radius(window);
-    let alpha = crate::ui::list_layer::corner_alpha(r);
+    let alpha = list_layer::corner_alpha(r);
     let cap = |mirror_x: bool, mirror_y: bool| {
-        let mut buf = SharedPixelBuffer::<slint::Rgba8Pixel>::new(r as u32, r as u32);
+        let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(r as u32, r as u32);
         for (k, p) in buf.make_mut_slice().iter_mut().enumerate() {
             let (x, y) = (k % r, k / r);
             let (i, j) = (
@@ -27,7 +27,7 @@ pub(super) fn set_corner_caps(window: &AppWindow) {
                 if mirror_y { r - 1 - y } else { y },
             );
             let a = alpha[j * r + i];
-            *p = slint::Rgba8Pixel {
+            *p = Rgba8Pixel {
                 r: bg.red(),
                 g: bg.green(),
                 b: bg.blue(),
@@ -68,7 +68,7 @@ pub fn layer(window: &AppWindow, shared: Rc<Buffers>) -> ListLayer<SoundRows> {
         // holds: 36 × 112 × 660 px of the alarm list's 16 × 162 × 1200).
         slots: 36,
         slop: l.get_slop(),
-        background: crate::ui::rgb565(window.global::<Theme>().get_card()),
+        background: rgb565(window.global::<Theme>().get_card()),
         page_draws_still: true,
         swipe: false,
         // Square rows in a rounded card.
@@ -76,11 +76,11 @@ pub fn layer(window: &AppWindow, shared: Rc<Buffers>) -> ListLayer<SoundRows> {
         // The page around the card shows outside its corners.
         corners: Some((
             corner_radius(window),
-            crate::ui::rgb565(window.global::<Theme>().get_background()),
+            rgb565(window.global::<Theme>().get_background()),
         )),
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
-    let view = AppWindow::new().expect("sound row view");
+    let view = crate::app::new_window();
     view.set_page(Page::SoundListRow);
     view.show().expect("show sound row view");
     let rows = SoundRows {
@@ -139,7 +139,7 @@ impl ListSource for SoundRows {
         let Some((tab, r)) = self.row(i) else {
             return 0;
         };
-        let mut h = std::hash::DefaultHasher::new();
+        let mut h = DefaultHasher::new();
         let cover = r.cover.size();
         // Slint's enums are not `Hash`: their discriminants are.
         (

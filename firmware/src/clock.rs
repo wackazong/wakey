@@ -1,6 +1,7 @@
 //! Wall-clock time. The RX8130 RTC (UTC) seeds the system clock at boot;
-//! newlib applies the time zone (Europe/Zurich as a POSIX rule, no tz
-//! database); [`now`] is local time. NTP (`crate::net`) corrects the system
+//! newlib applies the time zone (`time_zone` in `config.json`: a POSIX
+//! rule, as newlib has no zone database; UTC until [`set_time_zone`]);
+//! [`now`] is local time. NTP (`crate::net`) corrects the system
 //! clock, and [`store_system_time`] writes it back to the RTC.
 //!
 //! If the RTC holds no valid time (power lost, never set), the firmware's
@@ -12,24 +13,30 @@ use esp_idf_svc::sys;
 use std::time::Duration;
 use wakey_core::alarm::Now;
 
-/// Europe/Zurich: CET, CEST from the last Sunday of March to the last
-/// Sunday of October (03:00).
-const TZ: &core::ffi::CStr = c"CET-1CEST,M3.5.0,M10.5.0/3";
-
 /// Unix time when this firmware was built (`build.rs`).
 const BUILD_UNIX_TIME: i64 = match i64::from_str_radix(env!("BUILD_UNIX_TIME"), 10) {
     Ok(t) => t,
     Err(_) => 0,
 };
 
-/// Sets the time zone and the system time from the RTC.
-pub fn init(rtc: &Rx8130) {
-    // SAFETY: C strings that live for the call; at boot, before other
+/// Sets the time zone from a POSIX `TZ` rule ("CET-1CEST,M3.5.0,M10.5.0/3").
+/// Called once at start, before any other thread reads the time.
+pub fn set_time_zone(rule: &str) {
+    let Ok(rule) = std::ffi::CString::new(rule) else {
+        log::error!("clock: time zone {rule:?} is not a C string; staying on UTC");
+        return;
+    };
+    // SAFETY: C strings that live for the call; at start, before other
     // threads read the environment.
     unsafe {
-        sys::setenv(c"TZ".as_ptr(), TZ.as_ptr(), 1);
+        sys::setenv(c"TZ".as_ptr(), rule.as_ptr(), 1);
         sys::tzset();
     }
+    log::info!("clock: time zone {rule:?}, local {}", now().hms());
+}
+
+/// Sets the system time from the RTC.
+pub fn init(rtc: &Rx8130) {
     let from_rtc = match rtc.get_time() {
         // Earlier than the build: the chip holds nonsense (a day of slack
         // for a build machine whose clock is off).
@@ -61,7 +68,7 @@ pub fn init(rtc: &Rx8130) {
     };
     // SAFETY: plain call; `tv` lives for it.
     unsafe { sys::settimeofday(&tv, core::ptr::null()) };
-    log::info!("clock: {} UTC, local {}", t.hms(), now().hms());
+    log::info!("clock: {} UTC", t.hms());
 }
 
 /// Writes the system time to the RTC (after an NTP sync).
@@ -115,6 +122,22 @@ pub fn local(unix: i64) -> DateTime {
         second: tm.tm_sec as u8,
         weekday: tm.tm_wday as u8,
     }
+}
+
+/// The Unix time of a local date and time (the inverse of [`local`]; the
+/// C library decides whether summer time applies).
+pub fn unix(local: &DateTime) -> i64 {
+    // SAFETY: `tm` is plain data (all zeros is valid).
+    let mut tm: sys::tm = unsafe { core::mem::zeroed() };
+    tm.tm_year = i32::from(local.year) - 1900;
+    tm.tm_mon = i32::from(local.month) - 1;
+    tm.tm_mday = local.day.into();
+    tm.tm_hour = local.hour.into();
+    tm.tm_min = local.minute.into();
+    tm.tm_sec = local.second.into();
+    tm.tm_isdst = -1;
+    // SAFETY: plain call; `tm` lives for it.
+    unsafe { sys::mktime(&mut tm) }
 }
 
 /// Time until the system clock's next full second.

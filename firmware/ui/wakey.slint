@@ -10,6 +10,7 @@
 // them.
 
 import "fonts/Inter-24pt-Medium.ttf";
+import { Lang, Labels } from "wakey/lang.slint";
 import { Theme } from "wakey/theme.slint";
 import { AlarmPhase, Clock, ClockPage } from "wakey/clock_page.slint";
 import { AlarmList, AlarmListLayout, AlarmRow, AlarmListPage, ListRowPage } from "wakey/alarm_list.slint";
@@ -17,7 +18,7 @@ import { AlarmEditor, AlarmPage } from "wakey/alarm_page.slint";
 import { SoundPicker, SoundRow, SoundRowKind, SoundTab, TidalView, SoundPage, SoundListLayout, SoundRowItem } from "wakey/sound_page.slint";
 import { NameEditor, NamePage } from "wakey/name_page.slint";
 
-export { Theme, AlarmPhase, Clock, AlarmList, AlarmListLayout, AlarmRow, AlarmEditor, SoundPicker, SoundRow, SoundRowKind, SoundTab, TidalView, SoundListLayout, NameEditor }
+export { Lang, Labels, Theme, AlarmPhase, Clock, AlarmList, AlarmListLayout, AlarmRow, AlarmEditor, SoundPicker, SoundRow, SoundRowKind, SoundTab, TidalView, SoundListLayout, NameEditor }
 
 export enum Page {
     clock,
@@ -56,10 +57,10 @@ export component AppWindow inherits Window {
     in property <string> debug-text;
 
     // Never shown: makes the compiler embed glyphs that only appear in
-    // strings set from Rust (dates, Wi-Fi errors, alarm names, file
-    // names).
-    // Also typographic quotes and accented letters for titles from TIDAL
-    // ("Can’t"): a glyph not embedded draws as a blob.
+    // strings set from Rust (the language's texts, alarm names, file
+    // names; a test in `wakey-core/src/lang.rs` checks the languages
+    // against this list), among them typographic quotes and accented letters for
+    // titles from TIDAL ("Can’t"): a glyph not embedded draws as a blob.
     Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 30px; }
     Text { visible: false; text: "ÄÖÜäöüßéèàç…·×–„“’‘‚”—«»‹›¡¿ÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕØÙÚÛÝàáâãåæêëìíîïñòóôõøùúûýÿœŒšŠžŽłŁ"; font-size: 40px; }
 
@@ -97,7 +98,7 @@ export component AppWindow inherits Window {
             x: 80px;
             y: 120px;
             width: parent.width - 160px;
-            text: "config.json ist fehlerhaft";
+            text: Lang.labels.config-error;
             font-size: 40px;
             color: Theme.text;
         }
@@ -114,7 +115,7 @@ export component AppWindow inherits Window {
             x: 80px;
             y: 520px;
             width: parent.width - 160px;
-            text: "Die Datei auf der Speicherkarte korrigieren und den Wecker neu starten. Bis dahin läuft er nicht, auch kein Alarm.";
+            text: Lang.labels.config-error-help;
             font-size: 30px;
             color: Theme.text;
             wrap: word-wrap;

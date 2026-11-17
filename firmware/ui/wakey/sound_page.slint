@@ -1,19 +1,20 @@
-// The sound of the alarm being edited: source (Datei / TIDAL), the list of
+// The sound of the alarm being edited: source (files / TIDAL), the list of
 // sounds, volume, fade-in and a preview. Tapping a row chooses it; the
 // choice goes back to the alarm page with "‹ Alarm" and is saved with it.
 //
 // ┌ ‹ Alarm ──────────────────────────────────────────────┐
-// │ (Datei | TIDAL)           │ Lautstärke                │
-// │ ⤮ Zufällig                │ ───────●──────            │
-// │ Morgenlicht            ✓  │ Einblenden                │
-// │ Vogelstimmen              │ (aus)(10 s)(30 s)(60 s)   │
-// │ AirDrop bereit für …      │ [▶ Probehören]            │
+// │ (Files | TIDAL)           │ Volume                    │
+// │ ⤮ Random                  │ ───────●──────            │
+// │ Morning light          ✓  │ Fade in                   │
+// │ Birdsong                  │ (off)(10 s)(30 s)(60 s)   │
+// │ AirDrop ready for …       │ [▶ Preview]               │
 // └───────────────────────────────────────────────────────┘
 
+import { Lang } from "lang.slint";
 import { Theme, Button, ButtonKind, BackButton, Icon, IconKind, Marquee, Pills, Slider } from "theme.slint";
 
 export enum SoundRowKind {
-    // „Zufällig“: another sound of the tab every day.
+    // "Random": another sound of the tab every day.
     random,
     file,
     // With `cover`.
@@ -36,7 +37,7 @@ export enum TidalView {
 
 export struct SoundRow {
     title: string,
-    // Second line (artist, „wechselt jeden Tag“), or empty.
+    // Second line (artist, "changes every day"), or empty.
     sub: string,
     selected: bool,
     kind: SoundRowKind,
@@ -86,12 +87,13 @@ export global SoundPicker {
     in property <bool> previewing;
     in property <TidalView> tidal-view;
     in property <image> tidal-qr;
+    // The login code as a line ("Code: ABCDE").
     in property <string> tidal-code;
 
     callback back();
     // Saves the whole alarm and shows the list (as on the alarm page).
     callback save();
-    // Sichern possible: a change, at least one day (set from Rust).
+    // Saving possible: a change, at least one day (set from Rust).
     in property <bool> can-save;
     callback select-tab(SoundTab);
     callback select(int);
@@ -200,7 +202,8 @@ export global SoundListLayout {
 // renders it offscreen (the same pixels).
 export component SoundRowItem inherits Rectangle {
     in property <SoundRow> item;
-    // On the TIDAL tab „Zufällig“'s icon is in the covers' column.
+    // On the TIDAL tab "Random"'s icon is in the covers' column, so the
+    // texts line up.
     in property <SoundTab> tab;
     // The clock of the scrolling second line (`Marquee.time-ms`).
     in property <int> marquee-ms;
@@ -233,8 +236,6 @@ export component SoundRowItem inherits Rectangle {
         height: parent.height;
         background: Theme.accent-dark;
     }
-    // On the TIDAL tab „Zufällig“'s icon sits in the covers'
-    // column, so the texts line up.
     if root.item.kind == SoundRowKind.random: Icon {
         kind: IconKind.shuffle;
         x: root.tab == SoundTab.tidal ? 46px : 32px;
@@ -267,7 +268,7 @@ export component SoundRowItem inherits Rectangle {
         overflow: elide;
         vertical-alignment: center;
     }
-    // Scrolls if too long (artist, „Nicht mehr in der Playlist“).
+    // Scrolls if too long (artist, "No longer in the playlist").
     if root.item.sub != "" && root.item.kind != SoundRowKind.airdrop-note: Marquee {
         x: SoundListLayout.text-x(root.item.kind, root.tab);
         y: 62px;
@@ -370,7 +371,7 @@ export component SoundPage inherits Rectangle {
         x: 24px;
         y: 20px;
         width: 240px;
-        text: "Alarm";
+        text: Lang.labels.alarm;
         clicked => { SoundPicker.back(); }
     }
     Button {
@@ -378,7 +379,7 @@ export component SoundPage inherits Rectangle {
         y: 20px;
         width: 240px;
         kind: ButtonKind.primary;
-        text: "Sichern";
+        text: Lang.labels.save;
         on-press: true;
         enabled: SoundPicker.can-save;
         clicked => { SoundPicker.save(); }
@@ -391,7 +392,7 @@ export component SoundPage inherits Rectangle {
         x: SoundListLayout.x;
         y: 132px;
         width: SoundListLayout.width;
-        items: ["Datei", "TIDAL"];
+        items: [Lang.labels.files, "TIDAL"];
         selected: SoundPicker.tab == SoundTab.files ? 0 : 1;
         chosen(i) => { SoundPicker.select-tab(i == 0 ? SoundTab.files : SoundTab.tidal); }
     }
@@ -440,7 +441,7 @@ export component SoundPage inherits Rectangle {
                 x: 384px;
                 y: 64px;
                 width: parent.width - self.x - 32px;
-                text: "Mit dem Handy scannen und bei TIDAL bestätigen.";
+                text: Lang.labels.tidal-scan;
                 font-size: 30px;
                 color: Theme.text;
                 wrap: word-wrap;
@@ -449,7 +450,7 @@ export component SoundPage inherits Rectangle {
                 x: 384px;
                 y: 260px;
                 width: parent.width - self.x - 32px;
-                text: "Code: " + SoundPicker.tidal-code;
+                text: SoundPicker.tidal-code;
                 font-size: 40px;
                 color: Theme.text-dim;
             }
@@ -473,7 +474,7 @@ export component SoundPage inherits Rectangle {
             x: 32px;
             y: 24px;
             height: 48px;
-            text: "Lautstärke";
+            text: Lang.labels.volume;
             font-size: 40px;
             color: Theme.text;
             vertical-alignment: center;
@@ -491,7 +492,7 @@ export component SoundPage inherits Rectangle {
             x: 32px;
             y: 216px;
             height: 48px;
-            text: "Einblenden";
+            text: Lang.labels.fade-in;
             font-size: 40px;
             color: Theme.text;
             vertical-alignment: center;
@@ -500,7 +501,7 @@ export component SoundPage inherits Rectangle {
             x: 32px;
             y: 280px;
             width: parent.width - 64px;
-            items: ["aus", "10 s", "30 s", "60 s"];
+            items: [Lang.labels.off, "10 s", "30 s", "60 s"];
             selected: SoundPicker.fade;
             chosen(i) => {
                 SoundPicker.fade = i;
@@ -512,7 +513,7 @@ export component SoundPage inherits Rectangle {
             y: 420px;
             width: 320px;
             icon: SoundPicker.previewing ? IconKind.stop : IconKind.play;
-            text: SoundPicker.previewing ? "Stopp" : "Probehören";
+            text: SoundPicker.previewing ? Lang.labels.stop : Lang.labels.preview;
             clicked => { SoundPicker.preview(); }
         }
     }

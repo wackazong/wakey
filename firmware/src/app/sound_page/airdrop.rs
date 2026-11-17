@@ -4,8 +4,8 @@
 
 use super::fill_list;
 use crate::airdrop::{self, State};
-use crate::app::Ctx;
 use crate::app::screens::{AppWindow, SoundPicker, SoundRow, SoundRowKind, SoundTab};
+use crate::app::{Ctx, texts};
 use crate::sounds;
 use slint::{ComponentHandle, Image, Model, TimerMode};
 use std::time::Duration;
@@ -39,22 +39,23 @@ pub(super) fn rows(ctx: &Ctx) -> Vec<SoundRow> {
         progress,
         failed: false,
     };
+    let texts = &texts::get().airdrop;
     let note = match state {
-        State::Off | State::Starting => "AirDrop startet …",
-        State::Ready | State::Receiving(_) => "AirDrop bereit für neue Klänge",
-        State::Failed => "AirDrop nicht verfügbar",
+        State::Off | State::Starting => &texts.starting,
+        State::Ready | State::Receiving(_) => &texts.ready,
+        State::Failed => &texts.failed,
     };
     let mut rows = Vec::new();
     if let State::Receiving(p) = &state {
         rows.push(row(
             p.name.clone(),
-            "wird empfangen …".into(),
+            texts.receiving.clone(),
             SoundRowKind::AirdropFile,
             fraction(p),
         ));
     }
     rows.push(row(
-        note.into(),
+        note.clone(),
         String::new(),
         SoundRowKind::AirdropNote,
         -1.0,
@@ -63,6 +64,7 @@ pub(super) fn rows(ctx: &Ctx) -> Vec<SoundRow> {
     rows
 }
 
+/// How much of the file has arrived (0–1).
 fn fraction(p: &wakey_core::airdrop::Progress) -> f32 {
     if p.size == 0 {
         0.0
@@ -90,12 +92,13 @@ pub(super) fn tick(window: &AppWindow, ctx: &Ctx) {
             if let State::Receiving(p) = &state {
                 let rows = window.global::<SoundPicker>().get_rows();
                 let i = rows.row_count().saturating_sub(2);
+                let fraction = fraction(p);
                 // As TIDAL's bar: only a visible step repaints the row.
                 if let Some(mut row) = rows.row_data(i)
                     && row.kind == SoundRowKind::AirdropFile
-                    && (row.progress - fraction(p)).abs() >= 0.005
+                    && (row.progress - fraction).abs() >= 0.005
                 {
-                    row.progress = fraction(p);
+                    row.progress = fraction;
                     rows.set_row_data(i, row);
                 }
             }

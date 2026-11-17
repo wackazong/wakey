@@ -16,7 +16,7 @@ mod tidal;
 use super::screens::{
     AppWindow, Page, SoundListLayout, SoundPicker, SoundRow, SoundRowKind, SoundTab,
 };
-use super::{Ctx, alarm_page, show_page};
+use super::{Ctx, alarm_page, show_page, texts};
 use crate::sounds::{self, SoundFile};
 use crate::tidal::TrackStatus;
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, VecModel};
@@ -115,7 +115,7 @@ fn tidal_id(sound: &Sound) -> Option<u64> {
     }
 }
 
-/// Sichern: only after a change, and with at least one day.
+/// Saving: only after a change, and with at least one day.
 fn update_can_save(window: &AppWindow, ctx: &Ctx) {
     let any_day = ctx.draft.borrow().any_day();
     window
@@ -143,6 +143,19 @@ fn row(title: &str, sub: &str, sound: &Sound, selected: &Sound, kind: SoundRowKi
     }
 }
 
+/// The "Random" row of a tab, standing for `sound`.
+fn random_choice(sound: Sound, selected: &Sound) -> (SoundRow, Sound) {
+    let texts = &texts::get().sound;
+    let row = row(
+        &texts.random,
+        &texts.random_note,
+        &sound,
+        selected,
+        SoundRowKind::Random,
+    );
+    (row, sound)
+}
+
 /// The Files tab's choices: each row and the sound it stands for. The
 /// built-in tone is only the fallback (a sound that cannot be played),
 /// never a choice of its own.
@@ -152,17 +165,7 @@ fn file_choices(ctx: &Ctx, selected: &Sound) -> Vec<(SoundRow, Sound)> {
     // Only with a choice: with one file it is that file, without any only
     // the built-in tone. Kept while the alarm being edited has it.
     if files.len() > 1 || (files.len() == 1 && *selected == Sound::RandomFile) {
-        let sound = Sound::RandomFile;
-        choices.push((
-            row(
-                "Zufällig",
-                "wechselt jeden Tag",
-                &sound,
-                selected,
-                SoundRowKind::Random,
-            ),
-            sound,
-        ));
+        choices.push(random_choice(Sound::RandomFile, selected));
     }
     choices.extend(files.iter().map(|f| {
         let sound = Sound::File(f.path.clone());

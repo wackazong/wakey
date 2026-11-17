@@ -1,0 +1,87 @@
+{
+  "weekdays": ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"],
+  "weekdays_short": ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
+  "months": ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+  "date": "{weekday}, {day}. {month} {year}",
+  "keyboard": ["qwertzuiopü", "asdfghjklöä", "yxcvbnmß"],
+  "labels": {
+    "cancel": "Abbrechen",
+    "save": "Sichern",
+    "done": "Fertig",
+    "delete": "Löschen",
+    "clock": "Uhr",
+    "new_alarm": "Neu",
+    "no_alarms": "Noch kein Wecker gestellt",
+    "name": "Name",
+    "name_optional": "optional",
+    "name_hint": "Name des Weckers",
+    "days": "Tage",
+    "choose_a_day": "Mindestens einen Tag wählen",
+    "sound": "Klang",
+    "alarm": "Alarm",
+    "files": "Datei",
+    "volume": "Lautstärke",
+    "fade_in": "Einblenden",
+    "off": "aus",
+    "preview": "Probehören",
+    "stop": "Stopp",
+    "space": "Leerzeichen",
+    "hold_to_stop": "Halten: Wecker aus",
+    "stop_hint": "Zum Ausschalten die Taste halten",
+    "tidal_scan": "Mit dem Handy scannen und bei TIDAL bestätigen.",
+    "config_error": "config.json ist fehlerhaft",
+    "config_error_help": "Die Datei auf der Speicherkarte korrigieren und den Wecker neu starten. Bis dahin läuft er nicht, auch kein Alarm."
+  },
+  "clock": {
+    "no_alarm": "Kein Wecker gestellt",
+    "today": "Heute",
+    "tomorrow": "Morgen",
+    "next_alarm": "{day} {time}",
+    "snooze_hint": "Tippen zum Schlummern · noch {n}×",
+    "snoozed": "Schlummern bis {time} · noch {n}×",
+    "snoozed_last": "Schlummern bis {time} · letztes Mal"
+  },
+  "alarm": {
+    "rings_in": "Klingelt in {time}",
+    "rings_never": "Klingelt nicht",
+    "days": "{n} Tg.",
+    "hours": "{n} Std.",
+    "minutes": "{n} Min.",
+    "save_failed": "Speichern fehlgeschlagen – SD-Karte prüfen"
+  },
+  "sound": {
+    "built_in": "Eingebauter Ton",
+    "random": "Zufällig",
+    "random_note": "wechselt jeden Tag",
+    "tidal_track": "TIDAL-Titel"
+  },
+  "airdrop": {
+    "starting": "AirDrop startet …",
+    "ready": "AirDrop bereit für neue Klänge",
+    "failed": "AirDrop nicht verfügbar",
+    "receiving": "wird empfangen …"
+  },
+  "tidal": {
+    "code": "Code: {code}",
+    "downloading": "{artist} · lädt …",
+    "queued": "{artist} · wird geladen",
+    "removed": "Nicht mehr in der Playlist · {artist}",
+    "no_credentials": "TIDAL ist nicht eingerichtet: die Zugangsdaten fehlen in config.json.",
+    "connecting": "Verbinde mit TIDAL …",
+    "syncing": "Lade die Playlist …",
+    "empty": "Die Playlist ist leer.",
+    "retry": "{problem} Zum Wiederholen den Tab erneut öffnen.",
+    "session": "Die Anmeldung ist ungültig.",
+    "no_playlist": "Keine Playlist „{name}“ bei TIDAL.",
+    "code_expired": "Der Code ist abgelaufen.",
+    "login_refused": "Die Anmeldung wurde abgelehnt.",
+    "unreachable": "TIDAL ist nicht erreichbar.",
+    "server": "TIDAL hat unerwartet geantwortet.",
+    "storage": "Die Speicherkarte ist nicht beschreibbar."
+  },
+  "network": {
+    "not_configured": "Kein WLAN eingerichtet (config.json).",
+    "no_connection": "Keine Verbindung zu „{ssid}“.",
+    "failed": "WLAN-Fehler."
+  }
+}

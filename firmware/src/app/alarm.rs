@@ -8,7 +8,8 @@
 //! one if none is connected ([`Output`]); otherwise both are stopped.
 
 use crate::audio::output::Output;
-use crate::audio::player::{Player, Sound as PlayerSound};
+use crate::audio::player::{Player, Sound as PlayerSound, UNDERRUNS};
+use crate::tidal::Tidal;
 use crate::{clock, config, sounds};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use std::sync::Arc;
@@ -148,10 +149,10 @@ impl AlarmClock {
     ///
     /// Never the built-in tone in place of the sound (only if the tone is
     /// the sound): a TIDAL track still downloading plays from what has
-    /// arrived ([`crate::tidal::Tidal::stream`]); a sound that cannot be
+    /// arrived ([`Tidal::stream`]); a sound that cannot be
     /// played (not on the card, download failed) is silent. A real alarm
     /// still rings the tone then.
-    pub fn preview(&mut self, cfg: &AlarmConfig, tidal: &crate::tidal::Tidal) {
+    pub fn preview(&mut self, cfg: &AlarmConfig, tidal: &Tidal) {
         if self.sounding.is_some() {
             return;
         }
@@ -209,7 +210,7 @@ impl AlarmClock {
         if self.previewing {
             log::info!(
                 "alarm: preview stopped (underruns so far: {})",
-                crate::audio::player::UNDERRUNS.load(Ordering::Relaxed)
+                UNDERRUNS.load(Ordering::Relaxed)
             );
             self.previewing = false;
             if self.sounding.is_none() {
@@ -245,7 +246,7 @@ impl AlarmClock {
             Phase::Idle => self
                 .machine
                 .next(&self.alarms, m.local)
-                .map(|(_, t)| t.to_unix() - m.local.to_unix()),
+                .map(|(_, t)| clock::unix(&t) - m.unix),
         }
     }
 

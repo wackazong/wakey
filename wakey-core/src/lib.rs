@@ -11,7 +11,8 @@
 //! - [`audio_file`]: audio file readers (WAV, AIFF, FLAC, MP3, AAC or ALAC
 //!   in M4A, ADTS AAC) → stereo i16.
 //! - [`config`]: the `config.json` model.
-//! - [`datetime`]: calendar dates ↔ Unix time, German date strings.
+//! - [`datetime`]: calendar dates ↔ Unix time.
+//! - [`lang`]: the screen's texts per language (`lang/*.json`).
 //! - [`mix`]: sample operations for the built-in speaker (mono, mixing,
 //!   keep-alive).
 //! - [`resample`]: sample-rate conversion to the speaker's 48 kHz.
@@ -28,6 +29,7 @@ pub mod alarm;
 pub mod audio_file;
 pub mod config;
 pub mod datetime;
+pub mod lang;
 pub mod mix;
 pub mod resample;
 pub mod scroll;

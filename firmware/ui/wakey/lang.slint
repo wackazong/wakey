@@ -1,0 +1,43 @@
+// The pages' fixed texts in the configured language. Rust fills them at
+// start from the language file (`wakey-core/lang/`, its `labels`); texts
+// with changing parts come ready-made through the pages' own globals.
+
+export struct Labels {
+    cancel: string,
+    save: string,
+    done: string,
+    delete: string,
+    // The way back to the clock page.
+    clock: string,
+    new-alarm: string,
+    no-alarms: string,
+    name: string,
+    name-optional: string,
+    name-hint: string,
+    days: string,
+    choose-a-day: string,
+    sound: string,
+    // The way back to the alarm page.
+    alarm: string,
+    files: string,
+    volume: string,
+    fade-in: string,
+    off: string,
+    preview: string,
+    stop: string,
+    space: string,
+    hold-to-stop: string,
+    stop-hint: string,
+    tidal-scan: string,
+    config-error: string,
+    config-error-help: string,
+}
+
+export global Lang {
+    in property <Labels> labels;
+    // Two letters each, Monday first.
+    in property <[string]> weekdays;
+    // The keyboard's letters: three rows of at most 11, 11 and 8 keys.
+    in property <[[string]]> keys-lower;
+    in property <[[string]]> keys-upper;
+}

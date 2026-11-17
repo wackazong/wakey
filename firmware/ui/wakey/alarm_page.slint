@@ -1,19 +1,21 @@
 // Editing one alarm: time on two wheels, name, weekdays, and rows that open
-// the sound page. Sichern saves, Abbrechen throws the edits away.
+// the sound page. Save saves, Cancel throws the edits away.
 //
-// ┌ Abbrechen ─────────────────────────────────────── Sichern ┐
-// │      05   44         │ Name                  Arbeit │
-// │    [ 06 : 45 ]       │ Tage                         │
-// │      07   46         │ (Mo)(Di)(Mi)(Do)(Fr)(Sa)(So) │
-// │                      │ Klang          Morgenlicht   │
-// │ Klingelt in 9 Std.   │              ▮▮▮  < 10 s   › │
-// └───────────────────────────────────────────────────────┘
+// ┌ Cancel ────────────────────────────────────────── Save ┐
+// │      05   44         │ Name                    Work │
+// │    [ 06 : 45 ]       │ Days                         │
+// │      07   46         │ (Mo)(Tu)(We)(Th)(Fr)(Sa)(Su) │
+// │                      │ Sound        Morning light   │
+// │ Rings in 9 h 14 min  │              ▮▮▮  < 10 s   › │
+// └──────────────────────────────────────────────────────┘
 
+import { Lang } from "lang.slint";
 import { Theme, Button, ButtonKind, Chip, Icon, IconKind, VolumeBars } from "theme.slint";
 import { Wheel } from "wheel.slint";
 
 // The values being edited; filled from Rust when the page opens
-// (`src/app/alarm_page.rs`), read back on save.
+// (`src/app/alarm_page.rs`), which keeps the alarm itself and follows the
+// changes reported here.
 export global AlarmEditor {
     in-out property <int> hour;
     in-out property <int> minute;
@@ -26,9 +28,9 @@ export global AlarmEditor {
     in property <[bool]> days: [false, false, false, false, false, false, false];
     // At least one day selected (set from Rust).
     in property <bool> any-day;
-    // The draft differs from the saved alarm (set from Rust): Sichern.
+    // The draft differs from the saved alarm (set from Rust): Save.
     in property <bool> changed;
-    // "Klingelt in 9 Std. 14 Min.", set from Rust after every change.
+    // "Rings in 9 h 14 min", set from Rust after every change.
     in property <string> relative;
     in property <string> sound;
     // Volume as 0–5 bars, fade-in as text ("10 s").
@@ -37,7 +39,8 @@ export global AlarmEditor {
     // Why saving failed, or empty.
     in property <string> error;
 
-    // A wheel settled, or a day changed (summary, inactivity timeout).
+    // A wheel settled on a new value (`hour`, `minute`, which follow the
+    // wheels while they turn).
     callback edited();
     // A wheel row passed the middle (click sound).
     callback ticked();
@@ -94,7 +97,7 @@ export component AlarmPage inherits Rectangle {
         y: 20px;
         width: 240px;
         kind: ButtonKind.ghost;
-        text: "Abbrechen";
+        text: Lang.labels.cancel;
         on-press: true;
         clicked => { AlarmEditor.cancel(); }
     }
@@ -103,14 +106,14 @@ export component AlarmPage inherits Rectangle {
         y: 20px;
         width: 240px;
         kind: ButtonKind.primary;
-        text: "Sichern";
+        text: Lang.labels.save;
         on-press: true;
         enabled: AlarmEditor.any-day && AlarmEditor.changed;
         clicked => { AlarmEditor.save(); }
     }
 
     // Time: two wheels and the colon, centred in the left column, as tall
-    // as the space above "Klingelt in" allows.
+    // as the space above "Rings in" allows.
     property <length> time-x: 40px;
     property <length> time-width: 440px;
     property <length> wheels-x: self.time-x + (self.time-width - 2 * hours.width - 40px) / 2;
@@ -158,7 +161,7 @@ export component AlarmPage inherits Rectangle {
         width: root.time-width;
         height: 48px;
         text: AlarmEditor.error != "" ? AlarmEditor.error
-            : !AlarmEditor.any-day ? "Mindestens einen Tag wählen"
+            : !AlarmEditor.any-day ? Lang.labels.choose-a-day
             : AlarmEditor.relative;
         font-size: 30px;
         color: AlarmEditor.error != "" ? Theme.error : !AlarmEditor.any-day ? Theme.warn : Theme.text-dim;
@@ -177,12 +180,12 @@ export component AlarmPage inherits Rectangle {
 
         CardRow {
             y: 0;
-            label: "Name";
+            label: Lang.labels.name;
             clicked => { AlarmEditor.edit-name(); }
             Text {
                 x: 200px;
                 width: parent.width - 200px - 80px;
-                text: AlarmEditor.name != "" ? AlarmEditor.name : "optional";
+                text: AlarmEditor.name != "" ? AlarmEditor.name : Lang.labels.name-optional;
                 font-size: 40px;
                 color: AlarmEditor.name != "" ? Theme.text : Theme.text-faint;
                 horizontal-alignment: right;
@@ -190,21 +193,21 @@ export component AlarmPage inherits Rectangle {
             }
         }
 
-        // Name, Tage and Klang with even gaps between what they show and
-        // 32 px to the card's top and bottom edge: Name's text sits in the
-        // middle of its 112 px row, Klang's two lines at 28–136 px of its
-        // 160 px row. The chips sit 32 px below the Tage label.
+        // Name, days and sound with even gaps between what they show and
+        // 32 px to the card's top and bottom edge: the name's text sits in
+        // the middle of its 112 px row, the sound's two lines at 28–136 px
+        // of its 160 px row. The chips sit 32 px below the days' label.
         Text {
             x: 32px;
             y: 164px;
             height: 56px;
-            text: "Tage";
+            text: Lang.labels.days;
             font-size: 40px;
             color: Theme.text;
             vertical-alignment: center;
         }
         // Seven chips across the card, 12 px apart.
-        for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Chip {
+        for name[i] in Lang.weekdays: Chip {
             x: 24px + i * (self.width + 12px);
             y: 252px;
             width: (parent.width - 48px - 6 * 12px) / 7;
@@ -221,7 +224,7 @@ export component AlarmPage inherits Rectangle {
         CardRow {
             y: 388px;
             height: 160px;
-            label: "Klang";
+            label: Lang.labels.sound;
             clicked => { AlarmEditor.open-sound(); }
             Text {
                 x: 200px;

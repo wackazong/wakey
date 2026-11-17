@@ -1,6 +1,6 @@
 //! The clock screen's view model: once a second, aligned to the clock's
 //! second, the alarm is advanced and the time, date, alarm, the sky
-//! (`wakey_core::sky`, from the sun's elevation over Zurich) and the
+//! (`wakey_core::sky`, from the sun's elevation at the configured place) and the
 //! missing-speaker and missing-network flags go into the `Clock`
 //! properties. Only fields that changed are set, so Slint repaints only
 //! those (a seconds tick dirties ~110 panel rows). The ringing controls are
@@ -8,7 +8,7 @@
 
 use super::alarm::View;
 use super::screens::{AlarmPhase, AppWindow, Clock, Page};
-use super::{Ctx, show_page};
+use super::{Ctx, show_page, texts};
 use crate::audio::uac::UsbAudio;
 use crate::clock;
 use crate::net::{Status, Wifi};
@@ -16,7 +16,8 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use wakey_core::alarm::Input;
-use wakey_core::datetime::{DateTime, WEEKDAYS_DE};
+use wakey_core::datetime::DateTime;
+use wakey_core::lang::fill;
 use wakey_core::sky;
 
 /// Keeps the screen updating while alive.
@@ -62,27 +63,23 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>, speaker: UsbAudio, wifi: Wifi) -
     let repeat = every_second.clone();
     align.start(
         TimerMode::SingleShot,
-        clock::until_next_second() + core::time::Duration::from_millis(2),
+        clock::until_next_second() + Duration::from_millis(2),
         move || {
             tick();
-            repeat.start(
-                TimerMode::Repeated,
-                core::time::Duration::from_secs(1),
-                tick.clone(),
-            );
+            repeat.start(TimerMode::Repeated, Duration::from_secs(1), tick.clone());
         },
     );
     Ticker {
         _align: align,
         _every_second: every_second,
-        _sky_demo: cfg!(feature = "sky-demo").then(|| sky_demo(window)),
+        _sky_demo: cfg!(feature = "sky-demo").then(|| sky_demo(window, ctx.location)),
     }
 }
 
-/// One real minute for the whole of today, the sun as over Zurich: the sky
+/// One real minute for the whole of today, the sun as over `place`: the sky
 /// steps every 200 ms (~5 minutes of the day), the bottom line shows that
 /// time and the sun's elevation.
-fn sky_demo(window: &AppWindow) -> Timer {
+fn sky_demo(window: &AppWindow, place: sky::Location) -> Timer {
     const DAY_IN: Duration = Duration::from_secs(60);
     const STEP: Duration = Duration::from_millis(200);
     let weak = window.as_weak();
@@ -97,10 +94,10 @@ fn sky_demo(window: &AppWindow) -> Timer {
         let day_part =
             (start.elapsed().as_millis() % DAY_IN.as_millis()) as f64 / DAY_IN.as_millis() as f64;
         let of_day = (day_part * 86_400.0) as i64;
-        let elevation = set_sky(&window, midnight + of_day);
+        let elevation = set_sky(&window, place, midnight + of_day);
         window.global::<Clock>().set_alarm(
             format!(
-                "{:02}:{:02} · Sonne {elevation:.0}°",
+                "{:02}:{:02} · sun {elevation:.0}°",
                 of_day / 3600,
                 of_day / 60 % 60
             )
@@ -110,32 +107,33 @@ fn sky_demo(window: &AppWindow) -> Timer {
     timer
 }
 
-/// Sets the sky for Unix time `unix`; returns the sun's elevation.
-fn set_sky(window: &AppWindow, unix: i64) -> f32 {
+/// Sets the properties of `$global` whose value differs from the new one.
+macro_rules! set_changed {
+    ($global:expr; $($get:ident, $set:ident = $v:expr;)*) => {$(
+        if $global.$get() != $v {
+            $global.$set($v);
+        }
+    )*};
+}
+
+/// Sets the sky over `place` for Unix time `unix`; returns the sun's
+/// elevation.
+fn set_sky(window: &AppWindow, place: sky::Location, unix: i64) -> f32 {
     let screen = window.global::<Clock>();
-    let elevation = sky::sun_elevation(unix, sky::LATITUDE, sky::LONGITUDE);
-    let rising = sky::sun_rising(unix, sky::LATITUDE, sky::LONGITUDE);
+    let elevation = sky::sun_elevation(unix, place);
+    let rising = sky::sun_rising(unix, place);
     let gradient = sky::gradient(elevation, rising);
     let [top, upper, middle, lower, bottom] =
         gradient.map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2));
+    let light = sky::bottom_is_light(&gradient);
     // Each stop only when it changed (a change repaints the screen).
-    macro_rules! set_changed {
-        ($($get:ident, $set:ident = $v:expr;)*) => {$(
-            if screen.$get() != $v {
-                screen.$set($v);
-            }
-        )*};
-    }
-    set_changed! {
+    set_changed! { screen;
         get_sky_top, set_sky_top = top;
         get_sky_upper, set_sky_upper = upper;
         get_sky_middle, set_sky_middle = middle;
         get_sky_lower, set_sky_lower = lower;
         get_sky_bottom, set_sky_bottom = bottom;
-    }
-    let light = sky::bottom_is_light(&gradient);
-    if screen.get_bottom_light() != light {
-        screen.set_bottom_light(light);
+        get_bottom_light, set_bottom_light = light;
     }
     elevation
 }
@@ -175,23 +173,28 @@ fn set_chars(model: &VecModel<SharedString>, text: &str) {
     }
 }
 
+/// Sets a text property if `new` differs from `current`.
+fn set_text(current: SharedString, new: String, set: impl Fn(SharedString)) {
+    if current.as_str() != new {
+        set(new.into());
+    }
+}
+
+/// Brings the screen up to the current time and the alarm's state.
 fn update(window: &AppWindow, ctx: &Ctx, face: &Face, speaker: &UsbAudio, wifi: &Wifi) {
     let screen = window.global::<Clock>();
-    fn set_text(current: SharedString, new: String, set: impl Fn(SharedString)) {
-        if current.as_str() != new {
-            set(new.into());
-        }
-    }
     let now = clock::moment();
     let t = now.local;
     // The sky changes at most once a minute (a whole-screen repaint, ~66
     // ms per frame buffer): it is computed for the minute, not the second.
     if !cfg!(feature = "sky-demo") {
-        set_sky(window, now.unix - now.unix.rem_euclid(60));
+        set_sky(window, ctx.location, now.unix - now.unix.rem_euclid(60));
     }
     set_chars(&face.time, &format!("{:02}:{:02}", t.hour, t.minute));
     set_chars(&face.seconds, &format!("{:02}", t.second));
-    set_text(screen.get_date(), t.date_de(), |v| screen.set_date(v));
+    set_text(screen.get_date(), texts::get().date(&t), |v| {
+        screen.set_date(v)
+    });
 
     let view = ctx.alarm.borrow().view();
     if !cfg!(feature = "sky-demo") {
@@ -207,55 +210,54 @@ fn update(window: &AppWindow, ctx: &Ctx, face: &Face, speaker: &UsbAudio, wifi: 
         View::Ringing { snoozes_left } => (AlarmPhase::Ringing, snoozes_left),
         View::Snoozed { snoozes_left, .. } => (AlarmPhase::Snoozed, snoozes_left),
     };
-    if screen.get_alarm_phase() != phase {
-        screen.set_alarm_phase(phase);
-    }
-    if screen.get_snoozes_left() != i32::from(snoozes_left) {
-        screen.set_snoozes_left(snoozes_left.into());
-    }
-
+    let hint = fill(&texts::get().clock.snooze_hint, &[("n", &snoozes_left)]);
+    set_text(screen.get_snooze_hint(), hint, |v| {
+        screen.set_snooze_hint(v)
+    });
+    let snoozes_left = i32::from(snoozes_left);
     let no_speaker = speaker.missing();
-    if screen.get_no_speaker() != no_speaker {
-        screen.set_no_speaker(no_speaker);
-    }
     // Starting and connecting are not errors (yet).
     let no_network = matches!(
         wifi.status(),
         Status::NotConfigured { .. } | Status::Failed { .. }
     );
-    if screen.get_no_network() != no_network {
-        screen.set_no_network(no_network);
+    set_changed! { screen;
+        get_alarm_phase, set_alarm_phase = phase;
+        get_snoozes_left, set_snoozes_left = snoozes_left;
+        get_no_speaker, set_no_speaker = no_speaker;
+        get_no_network, set_no_network = no_network;
     }
 }
 
-/// The bottom line: the next alarm ("Morgen 07:00"), or the snooze.
+/// The bottom line: the next alarm ("Tomorrow 07:00"), or the snooze.
 fn alarm_line(view: &View, now: &DateTime) -> String {
+    let all = texts::get();
+    let texts = &all.clock;
+    let time = |t: &DateTime| format!("{:02}:{:02}", t.hour, t.minute);
     match view {
-        View::Idle { next: None } => "Kein Wecker gestellt".into(),
+        View::Idle { next: None } => texts.no_alarm.clone(),
         View::Idle { next: Some(t) } => {
             let day = if t.date() == now.date() {
-                "Heute"
+                &texts.today
             } else if t.date() == now.add_days(1).date() {
-                "Morgen"
+                &texts.tomorrow
             } else {
-                WEEKDAYS_DE[usize::from(t.weekday) % 7]
+                all.weekday(t)
             };
-            format!("{day} {:02}:{:02}", t.hour, t.minute)
+            fill(&texts.next_alarm, &[("day", &day), ("time", &time(t))])
         }
-        View::Ringing { .. } => "Wecker klingelt".into(),
+        // The page shows what a tap does instead.
+        View::Ringing { .. } => String::new(),
         View::Snoozed {
             until,
             snoozes_left: 0,
-        } => format!(
-            "Schlummern bis {:02}:{:02} · letztes Mal",
-            until.hour, until.minute
-        ),
+        } => fill(&texts.snoozed_last, &[("time", &time(until))]),
         View::Snoozed {
             until,
             snoozes_left,
-        } => format!(
-            "Schlummern bis {:02}:{:02} · noch {snoozes_left}×",
-            until.hour, until.minute
+        } => fill(
+            &texts.snoozed,
+            &[("time", &time(until)), ("n", snoozes_left)],
         ),
     }
 }

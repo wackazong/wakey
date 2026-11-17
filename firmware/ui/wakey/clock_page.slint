@@ -9,6 +9,7 @@
 // others. The once-a-second update dirties only the seconds. The date
 // rolls as a whole.
 
+import { Lang } from "lang.slint";
 import { Theme, Icon, IconKind, Roll } from "theme.slint";
 
 export enum AlarmPhase { idle, ringing, snoozed }
@@ -18,9 +19,9 @@ export global Clock {
     // "07:38", one character per entry; seconds the same ("05").
     in property <[string]> time: ["-", "-", ":", "-", "-"];
     in property <[string]> seconds: ["-", "-"];
-    // "Montag, 9. November 2026"
+    // "Monday, 9 November 2026"
     in property <string> date: "";
-    // Next alarm or the snooze ("Morgen 06:30").
+    // Next alarm ("Tomorrow 06:30"), or until when it is snoozed.
     in property <string> alarm: "";
     // Shown as symbols, only when true: no USB speaker (alarms play on the
     // built-in one), no network (Wi-Fi failed or not set up).
@@ -37,9 +38,11 @@ export global Clock {
     // The alarm, and the snoozes still allowed.
     in property <AlarmPhase> alarm-phase;
     in property <int> snoozes-left: 0;
+    // What a tap does while ringing, with the snoozes left.
+    in property <string> snooze-hint;
 
     // Ringing: a tap anywhere snoozes (while snoozes are left); stopping
-    // takes holding the button in the top-right corner for 1.5 s.
+    // takes holding the button at the bottom for 1.5 s.
     callback snooze();
     callback stop();
     // The alarm line was touched (idle only).
@@ -53,7 +56,7 @@ export component ClockPage inherits Rectangle {
     background: @linear-gradient(180deg, Clock.sky-top 0%, Clock.sky-upper 25%, Clock.sky-middle 50%, Clock.sky-lower 75%, Clock.sky-bottom 100%);
 
     property <bool> ringing: Clock.alarm-phase == AlarmPhase.ringing;
-    property <color> digits: root.ringing ? Theme.accent : Theme.text;
+    property <bool> idle: Clock.alarm-phase == AlarmPhase.idle;
     property <color> soft: Theme.text.with-alpha(0.72);
     property <color> faint: Theme.text.with-alpha(0.45);
 
@@ -87,7 +90,7 @@ export component ClockPage inherits Rectangle {
             text: c;
             font-size: 280px;
             font-weight: 500;
-            text-color: c == ":" ? root.faint : root.digits;
+            text-color: c == ":" ? root.faint : Theme.text;
         }
         Rectangle {
             width: 120px;
@@ -113,22 +116,24 @@ export component ClockPage inherits Rectangle {
         y: 440px;
         width: parent.width;
         height: 64px;
-        text: !root.ringing ? Clock.date
-            : Clock.snoozes-left > 0 ? "Tippen zum Schlummern · noch \{Clock.snoozes-left}×"
-            : "Zum Ausschalten oben rechts halten";
+        // Under the time: the date; while an alarm is active, what a tap
+        // does, or until when it is snoozed (the stop button has the
+        // alarm line's place).
+        text: root.idle ? Clock.date
+            : !root.ringing ? Clock.alarm
+            : Clock.snoozes-left > 0 ? Clock.snooze-hint
+            : Lang.labels.stop-hint;
         font-size: 40px;
-        text-color: root.ringing ? Theme.accent : root.soft;
+        text-color: root.soft;
         horizontal-alignment: center;
     }
 
     // Bottom middle: the next alarm, white on a dark horizon, dark on a
     // light one. Touching it opens the alarm list (the slide starts at
     // once).
-    property <color> alarm-color: Clock.bottom-light
-        ? (Clock.alarm-phase == AlarmPhase.idle ? Theme.background.with-alpha(0.72) : Theme.accent-dark)
-        : (Clock.alarm-phase == AlarmPhase.idle ? root.soft : Theme.accent);
+    property <color> alarm-color: Clock.bottom-light ? Theme.background.with-alpha(0.72) : root.soft;
     property <color> symbol-color: Clock.bottom-light ? Theme.accent-dark : Theme.accent;
-    HorizontalLayout {
+    if root.idle: HorizontalLayout {
         x: 0;
         y: parent.height - 104px;
         width: parent.width;
@@ -157,7 +162,7 @@ export component ClockPage inherits Rectangle {
         y: parent.height - 136px;
         width: parent.width - 2 * 280px;
         height: 136px;
-        enabled: Clock.alarm-phase == AlarmPhase.idle;
+        enabled: root.idle;
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 Clock.open-alarm();
@@ -195,10 +200,10 @@ export component ClockPage inherits Rectangle {
         }
     }
 
-    // Stop: hold until the bar has filled.
-    if Clock.alarm-phase != AlarmPhase.idle: Rectangle {
-        x: parent.width - 400px;
-        y: 30px;
+    // Stop, in the alarm line's place: hold until the button has filled.
+    if !root.idle: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - 116px;
         width: 360px;
         height: 96px;
         border-radius: 48px;
@@ -206,17 +211,25 @@ export component ClockPage inherits Rectangle {
         border-width: 2px;
         border-color: Theme.outline;
 
+        // The fill: the button again in the accent colour, uncovered from
+        // the left by a clip that grows (a clip is a plain rectangle, so
+        // the fill keeps the button's round ends).
         Rectangle {
             x: 0;
             width: stop-area.pressed ? parent.width : 0;
             animate width { duration: stop-area.pressed ? 1500ms : 0ms; }
-            // Rounded itself: the software renderer clips to the parent's
-            // rectangle and ignores its border radius.
-            border-radius: 48px;
-            background: Theme.accent-dark;
+            clip: true;
+            Rectangle {
+                x: 0;
+                width: 360px;
+                border-radius: 48px;
+                background: Theme.accent-dark;
+                border-width: 2px;
+                border-color: Theme.outline;
+            }
         }
         Text {
-            text: "Halten: Wecker aus";
+            text: Lang.labels.hold-to-stop;
             font-size: 30px;
             color: Theme.text;
             horizontal-alignment: center;

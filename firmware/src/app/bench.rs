@@ -10,9 +10,9 @@
 //! belong to that step.
 //!
 //! The positions follow the layouts in `ui/wakey/clock_page.slint`,
-//! `ui/wakey/alarm_list.slint` and `ui/wakey/alarm_page.slint`. The list needs at least two alarms, and
-//! more than fit the screen (four) for the scroll steps: a list that fits
-//! does not scroll.
+//! `ui/wakey/alarm_list.slint` and `ui/wakey/alarm_page.slint`. The list
+//! needs at least two alarms, and more than fit the screen (four) for the
+//! scroll steps: a list that fits does not scroll.
 
 use crate::ui::input::{EVENTS, Phase, TouchEvent};
 use crate::ui::trace;
@@ -21,14 +21,14 @@ use embassy_time::{Instant, Timer};
 
 /// The alarm line on the clock page (opens the list).
 const CLOCK_ALARM_LINE: (f32, f32) = (640.0, 652.0);
-/// "‹ Uhr" on the list page.
+/// "‹ Clock" on the list page.
 const LIST_BACK: (f32, f32) = (140.0, 64.0);
 /// The middle of the first row's text, and its switch.
 const FIRST_ROW: (f32, f32) = (600.0, 210.0);
 const FIRST_SWITCH: (f32, f32) = (1150.0, 210.0);
 /// A point in the lower part of the list.
 const LOWER_LIST: (f32, f32) = (640.0, 600.0);
-/// The alarm page's minute wheel, and "Abbrechen".
+/// The alarm page's minute wheel, and "Cancel".
 const MINUTE_WHEEL: (f32, f32) = (420.0, 450.0);
 const ALARM_CANCEL: (f32, f32) = (140.0, 64.0);
 
@@ -55,6 +55,18 @@ async fn drag(from: (f32, f32), (dx, dy): (f32, f32), steps: u32) {
     send(Phase::Up, (from.0 + dx, from.1 + dy)).await;
 }
 
+/// A touch held for 400 ms, then moved 30 px down and lifted: the row
+/// lights up, and the move turns the touch into a scroll, so lifting does
+/// not open the alarm.
+async fn hold_then_move(at: (f32, f32)) {
+    let moved = (at.0, at.1 + 30.0);
+    send(Phase::Down, at).await;
+    Timer::after_millis(400).await;
+    send(Phase::Move, moved).await;
+    Timer::after_millis(100).await;
+    send(Phase::Up, moved).await;
+}
+
 /// Waits `wait_ms` (the previous step settles), then logs the next step.
 async fn step(name: &str, wait_ms: u64) {
     Timer::after_millis(wait_ms).await;
@@ -68,14 +80,9 @@ pub async fn run() {
 
     step("open list", 0).await;
     tap(CLOCK_ALARM_LINE).await;
-    // Held, then moved: lights up, then scrolls (as "press" below, but the
-    // first touch on the fresh page).
+    // As "press" below, but the first touch on the fresh page.
     step("first press", 1500).await;
-    send(Phase::Down, FIRST_ROW).await;
-    Timer::after_millis(400).await;
-    send(Phase::Move, (FIRST_ROW.0, FIRST_ROW.1 + 30.0)).await;
-    Timer::after_millis(100).await;
-    send(Phase::Up, (FIRST_ROW.0, FIRST_ROW.1 + 30.0)).await;
+    hold_then_move(FIRST_ROW).await;
     step("fling up", 1500).await;
     drag(LOWER_LIST, (0.0, -300.0), 15).await;
     // A tap while it still moves only stops it.
@@ -83,14 +90,8 @@ pub async fn run() {
     tap(FIRST_ROW).await;
     step("fling down", 2000).await;
     drag((LOWER_LIST.0, LOWER_LIST.1 - 300.0), (0.0, 300.0), 15).await;
-    // Held, then moved a little: the row lights up, and the move turns the
-    // touch into a scroll, so lifting does not open the alarm.
     step("press", 3000).await;
-    send(Phase::Down, FIRST_ROW).await;
-    Timer::after_millis(400).await;
-    send(Phase::Move, (FIRST_ROW.0, FIRST_ROW.1 + 30.0)).await;
-    Timer::after_millis(100).await;
-    send(Phase::Up, (FIRST_ROW.0, FIRST_ROW.1 + 30.0)).await;
+    hold_then_move(FIRST_ROW).await;
     // Short of the delete threshold: springs back.
     step("swipe row", 1500).await;
     drag(FIRST_ROW, (-300.0, 0.0), 20).await;

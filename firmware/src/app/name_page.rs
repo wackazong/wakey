@@ -4,7 +4,7 @@
 
 use super::screens::{AppWindow, NameEditor, Page};
 use super::{Ctx, alarm_page, show_page};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, SharedString};
 use std::rc::Rc;
 use wakey_core::alarm::NAME_MAX;
 
@@ -19,6 +19,7 @@ pub fn open(window: &AppWindow, ctx: &Ctx) {
     show_page(window, ctx, Page::Name);
 }
 
+/// Shows the name as typed so far, and whether the next letter is a capital.
 fn show(window: &AppWindow, text: &str, shift: bool) {
     let editor = window.global::<NameEditor>();
     editor.set_text(text.into());
@@ -29,7 +30,7 @@ fn show(window: &AppWindow, text: &str, shift: bool) {
 pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     let editor = window.global::<NameEditor>();
 
-    editor.on_key(ctx.with_arg(|window, ctx, key: slint::SharedString| {
+    editor.on_key(ctx.with_arg(|window, ctx, key: SharedString| {
         let mut name = ctx.name.borrow_mut();
         if name.chars().count() < NAME_MAX {
             name.push_str(&key);

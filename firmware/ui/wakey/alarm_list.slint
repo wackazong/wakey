@@ -1,15 +1,15 @@
 // The alarms, one row each, sorted by time. The one that rings next has
 // its time in amber. Tap a row to edit it, its switch to turn it on or off,
 // swipe it left past two thirds of the width to delete it (less springs
-// back). "+ Neu" adds one.
+// back). "+ New" adds one.
 //
-// ┌ ‹ Uhr ──────────────────────────────────────── + Neu ┐
-// │ 06:30  Arbeit                               (  ●) │
-// │        Mo Di Mi Do Fr Sa So                        │
-// │ 07:15  Mo Di Mi Do Fr Sa So                 (  ●) │
-// └────────────────────────────────────────────────────┘
+// ┌ ‹ Clock ────────────────────────────────────── + New ┐
+// │ 06:30  Work                                    (  ●) │
+// │        Mo Tu We Th Fr Sa Su                          │
+// │ 07:15  Mo Tu We Th Fr Sa Su                    (  ●) │
+// └──────────────────────────────────────────────────────┘
 //
-// Motion is the firmware's list layer (`src/ui/list_layer.rs`): it sees
+// Motion is the firmware's list layer (`src/ui/list_layer/`): it sees
 // every touch first and takes a touch over once it moves more than `slop`
 // (this page then gets a cancel). Mostly vertical: it scrolls the list;
 // mostly sideways on a row: it swipes that row. Either way it copies
@@ -23,6 +23,7 @@
 // drawn over the row being held, with the same alarm plus highlight, and
 // only it repaints.
 
+import { Lang } from "lang.slint";
 import { Theme, Button, ButtonKind, BackButton, IconKind, Switch } from "theme.slint";
 
 // What the finger on the still list is doing (scrolls and swipes are the
@@ -113,7 +114,7 @@ component Row inherits Rectangle {
     Text {
         x: parent.width - self.width;
         width: 220px;
-        text: "Löschen";
+        text: Lang.labels.delete;
         font-size: 40px;
         color: Theme.text;
         horizontal-alignment: center;
@@ -151,7 +152,7 @@ component Row inherits Rectangle {
             animate color { duration: root.animated ? 250ms : 0ms; }
             vertical-alignment: center;
         }
-        for name[i] in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]: Text {
+        for name[i] in Lang.weekdays: Text {
             x: 290px + i * 64px;
             y: root.alarm.name != "" ? 82px : 53px;
             height: 44px;
@@ -183,7 +184,7 @@ export component AlarmListPage inherits Rectangle {
         x: 24px;
         y: 20px;
         width: 240px;
-        text: "Uhr";
+        text: Lang.labels.clock;
         clicked => { AlarmList.back(); }
     }
     Button {
@@ -192,7 +193,7 @@ export component AlarmListPage inherits Rectangle {
         width: 240px;
         kind: ButtonKind.primary;
         icon: IconKind.plus;
-        text: "Neu";
+        text: Lang.labels.new-alarm;
         on-press: true;
         clicked => { AlarmList.add(); }
     }
@@ -201,7 +202,7 @@ export component AlarmListPage inherits Rectangle {
         y: 300px;
         width: parent.width;
         height: 120px;
-        text: "Noch kein Wecker gestellt";
+        text: Lang.labels.no-alarms;
         font-size: 40px;
         color: Theme.text-faint;
         horizontal-alignment: center;
@@ -379,16 +380,16 @@ export component ListRowPage inherits Rectangle {
     in property <bool> highlighted;
     in property <bool> underlay;
 
+    width: AlarmListLayout.width;
+    height: AlarmListLayout.pitch;
+    background: Theme.background;
+
     if root.underlay: Rectangle {
         y: 0;
         width: parent.width;
         height: AlarmListLayout.row-height;
         background: Theme.danger;
     }
-    width: AlarmListLayout.width;
-    height: AlarmListLayout.pitch;
-    background: Theme.background;
-
     Row {
         y: 0;
         width: parent.width;

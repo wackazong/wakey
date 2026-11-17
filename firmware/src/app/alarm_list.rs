@@ -10,9 +10,9 @@ use super::alarm::AlarmClock;
 use super::screens::{AlarmList, AlarmListLayout, AlarmRow, AppWindow, Clock, Page, Theme};
 use super::{Ctx, alarm_page, show_page};
 use crate::ui::list_layer::{Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
-use crate::ui::platform;
+use crate::ui::{platform, rgb565};
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use wakey_core::alarm::{self, AlarmConfig};
 
@@ -30,9 +30,6 @@ pub fn refresh(window: &AppWindow, alarm: &AlarmClock) {
             next: next == Some(a.id),
         })
         .collect();
-    // Same alarms in the same order (on/off toggled, the next one moved):
-    // update only the rows that changed, in place, so their switches
-    // animate and the others are not repainted.
     let list = window.global::<AlarmList>();
     // Fewer rows may leave the list scrolled past its new end.
     let layout = window.global::<AlarmListLayout>();
@@ -40,6 +37,9 @@ pub fn refresh(window: &AppWindow, alarm: &AlarmClock) {
     if list.get_scroll() > max_scroll {
         list.set_scroll(max_scroll);
     }
+    // Same alarms in the same order (on/off toggled, the next one moved):
+    // update only the rows that changed, in place, so their switches
+    // animate and the others are not repainted.
     let current = list.get_rows();
     if let Some(model) = current.as_any().downcast_ref::<VecModel<AlarmRow>>()
         && model.row_count() == rows.len()
@@ -106,14 +106,14 @@ pub fn layer(window: &AppWindow) -> ListLayer<Rows> {
         // All rows of a typical list: no rendering while scrolling.
         slots: 16,
         slop: l.get_slop(),
-        background: crate::ui::rgb565(window.global::<Theme>().get_background()),
+        background: rgb565(window.global::<Theme>().get_background()),
         page_draws_still: true,
         swipe: true,
         row_radius: px(l.get_row_radius()),
         corners: None,
     };
     let row_window = platform::offscreen_window(layout.width as u32, layout.row_h as u32);
-    let view = AppWindow::new().expect("alarm row view");
+    let view = super::new_window();
     view.set_page(Page::AlarmListRow);
     view.show().expect("show alarm row view");
     let rows = Rows {
@@ -138,6 +138,16 @@ impl Rows {
     fn row(&self, i: usize) -> Option<AlarmRow> {
         self.with_list(|l| l.get_rows().row_data(i)).flatten()
     }
+
+    /// Makes `view` show row `i`, its content moved by `dx`.
+    fn show(&self, i: usize, dx: f32, highlighted: bool, underlay: bool) {
+        if let Some(r) = self.row(i) {
+            self.view.set_list_row(r);
+            self.view.set_list_row_dx(dx);
+            self.view.set_list_row_highlighted(highlighted);
+            self.view.set_list_row_underlay(underlay);
+        }
+    }
 }
 
 impl ListSource for Rows {
@@ -153,7 +163,7 @@ impl ListSource for Rows {
 
     fn stamp(&self, i: usize) -> u64 {
         let Some(r) = self.row(i) else { return 0 };
-        let mut h = std::hash::DefaultHasher::new();
+        let mut h = DefaultHasher::new();
         (
             r.id,
             r.time.as_str(),
@@ -167,33 +177,18 @@ impl ListSource for Rows {
     }
 
     fn prepare(&mut self, i: usize) {
-        if let Some(r) = self.row(i) {
-            self.view.set_list_row(r);
-            self.view.set_list_row_dx(0.0);
-            self.view.set_list_row_highlighted(false);
-            self.view.set_list_row_underlay(false);
-        }
+        self.show(i, 0.0, false, false);
     }
 
     fn prepare_swipe(&mut self, i: usize, part: SwipePart) {
-        let Some(r) = self.row(i) else { return };
-        self.view.set_list_row(r);
         match part {
             SwipePart::Content {
                 highlighted,
                 underlay,
-            } => {
-                self.view.set_list_row_dx(0.0);
-                self.view.set_list_row_highlighted(highlighted);
-                self.view.set_list_row_underlay(underlay);
-            }
-            SwipePart::Underlay => {
-                // The row content moved out entirely; the button keeps its
-                // rounded right corners (no square of red behind).
-                self.view.set_list_row_dx(-10_000.0);
-                self.view.set_list_row_highlighted(false);
-                self.view.set_list_row_underlay(false);
-            }
+            } => self.show(i, 0.0, highlighted, underlay),
+            // The row content moved out entirely; the button keeps its
+            // rounded right corners (no square of red behind).
+            SwipePart::Underlay => self.show(i, -10_000.0, false, false),
         }
     }
 

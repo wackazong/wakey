@@ -1,16 +1,17 @@
-// The alarm's name, typed on an on-screen keyboard (German QWERTZ, a
+// The alarm's name, typed on an on-screen keyboard (the language's letters, a
 // second layer with digits and punctuation). Keys go to Rust
 // (`src/app/name_page.rs`), which edits the text (Slint cannot remove a
 // character) and limits its length.
 //
-// ┌ Abbrechen ─────────────────────────────────────── Fertig ┐
-// │ [ Arbeit|                                              ] │
-// │  q  w  e  r  t  z  u  i  o  p  ü                        │
-// │  a  s  d  f  g  h  j  k  l  ö  ä                        │
-// │  ⇧   y  x  c  v  b  n  m  ß   ⌫                         │
-// │  123  [          Leerzeichen          ]  -               │
+// ┌ Cancel ──────────────────────────────────────────── Done ┐
+// │ [ Work|                                                ] │
+// │    q  w  e  r  t  y  u  i  o  p                          │
+// │      a  s  d  f  g  h  j  k  l                           │
+// │  ⇧     z  x  c  v  b  n  m      ⌫                        │
+// │  123  [             Space             ]  -               │
 // └──────────────────────────────────────────────────────────┘
 
+import { Lang } from "lang.slint";
 import { Theme, Button, ButtonKind, Icon, IconKind } from "theme.slint";
 
 export global NameEditor {
@@ -66,22 +67,12 @@ export component NamePage inherits Rectangle {
     height: 720px;
     background: Theme.background;
 
-    property <[[string]]> lower: [
-        ["q", "w", "e", "r", "t", "z", "u", "i", "o", "p", "ü"],
-        ["a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"],
-        ["y", "x", "c", "v", "b", "n", "m", "ß"],
-    ];
-    property <[[string]]> upper: [
-        ["Q", "W", "E", "R", "T", "Z", "U", "I", "O", "P", "Ü"],
-        ["A", "S", "D", "F", "G", "H", "J", "K", "L", "Ö", "Ä"],
-        ["Y", "X", "C", "V", "B", "N", "M", "ß"],
-    ];
     property <[[string]]> digits: [
         ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "/"],
         ["-", ":", ";", "(", ")", "&", "@", "\"", ".", ",", "'"],
         ["!", "?", "+", "=", "#", "*", "%", "_"],
     ];
-    property <[[string]]> keys: NameEditor.numbers ? root.digits : NameEditor.shift ? root.upper : root.lower;
+    property <[[string]]> keys: NameEditor.numbers ? root.digits : NameEditor.shift ? Lang.keys-upper : Lang.keys-lower;
     property <length> pitch: 108px;
 
     TouchArea { }
@@ -91,7 +82,7 @@ export component NamePage inherits Rectangle {
         y: 20px;
         width: 240px;
         kind: ButtonKind.ghost;
-        text: "Abbrechen";
+        text: Lang.labels.cancel;
         on-press: true;
         clicked => { NameEditor.cancel(); }
     }
@@ -100,7 +91,7 @@ export component NamePage inherits Rectangle {
         y: 20px;
         width: 240px;
         kind: ButtonKind.primary;
-        text: "Fertig";
+        text: Lang.labels.done;
         on-press: true;
         clicked => { NameEditor.done(); }
     }
@@ -133,7 +124,7 @@ export component NamePage inherits Rectangle {
                 }
             }
             if NameEditor.text == "": Text {
-                text: "Name des Weckers";
+                text: Lang.labels.name-hint;
                 font-size: 40px;
                 color: Theme.text-faint;
                 vertical-alignment: center;
@@ -143,15 +134,19 @@ export component NamePage inherits Rectangle {
 
     // Fixed keys whose labels change with shift and the layer: a `for`
     // over the changing arrays would re-create every key on each change.
+    // A row shorter than its 11 (8) places is centred, the places beyond
+    // it hidden.
     for i in 11: Key {
-        x: 50px + i * root.pitch;
+        x: 50px + (11 - root.keys[0].length) * root.pitch / 2 + i * root.pitch;
         y: 260px;
+        visible: i < root.keys[0].length;
         text: root.keys[0][i];
         pressed => { NameEditor.key(self.text); }
     }
     for i in 11: Key {
-        x: 50px + i * root.pitch;
+        x: 50px + (11 - root.keys[1].length) * root.pitch / 2 + i * root.pitch;
         y: 356px;
+        visible: i < root.keys[1].length;
         text: root.keys[1][i];
         pressed => { NameEditor.key(self.text); }
     }
@@ -170,8 +165,9 @@ export component NamePage inherits Rectangle {
         }
     }
     for i in 8: Key {
-        x: 50px + 162px + i * root.pitch;
+        x: 50px + 162px + (8 - root.keys[2].length) * root.pitch / 2 + i * root.pitch;
         y: 452px;
+        visible: i < root.keys[2].length;
         text: root.keys[2][i];
         pressed => { NameEditor.key(self.text); }
     }
@@ -194,7 +190,7 @@ export component NamePage inherits Rectangle {
         x: 50px + 162px;
         y: 548px;
         width: parent.width - 100px - 162px - 162px;
-        text: "Leerzeichen";
+        text: Lang.labels.space;
         pressed => { NameEditor.key(" "); }
     }
     Key {

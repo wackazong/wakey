@@ -2,13 +2,14 @@
 //! code of the device code link), then the playlist's tracks, followed
 //! while the tab is open.
 
-use super::{fill_list, row};
-use crate::app::Ctx;
+use super::{fill_list, random_choice, row};
 use crate::app::screens::{AppWindow, SoundPicker, SoundRow, SoundRowKind, SoundTab, TidalView};
+use crate::app::{Ctx, texts};
 use crate::tidal::{State, TrackStatus};
 use slint::{ComponentHandle, Image, Model, Rgb8Pixel, SharedPixelBuffer, TimerMode};
 use std::time::Duration;
 use wakey_core::alarm::Sound;
+use wakey_core::lang::fill;
 
 /// The tab opened (log in if needed, follow the state) or closed.
 pub(super) fn tab(window: &AppWindow, ctx: &Ctx, open: bool) {
@@ -26,10 +27,10 @@ pub(super) fn tab(window: &AppWindow, ctx: &Ctx, open: bool) {
     timer.start(TimerMode::Repeated, Duration::from_millis(500), move || {
         let Some(window) = weak.upgrade() else { return };
         let picker = window.global::<SoundPicker>();
-        let now = (tidal.state(), tidal.version());
         if picker.get_tab() != SoundTab::Tidal {
             return;
         }
+        let now = (tidal.state(), tidal.version());
         if now != seen {
             seen = now;
             picker.invoke_refresh();
@@ -76,19 +77,10 @@ pub(super) fn tick(window: &AppWindow, ctx: &Ctx) {
 pub(super) fn choices(ctx: &Ctx, selected: &Sound) -> Vec<(SoundRow, Sound)> {
     let tracks = ctx.tidal.listed();
     let progress = ctx.tidal.progress();
+    let tidal = &texts::get().tidal;
     let mut choices = Vec::new();
     if tracks.len() > 1 || (tracks.len() == 1 && *selected == Sound::TidalRandom) {
-        let sound = Sound::TidalRandom;
-        choices.push((
-            row(
-                "Zufällig",
-                "wechselt jeden Tag",
-                &sound,
-                selected,
-                SoundRowKind::Random,
-            ),
-            sound,
-        ));
+        choices.push(random_choice(Sound::TidalRandom, selected));
     }
     choices.extend(tracks.iter().map(|(t, removed)| {
         let sound = Sound::TidalTrack(t.id.to_string());
@@ -96,12 +88,11 @@ pub(super) fn choices(ctx: &Ctx, selected: &Sound) -> Vec<(SoundRow, Sound)> {
         let sub = match status {
             // Failed: the row's icon says it.
             TrackStatus::Ready | TrackStatus::Remote | TrackStatus::Failed => t.artist.clone(),
-            TrackStatus::Downloading => format!("{} · lädt …", t.artist),
-            TrackStatus::Missing => format!("{} · wird geladen", t.artist),
+            TrackStatus::Downloading => fill(&tidal.downloading, &[("artist", &t.artist)]),
+            TrackStatus::Missing => fill(&tidal.queued, &[("artist", &t.artist)]),
         };
-        // First, so a long artist cannot cut it off.
         let sub = if *removed {
-            format!("Nicht mehr in der Playlist · {sub}")
+            fill(&tidal.removed, &[("artist", &sub)])
         } else {
             sub
         };
@@ -121,34 +112,34 @@ pub(super) fn choices(ctx: &Ctx, selected: &Sound) -> Vec<(SoundRow, Sound)> {
 }
 
 /// Shows a TIDAL state on the tab (the QR code made anew only when the
-/// link changes).
+/// code changes).
 fn show_state(window: &AppWindow, state: &State) {
     let picker = window.global::<SoundPicker>();
     let has_rows = picker.get_tidal_rows().row_count() > 0;
-    let note = match state {
-        State::NoCredentials => {
-            "TIDAL ist nicht eingerichtet: die Zugangsdaten fehlen in config.json."
-        }
-        State::LoggedOut | State::Connecting => "Verbinde mit TIDAL …",
+    let tidal = &texts::get().tidal;
+    let note: &str = match state {
+        State::NoCredentials => &tidal.no_credentials,
+        State::LoggedOut | State::Connecting => &tidal.connecting,
         State::Code { url, code } => {
-            if picker.get_tidal_code().as_str() != code {
+            let line = fill(&tidal.code, &[("code", code)]);
+            if picker.get_tidal_code().as_str() != line {
                 if let Some(qr) = qr_image(url) {
                     picker.set_tidal_qr(qr);
                 }
-                picker.set_tidal_code(code.as_str().into());
+                picker.set_tidal_code(line.into());
             }
             picker.set_tidal_view(TidalView::Login);
             picker.set_tidal_empty("".into());
             return;
         }
         State::Syncing if has_rows => "",
-        State::Syncing => "Lade die Playlist …",
+        State::Syncing => &tidal.syncing,
         State::LoggedIn if has_rows => "",
-        State::LoggedIn => "Die Playlist ist leer.",
+        State::LoggedIn => &tidal.empty,
         State::Failed(e) => {
             picker.set_tidal_view(TidalView::List);
-            let why = crate::app::texts::tidal_problem(e);
-            picker.set_tidal_empty(format!("{why} Zum Wiederholen den Tab erneut öffnen.").into());
+            let problem = texts::tidal_problem(e);
+            picker.set_tidal_empty(fill(&tidal.retry, &[("problem", &problem)]).into());
             return;
         }
     };

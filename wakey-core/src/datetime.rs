@@ -1,6 +1,5 @@
 //! Calendar date and time without a time zone (the RTC stores UTC; the
-//! firmware gets local time from the C library), Unix time conversion and
-//! German display strings.
+//! firmware gets local time from the C library) and Unix time conversion.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,31 +27,6 @@ pub struct DateTime {
     /// 0 = Sunday.
     pub weekday: u8,
 }
-
-pub const WEEKDAYS_DE: [&str; 7] = [
-    "Sonntag",
-    "Montag",
-    "Dienstag",
-    "Mittwoch",
-    "Donnerstag",
-    "Freitag",
-    "Samstag",
-];
-
-const MONTHS_DE: [&str; 12] = [
-    "Januar",
-    "Februar",
-    "März",
-    "April",
-    "Mai",
-    "Juni",
-    "Juli",
-    "August",
-    "September",
-    "Oktober",
-    "November",
-    "Dezember",
-];
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
 /// `days_from_civil`).
@@ -143,17 +117,6 @@ impl DateTime {
     pub fn hms(&self) -> String {
         format!("{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
     }
-
-    /// "Montag, 9. November 2026"
-    pub fn date_de(&self) -> String {
-        format!(
-            "{}, {}. {} {}",
-            WEEKDAYS_DE[usize::from(self.weekday) % 7],
-            self.day,
-            MONTHS_DE[usize::from(self.month.clamp(1, 12)) - 1],
-            self.year
-        )
-    }
 }
 
 #[cfg(test)]
@@ -175,7 +138,6 @@ mod tests {
             (2026, 11, 9, 23, 0, 1)
         );
         assert!(d.plausible());
-        assert_eq!(d.date_de(), "Montag, 9. November 2026");
         assert_eq!(d.hms(), "23:00:00");
     }
 
@@ -183,7 +145,16 @@ mod tests {
     fn leap_day() {
         let d = DateTime::from_unix(1_709_164_800); // 2024-02-29
         assert_eq!((d.year, d.month, d.day), (2024, 2, 29));
-        assert_eq!(d.date_de(), "Donnerstag, 29. Februar 2024");
+    }
+
+    #[test]
+    fn add_days_crosses_months_and_keeps_the_time() {
+        let d = DateTime::from_unix(1_709_164_800 + 6 * 3600 + 30 * 60); // Thursday 2024-02-29 06:30
+        let next = d.add_days(1);
+        assert_eq!((next.month, next.day, next.weekday), (3, 1, 5));
+        assert_eq!(next.second_of_day(), d.second_of_day());
+        assert_eq!(d.add_days(0), d);
+        assert_eq!(d.add_days(7).weekday, d.weekday);
     }
 
     #[test]

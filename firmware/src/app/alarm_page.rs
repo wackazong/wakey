@@ -1,16 +1,17 @@
 //! The alarm page's view model (`AlarmPage` in `ui/wakey/alarm_page.slint`):
 //! edits a draft of one alarm ([`super::Ctx::draft`]), shared with the sound
 //! and name pages. The wheels and chips keep their own state and report
-//! changes; Sichern hands the draft to [`AlarmClock::save`] (written to
-//! `config.json`, then in effect), Abbrechen drops it.
+//! changes; saving hands the draft to [`AlarmClock::save`] (written to
+//! `config.json`, then in effect), cancelling drops it.
 
 use super::alarm::AlarmClock;
 use super::screens::{AlarmEditor, AppWindow, Page};
-use super::{Ctx, alarm_list, name_page, show_page, sound_page};
+use super::{Ctx, alarm_list, name_page, show_page, sound_page, texts};
 use crate::clock;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::rc::Rc;
 use wakey_core::alarm::AlarmConfig;
+use wakey_core::lang::fill as fill_text;
 
 /// Shows the page for `cfg` (id 0: a new alarm).
 pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
@@ -31,17 +32,26 @@ pub fn open(window: &AppWindow, ctx: &Ctx, cfg: AlarmConfig) {
     show_page(window, ctx, Page::Alarm);
 }
 
-/// Everything derived from the draft: name, sound, volume, "Klingelt in".
+/// Everything derived from the draft: name, sound, volume, "Rings in".
 pub fn fill(window: &AppWindow, ctx: &Ctx) {
     let editor = window.global::<AlarmEditor>();
+    take_time(&editor, ctx);
     let cfg = ctx.draft.borrow();
     editor.set_name(cfg.name.as_str().into());
     editor.set_any_day(cfg.any_day());
     editor.set_changed(changed(ctx));
-    editor.set_sound(super::texts::sound_title(&cfg.sound).into());
+    editor.set_sound(texts::sound_title(&cfg.sound).into());
     editor.set_volume_bars((i32::from(cfg.volume) + 19) / 20);
     editor.set_fade(fade_text(cfg.fade_in_s).into());
     editor.set_relative(relative(&ctx.alarm.borrow(), &cfg).into());
+}
+
+/// The wheels' time into the draft: the rows in their middle, also while
+/// one still turns.
+fn take_time(editor: &AlarmEditor, ctx: &Ctx) {
+    let mut cfg = ctx.draft.borrow_mut();
+    cfg.hour = editor.get_hour().clamp(0, 23) as u8;
+    cfg.minute = editor.get_minute().clamp(0, 59) as u8;
 }
 
 /// The draft differs from the alarm as saved (a new alarm always does);
@@ -59,9 +69,10 @@ pub fn changed(ctx: &Ctx) -> bool {
     }
 }
 
-/// Sichern (alarm and sound page): saves the draft, switched on, and shows
+/// Save (alarm and sound page): saves the draft, switched on, and shows
 /// the list; an error stays on the alarm page.
 pub fn save(window: &AppWindow, ctx: &Ctx) {
+    take_time(&window.global::<AlarmEditor>(), ctx);
     // Saving a changed alarm means it should ring: switched on.
     let cfg = AlarmConfig {
         enabled: true,
@@ -80,7 +91,7 @@ pub fn save(window: &AppWindow, ctx: &Ctx) {
             fill(window, ctx);
             window
                 .global::<AlarmEditor>()
-                .set_error("Speichern fehlgeschlagen – SD-Karte prüfen".into());
+                .set_error(texts::get().alarm.save_failed.as_str().into());
             show_page(window, ctx, Page::Alarm);
         }
     }
@@ -90,15 +101,7 @@ pub fn save(window: &AppWindow, ctx: &Ctx) {
 pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     let editor = window.global::<AlarmEditor>();
 
-    editor.on_edited(ctx.with(|window, ctx| {
-        let editor = window.global::<AlarmEditor>();
-        {
-            let mut cfg = ctx.draft.borrow_mut();
-            cfg.hour = editor.get_hour().clamp(0, 23) as u8;
-            cfg.minute = editor.get_minute().clamp(0, 59) as u8;
-        }
-        fill(window, ctx);
-    }));
+    editor.on_edited(ctx.with(fill));
     editor.on_ticked({
         let ctx = ctx.clone();
         move || ctx.click.click()
@@ -115,15 +118,16 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     editor.on_save(ctx.with(save));
 }
 
-pub fn fade_text(fade_in_s: u16) -> String {
+/// The fade-in as the sound row shows it.
+fn fade_text(fade_in_s: u16) -> String {
     if fade_in_s == 0 {
-        "aus".into()
+        texts::get().labels.off.clone()
     } else {
         format!("{fade_in_s} s")
     }
 }
 
-/// "Klingelt in 9 Std. 14 Min."
+/// "Rings in 9 h 14 min"
 fn relative(alarm: &AlarmClock, cfg: &AlarmConfig) -> String {
     if !cfg.any_day() {
         return String::new();
@@ -132,22 +136,11 @@ fn relative(alarm: &AlarmClock, cfg: &AlarmConfig) -> String {
         enabled: true,
         ..cfg.clone()
     };
+    let texts = texts::get();
     let Some(next) = alarm.next_of(&enabled) else {
-        return "Klingelt nicht".into();
+        return texts.alarm.rings_never.clone();
     };
-    let now = clock::now();
-    // Whole minutes, rounded up (06:29:30 → 06:30 is "1 Min.").
-    let mins = (next.to_unix() - now.to_unix() + 59) / 60;
-    let (d, h, m) = (mins / 1440, mins % 1440 / 60, mins % 60);
-    let mut parts = Vec::new();
-    if d > 0 {
-        parts.push(format!("{d} Tg."));
-    }
-    if h > 0 {
-        parts.push(format!("{h} Std."));
-    }
-    if m > 0 || parts.is_empty() {
-        parts.push(format!("{m} Min."));
-    }
-    format!("Klingelt in {}", parts.join(" "))
+    // Whole minutes, rounded up (06:29:30 → 06:30 is "1 min").
+    let minutes = (clock::unix(&next) - clock::moment().unix + 59) / 60;
+    fill_text(&texts.alarm.rings_in, &[("time", &texts.duration(minutes))])
 }

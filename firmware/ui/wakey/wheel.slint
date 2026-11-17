@@ -5,7 +5,8 @@
 // Physics run in a 16 ms Timer while the wheel moves: after release the
 // velocity decays (friction), then a spring pulls the nearest row into the
 // middle. Every row that passes the middle reports `ticked` (the click
-// sound); the settled value is reported by `edited`.
+// sound) and becomes the value; `edited` reports that the wheel settled
+// on another value.
 //
 // The seven row texts are fixed children (`for k in 7`), only their text
 // and position change: no items are created while scrolling.
@@ -15,11 +16,12 @@ import { Theme } from "theme.slint";
 export component Wheel inherits Rectangle {
     // Number of values: 24 or 60.
     in property <int> count: 60;
-    // The value; set before the page opens, updated when the wheel settles.
+    // The value: the row in the middle, also while the wheel moves. Set
+    // before the page opens.
     in-out property <int> value;
     // A row passed the middle (while moving).
     callback ticked();
-    // The wheel settled on a new value.
+    // The wheel settled after its value changed.
     callback edited(int);
 
     // Row height; the page puts its selection band on the middle row.
@@ -30,6 +32,8 @@ export component Wheel inherits Rectangle {
     property <float> vel;
     property <bool> dragging;
     property <bool> moving;
+    // The value changed since `edited` last reported.
+    property <bool> unreported;
     property <float> press-pos;
     property <duration> last-t;
     // The row in the middle right now.
@@ -46,6 +50,8 @@ export component Wheel inherits Rectangle {
     clip: true;
 
     changed current => {
+        root.value = root.current;
+        root.unreported = true;
         root.ticked();
     }
 
@@ -108,8 +114,9 @@ export component Wheel inherits Rectangle {
                     root.vel = 0;
                     root.moving = false;
                     root.pos = root.wrap(target);
-                    if (root.value != root.wrap(target)) {
-                        root.value = root.wrap(target);
+                    root.value = root.wrap(target);
+                    if (root.unreported) {
+                        root.unreported = false;
                         root.edited(root.value);
                     }
                 } else {

@@ -1,6 +1,5 @@
-//! The alarm clock application: wires the services together and runs the
-//! UI: the clock screen with the real time, Wi-Fi and NTP, touch, and the
-//! alarm ringing on the USB speaker.
+//! The alarm clock application: starts the services, wires them to the UI
+//! and runs it: the clock screen, and the pages that edit the alarms.
 //!
 //! Start-up order: board → clock from the RTC → config from the SD card →
 //! Wi-Fi thread → player and built-in speaker → touch thread → USB audio
@@ -26,8 +25,9 @@ use crate::audio::uac::UsbAudio;
 use crate::board::Board;
 use crate::board::ioexp::Pin;
 use crate::display::ppa::PpaRotator;
-use crate::ui::{input, platform, render_loop, transition};
-use crate::{clock, config, net, runtime};
+use crate::ui::list_layer::SharedLayers;
+use crate::ui::{dim, input, platform, render_loop, rgb565, transition};
+use crate::{airdrop, ambient, clock, config, net, runtime, tidal};
 use alarm::AlarmClock;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use slint::{ComponentHandle, Timer, TimerMode};
@@ -41,7 +41,15 @@ mod screens {
     include!(concat!(env!("OUT_DIR"), "/wakey.rs"));
 }
 
-use screens::Page;
+use screens::{AppWindow, Page};
+
+/// A window with the language's texts: the screen's, or one that renders
+/// rows offscreen.
+fn new_window() -> AppWindow {
+    let window = AppWindow::new().expect("UI window");
+    texts::apply(&window);
+    window
+}
 
 /// How deep a page is: going deeper slides the new page in from the
 /// right, going back from the left.
@@ -59,10 +67,10 @@ fn depth(page: Page) -> u8 {
 /// go down again; within them deeper pages come from the right. Leaving the
 /// sound page ends what it runs (TIDAL, AirDrop, a preview), whatever made
 /// it go: its buttons, the idle timeout, an alarm ringing.
-fn show_page(window: &screens::AppWindow, ctx: &Ctx, page: Page) {
+fn show_page(window: &AppWindow, ctx: &Ctx, page: Page) {
     use transition::Direction;
     // A Wi-Fi session for TIDAL stays up while an alarm is edited.
-    crate::tidal::set_editing(matches!(page, Page::Alarm | Page::Sound | Page::Name));
+    tidal::set_editing(matches!(page, Page::Alarm | Page::Sound | Page::Name));
     let from = window.get_page();
     if from == page {
         return;
@@ -86,58 +94,35 @@ fn show_page(window: &screens::AppWindow, ctx: &Ctx, page: Page) {
     } else {
         window.global::<screens::Theme>().get_background()
     };
-    transition::set_background(crate::ui::rgb565(background));
+    transition::set_background(rgb565(background));
     transition::request(direction);
     window.set_page(page);
 }
 
-/// Repaints the whole window when the pixel dimming changes (the light
-/// meter switches it from its own thread: `ui::dim`).
-fn repaint_when_dimmed(ui: &screens::AppWindow) -> slint::Timer {
-    let weak = ui.as_weak();
-    let mut seen = crate::ui::dim::epoch();
-    let timer = slint::Timer::default();
-    timer.start(
-        slint::TimerMode::Repeated,
-        Duration::from_millis(100),
-        move || {
-            if crate::ui::dim::changed_since(&mut seen)
-                && let Some(ui) = weak.upgrade()
-            {
-                ui.set_repaint_all(!ui.get_repaint_all());
-            }
-        },
-    );
-    timer
-}
-
-/// Settings pages go back to the clock after this long without a touch.
-const IDLE_CLOSE: Duration = Duration::from_secs(60);
-/// On the sound page: TIDAL downloads and AirDrop take their time.
-const IDLE_CLOSE_SOUND: Duration = Duration::from_secs(5 * 60);
-
 /// What the settings pages share.
 pub struct Ctx {
-    window: slint::Weak<screens::AppWindow>,
+    window: slint::Weak<AppWindow>,
     alarm: Rc<RefCell<AlarmClock>>,
+    /// Where the clock stands, for the sky.
+    location: wakey_core::sky::Location,
     /// The alarm being edited (alarm, sound and name pages).
     draft: RefCell<AlarmConfig>,
     /// The alarm as saved when its page opened (`None`: a new alarm);
-    /// Sichern only after a change.
+    /// saving only after a change.
     original: RefCell<Option<AlarmConfig>>,
     /// The name being typed.
     name: RefCell<String>,
     /// The built-in speaker, for the wheel click.
     click: BuiltinSpeaker,
     /// TIDAL login and state (sound page's TIDAL tab).
-    tidal: crate::tidal::Tidal,
+    tidal: tidal::Tidal,
     /// The sound page's lists, timers and covers.
     sound: sound_page::SoundPageState,
 }
 
 impl Ctx {
     /// A callback that runs `f` with the window and the context.
-    fn with(self: &Rc<Self>, f: fn(&screens::AppWindow, &Ctx)) -> impl Fn() + 'static {
+    fn with(self: &Rc<Self>, f: fn(&AppWindow, &Ctx)) -> impl Fn() + 'static {
         let ctx = self.clone();
         move || {
             if let Some(window) = ctx.window.upgrade() {
@@ -146,10 +131,8 @@ impl Ctx {
         }
     }
 
-    fn with_arg<A: 'static>(
-        self: &Rc<Self>,
-        f: fn(&screens::AppWindow, &Ctx, A),
-    ) -> impl Fn(A) + 'static {
+    /// The same for a callback with one argument.
+    fn with_arg<A: 'static>(self: &Rc<Self>, f: fn(&AppWindow, &Ctx, A)) -> impl Fn(A) + 'static {
         let ctx = self.clone();
         move |a| {
             if let Some(window) = ctx.window.upgrade() {
@@ -158,9 +141,10 @@ impl Ctx {
         }
     }
 
+    /// The same for a callback with two arguments.
     fn with_args<A: 'static, B: 'static>(
         self: &Rc<Self>,
-        f: fn(&screens::AppWindow, &Ctx, A, B),
+        f: fn(&AppWindow, &Ctx, A, B),
     ) -> impl Fn(A, B) + 'static {
         let ctx = self.clone();
         move |a, b| {
@@ -199,6 +183,8 @@ async fn app(
         Ok(c) => c,
         Err(e) => config_error(display, backlight, e).await,
     };
+    texts::init(config.language);
+    clock::set_time_zone(&config.time_zone);
     let nvs = EspDefaultNvsPartition::take().expect("NVS");
     let wifi = net::start(
         net::Setup {
@@ -228,16 +214,17 @@ async fn app(
 
     let mut rot = PpaRotator::new().expect("PPA");
     let window = platform::init();
-    let ui = screens::AppWindow::new().expect("UI");
+    let ui = new_window();
     ui.show().expect("show");
     let ctx = Rc::new(Ctx {
         window: ui.as_weak(),
         alarm: alarm.clone(),
+        location: config.location,
         draft: RefCell::new(AlarmConfig::default()),
         original: RefCell::new(None),
         name: RefCell::new(String::new()),
         click: builtin,
-        tidal: crate::tidal::Tidal::new(config.tidal.clone(), wifi.clone()),
+        tidal: tidal::Tidal::new(config.tidal.clone(), wifi.clone()),
         sound: sound_page::SoundPageState::default(),
     });
     // The saved alarms' TIDAL tracks on the card (downloads if missing).
@@ -249,7 +236,7 @@ async fn app(
     // their pages are never shown together, so they share its buffers.
     let alarm_layer = alarm_list::layer(&ui);
     let sound_layer = sound_page::layer(&ui, alarm_layer.buffers());
-    let mut list = crate::ui::list_layer::SharedLayers::new(alarm_layer, sound_layer);
+    let mut list = SharedLayers::new(alarm_layer, sound_layer);
     alarm_page::start(&ui, &ctx);
     sound_page::start(&ui, &ctx);
     name_page::start(&ui, &ctx);
@@ -265,13 +252,13 @@ async fn app(
     let _ticker = clock_screen::start(&ui, &ctx, speaker, wifi);
 
     // The light meter owns the backlight: full at first, then the room's.
-    let screen = crate::ambient::Screen {
+    let screen = ambient::Screen {
         asleep: crate::ui::power::asleep,
-        pixels: crate::ui::dim::factor,
-        set_pixels: crate::ui::dim::set,
-        full: crate::ui::dim::FULL,
+        pixels: dim::factor,
+        set_pixels: dim::set,
+        full: dim::FULL,
     };
-    crate::ambient::start(
+    ambient::start(
         i2c.clone(),
         backlight,
         screen,
@@ -294,7 +281,7 @@ async fn config_error(
 ) -> ! {
     let mut rot = PpaRotator::new().expect("PPA");
     let window = platform::init();
-    let ui = screens::AppWindow::new().expect("UI");
+    let ui = new_window();
     ui.set_error_text(error.into());
     ui.set_page(Page::ConfigError);
     ui.show().expect("show");
@@ -302,10 +289,30 @@ async fn config_error(
     render_loop::run(window, display, &mut rot, None).await
 }
 
+/// Repaints the whole window when the pixel dimming changes (the light
+/// meter switches it from its own thread: `ui::dim`).
+fn repaint_when_dimmed(window: &AppWindow) -> Timer {
+    let weak = window.as_weak();
+    let mut seen = dim::epoch();
+    let timer = Timer::default();
+    timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
+        if dim::changed_since(&mut seen)
+            && let Some(window) = weak.upgrade()
+        {
+            window.set_repaint_all(!window.get_repaint_all());
+        }
+    });
+    timer
+}
+
+/// Settings pages go back to the clock after this long without a touch.
+const IDLE_CLOSE: Duration = Duration::from_secs(60);
+/// On the sound page: TIDAL downloads and AirDrop take their time.
+const IDLE_CLOSE_SOUND: Duration = Duration::from_secs(5 * 60);
+
 /// Every few seconds: back to the clock after [`IDLE_CLOSE`] without a
-/// touch ([`IDLE_CLOSE_SOUND`] on the sound page), not while a preview
-/// plays, a TIDAL login waits or a file arrives by AirDrop; the alarm
-/// page's "Klingelt in" kept current.
+/// touch ([`IDLE_CLOSE_SOUND`] on the sound page), unless the page is
+/// busy; the alarm page's "Rings in" kept current.
 fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
     let timer = Timer::default();
     timer.start(
@@ -327,7 +334,7 @@ fn close_when_idle(ctx: &Rc<Ctx>) -> Timer {
             if input::idle().as_secs() >= limit.as_secs()
                 && !ctx.alarm.borrow().is_previewing()
                 && !ctx.tidal.logging_in()
-                && !matches!(crate::airdrop::state(), crate::airdrop::State::Receiving(_))
+                && !matches!(airdrop::state(), airdrop::State::Receiving(_))
             {
                 log::info!(
                     "ui: back to the clock after {} s without a touch",
@@ -351,7 +358,7 @@ fn watch_render_loop() {
         let mut last = render_loop::ITERATIONS.load(Relaxed);
         let mut still = 0u32;
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(Duration::from_secs(1));
             let now = render_loop::ITERATIONS.load(Relaxed);
             if now != last {
                 last = now;
