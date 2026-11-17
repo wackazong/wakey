@@ -19,7 +19,8 @@ mod reg {
     pub const PULL_SELECT: u8 = 0x0D; // 1 = pull-up
 }
 
-/// Expander pins the firmware drives or reads.
+/// Expander pins the firmware drives, and two inputs it does not read yet
+/// (`HpDet`, `ChgStat`), kept so the map of the pins is complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pin {
     /// A.P1: NS4150B speaker amplifier enable.

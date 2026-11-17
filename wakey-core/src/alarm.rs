@@ -352,6 +352,9 @@ impl Alarms {
     pub fn tick(&mut self, alarms: &[AlarmConfig], ring: &RingConfig, now: Now) {
         let s = &mut self.state;
         s.phase = match s.phase {
+            // Already done for its day. No transition here leads to this;
+            // a guard against an inconsistent state, such as one read back
+            // from NVS.
             Phase::Ringing { id, day, .. } | Phase::Snoozed { id, day, .. }
                 if s.done.get(&id) == Some(&day) =>
             {

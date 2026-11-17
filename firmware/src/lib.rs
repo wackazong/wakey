@@ -16,9 +16,10 @@
 //! - Support: [`runtime`] (threads, the Embassy executor), [`psram`]
 //!   (DMA buffers), [`taskstats`] (CPU time per task).
 //!
-//! Pure logic (dates, file formats, resampling, descriptors, config model,
-//! TIDAL's protocol, scroll physics) is in the `wakey_core` crate and
-//! tested on the host. Binaries in `src/bin/` are thin: the product
+//! Pure logic (the alarm state machine, config model, file formats,
+//! resampling, TIDAL's protocol, AirDrop's frames, texts, sky, scroll
+//! physics; the full list is in its own docs) is in the `wakey_core` crate
+//! and tested on the host. Binaries in `src/bin/` are thin: the product
 //! (`wakey`) and the UI bench (`ui_bench`).
 
 pub mod airdrop;

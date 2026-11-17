@@ -30,8 +30,9 @@ undocumented_unsafe_blocks = "warn"
 missing_const_for_thread_local = "allow"
 
 [dependencies]
-# Hardware-independent logic (dates, audio files, resampling, descriptors,
-# config, scroll physics), tested on the host.
+# Hardware-independent logic (the alarm state machine, config, audio files,
+# resampling, TIDAL's protocol, AirDrop's frames, texts, sky, scroll
+# physics; the list is in its lib.rs), tested on the host.
 wakey-core = { path = "../wakey-core" }
 esp-idf-svc = { version = "0.53", features = ["std", "binstart", "alloc", "embassy-time-driver", "embassy-sync", "critical-section"] }
 # Used through `esp_idf_svc::sys`; named here because `build.rs` and the

@@ -18,7 +18,7 @@ Three panel variants exist across production runs; the firmware detects them fro
 
 | Function | GPIO | Note |
 | --- | --- | --- |
-| System I2C SDA / SCL | 31 / 32 | 400 kHz; expanders, RTC, INA226, touch, codec, IMU |
+| System I2C SDA / SCL | 31 / 32 | 400 kHz; expanders, RTC, INA226, touch, codec, camera (SCCB), IMU |
 | Touch interrupt `TP_INT` | 23 | active low, 5.1 kΩ pull-up (R92); not an LP-GPIO (no deep-sleep wake). Not used (touch is polled) |
 | Backlight `LCD_BL` | 22 | enable of the ME2212 boost; LEDC PWM 4 kHz, 14 bit (finer steps at the dark end) |
 | MIPI-DSI | dedicated | 2 lanes; PHY supply `VDD_MIPI_DPHY` = on-chip LDO 3 at 2.5 V |

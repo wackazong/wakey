@@ -2,7 +2,9 @@
 //! the bring-up order.
 //!
 //! Applications call [`Board::init`] once and get owned handles back.
-//! Required chips panic with their name; the microSD card is optional. The
+//! The IO expanders, the RTC and the touch controller panic with their
+//! name when they do not answer; other failures come back as the error of
+//! [`Board::init`]. The microSD card is optional. The
 //! panel variant is detected at run time (three LCD/touch combinations
 //! exist across Tab5 production runs).
 
