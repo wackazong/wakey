@@ -209,6 +209,15 @@ The look is set by custom properties in `sass/_theme.scss`: the paper, ink and r
 
 The theme follows the system and can be switched with the button in the top bar; the choice is remembered in the browser. Adding `?theme=dark` or `?theme=light` to an address forces one, which is useful for screenshots.
 
+## Deploy
+
+```sh
+./deploy.sh --dry-run   # what would be uploaded
+./deploy.sh             # check, build, upload
+```
+
+`deploy.sh` runs `scripts/check`, then copies `public/` with rsync over SSH to the host `wackazong` (an entry in `~/.ssh/config`), folder `/wackazong`, the document root of wackazong.com. It deletes nothing on the server: files that are not part of the site stay, and a page removed from the site stays online until it is deleted by hand. `DEPLOY_HOST` and `DEPLOY_DIR` change the target.
+
 ## Search
 
 `zola build` writes a search index (`search_index.en.json`). The search box opens with `/` or Ctrl/Cmd+K, searches titles and text of all walkthroughs, and names the walkthrough and chapter of each result. `?q=words` in an address opens it with a query.
