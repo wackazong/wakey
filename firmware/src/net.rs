@@ -10,7 +10,7 @@
 //! `on_time_synced`), then drop the driver and switch the C6 off. The next
 //! session follows `sync_interval_h` later (sooner after a failure), and
 //! only while the display is awake. Without credentials a session is one
-//! scan, so the UI can show that networks are in range. [`Wifi::status`]
+//! scan, which reports how many networks are in range. [`Wifi::status`]
 //! is the latest state, for display.
 //!
 //! [`Wifi::run`] asks for a session now, for a job that needs the network
@@ -22,17 +22,19 @@
 //! under way ends early (an interrupted clock sync is done after AirDrop),
 //! and jobs wait.
 
+use crate::airdrop;
 use crate::board::C6Link;
 use crate::board::ioexp::Switch;
-use crate::c6::C6;
-use crate::config::WifiConfig;
+use crate::c6::{self, C6};
+use crate::config::{self, WifiConfig};
+use crate::http;
 use crate::runtime::Thread;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::modem::Modem;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sntp::{EspSntp, SyncStatus};
-use esp_idf_svc::sys::{ESP_ERR_TIMEOUT, EspError};
+use esp_idf_svc::sys::{self, ESP_ERR_TIMEOUT, EspError};
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -195,7 +197,7 @@ pub fn start(setup: Setup, on_time_synced: impl Fn() + Send + 'static) -> Wifi {
     };
     // On core 1 at priority 1, below the audio decoder (5) and the card
     // writer (4), so neither starves: a download takes about half a core.
-    // On core 0 it shared the UI's priority and made animations stutter.
+    // On core 0, at the UI's priority, it makes animations stutter.
     Thread::new(c"wifi", 16 * 1024)
         .core(Core::Core1)
         .priority(1)
@@ -263,8 +265,8 @@ impl Station {
         let mut due = true;
         let mut next = Instant::now();
         loop {
-            if crate::airdrop::wanted() {
-                crate::airdrop::run(&mut self.c6_link, &self.c6);
+            if airdrop::wanted() {
+                airdrop::run(&mut self.c6_link, &self.c6);
             }
             if due || job.is_some() {
                 self.set(Status::Starting);
@@ -311,19 +313,19 @@ impl Station {
                 };
                 next = Instant::now() + wait;
                 // SAFETY: plain heap statistics.
-                let free = |caps| unsafe { esp_idf_svc::sys::heap_caps_get_free_size(caps) } / 1024;
+                let free = |caps| unsafe { sys::heap_caps_get_free_size(caps) } / 1024;
                 log::info!(
                     "wifi: session took {} s, C6 off; next in {} min (free: internal {} KiB, PSRAM {} KiB)",
                     t.elapsed().as_secs(),
                     wait.as_secs() / 60,
-                    free(esp_idf_svc::sys::MALLOC_CAP_INTERNAL),
-                    free(esp_idf_svc::sys::MALLOC_CAP_SPIRAM)
+                    free(sys::MALLOC_CAP_INTERNAL),
+                    free(sys::MALLOC_CAP_SPIRAM)
                 );
             }
             // Until AirDrop is wanted, a job comes, or the next session is
             // due (not while the display sleeps: it waits for it).
             loop {
-                if crate::airdrop::wanted() {
+                if airdrop::wanted() {
                     break;
                 }
                 if Instant::now() >= next && !(self.display_asleep)() {
@@ -356,7 +358,7 @@ impl Station {
             self.sysloop.clone(),
         )?;
         log::info!("wifi: driver up after {} ms", t.elapsed().as_millis());
-        crate::c6::check(&transport);
+        c6::check(&transport);
         // The driver (dropped by these, `esp_wifi_deinit`) goes before the
         // transport.
         match &self.cfg {
@@ -370,10 +372,7 @@ impl Station {
 
     /// No credentials: one scan for the status line.
     fn scan_once(&self, mut wifi: BlockingWifi<EspWifi<'_>>) -> anyhow::Result<()> {
-        log::info!(
-            "wifi: no credentials ({}), scanning once",
-            crate::config::FILE
-        );
+        log::info!("wifi: no credentials ({}), scanning once", config::FILE);
         wifi.set_configuration(&Configuration::Client(ClientConfiguration::default()))?;
         wifi.start()?;
         let networks = match wifi.scan() {
@@ -398,8 +397,8 @@ impl Station {
         Ok(())
     }
 
-    /// Connects (up to [`ATTEMPTS`] tries), runs `job` and waits for SNTP. Jobs
-    /// that come in while connected run in this session too: a TIDAL
+    /// Connects (up to [`ATTEMPTS`] tries), runs `job` and waits for SNTP.
+    /// Jobs that come in while connected run in this session too: a TIDAL
     /// tab opened during a slow NTP sync does not wait for the next session.
     /// Ends early when AirDrop is wanted.
     fn sync_clock(
@@ -428,7 +427,7 @@ impl Station {
         let ssid = cfg.ssid.clone();
         let mut attempt = 0;
         loop {
-            if crate::airdrop::wanted() {
+            if airdrop::wanted() {
                 let _ = wifi.stop();
                 return Ok(Outcome::Interrupted(job.into_job()));
             }
@@ -474,17 +473,24 @@ impl Station {
         // Jobs that come in meanwhile; not once AirDrop is wanted (they wait
         // for the session after it).
         let run_more = || {
-            while !crate::airdrop::wanted()
+            while !airdrop::wanted()
                 && let Ok(job) = self.jobs.try_recv()
             {
                 job(Ok(()));
             }
         };
         run_more();
-        let sntp = sntp?;
+        let sntp = match sntp {
+            Ok(sntp) => sntp,
+            Err(e) => {
+                // The jobs may have left connections in the pool.
+                http::close_all();
+                return Err(e.into());
+            }
+        };
         let synced = loop {
             run_more();
-            if crate::airdrop::wanted() {
+            if airdrop::wanted() {
                 break None;
             }
             if sntp.get_sync_status() == SyncStatus::Completed {
@@ -500,7 +506,7 @@ impl Station {
         drop(sntp);
         run_more();
         // Kept HTTPS connections (`http`) end with the session.
-        crate::http::close_all();
+        http::close_all();
         let _ = wifi.disconnect();
         let _ = wifi.stop();
         match synced {
@@ -523,7 +529,6 @@ impl Station {
 /// 802.11b/g/n, not ax: with 802.11ax (HE20) downloads through the C6
 /// are ~25 % slower.
 fn wifi_mode() {
-    use esp_idf_svc::sys;
     let bgn = (sys::WIFI_PROTOCOL_11B | sys::WIFI_PROTOCOL_11G | sys::WIFI_PROTOCOL_11N) as u8;
     // SAFETY: a plain driver call after `start`, before `connect`.
     let err = unsafe { sys::esp_wifi_set_protocol(sys::wifi_interface_t_WIFI_IF_STA, bgn) };
