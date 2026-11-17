@@ -20,7 +20,7 @@ const WK_RESULT: u32 = 0x574B_8002;
 const OTHER_LABEL: Range<usize> = 1..18;
 const OTHER_PROJECT: Range<usize> = 18..50;
 const OTHER_VERSION: Range<usize> = 50..82;
-/// Sent from protocol 2 on; empty from the first build.
+/// Sent from protocol 2 on; empty from a protocol 1 build.
 const OWN_VERSION: Range<usize> = 82..114;
 
 /// How long our esp_hosted gets to answer.
@@ -97,8 +97,10 @@ fn request(_transport: &Transport, msg: u32, reply: u32) -> anyhow::Result<Optio
         sys::esp_hosted_register_custom_callback(reply, Some(on_reply), core::ptr::null_mut())
     };
     anyhow::ensure!(err == 0, "register_custom_callback: {err}");
-    let mut slot = REPLY.lock().unwrap_or_else(|e| e.into_inner());
-    *slot = None;
+    // Not locked during the send: `on_reply` runs on the task that also
+    // completes the send's RPC. A reply that comes before the wait is in
+    // the slot by then.
+    *REPLY.lock().unwrap_or_else(|e| e.into_inner()) = None;
     // SAFETY: no payload; the transport is up (`_transport`).
     let err = unsafe { sys::esp_hosted_send_custom_data(msg, core::ptr::null(), 0) };
     if err == sys::ESP_ERR_NOT_FOUND {
@@ -106,6 +108,7 @@ fn request(_transport: &Transport, msg: u32, reply: u32) -> anyhow::Result<Optio
     }
     anyhow::ensure!(err == 0, "send_custom_data: {err}");
     let deadline = Instant::now() + REPLY_TIMEOUT;
+    let mut slot = REPLY.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         if let Some((id, data)) = slot.take()
             && id == reply

@@ -11,7 +11,7 @@ use std::time::Instant;
 /// The C6's images in the flash partition "c6" (`partitions.csv`, written
 /// by `scripts/flash.sh` from `c6/pack.py`), at these offsets, each after
 /// "WKC6" and its length. Not built into the app: the app's constants are
-/// copied into PSRAM at boot, and 2.2 MB there left too little for
+/// copied into PSRAM at boot, and 2.2 MB there leave too little for
 /// esp_hosted's buffers.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Image {

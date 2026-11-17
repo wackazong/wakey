@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 /// (`Cargo.toml`), which Wakey's image in `firmware/c6/` is built on. The
 /// factory firmware (M5Stack's 1.4.1) works, but with warnings at start
 /// and a known RX stall; the setup replaces it after the first session.
-pub const C6_FIRMWARE: [u32; 3] = [2, 13, 1];
+const C6_FIRMWARE: [u32; 3] = [2, 13, 1];
 /// Wakey's addition exists from this esp_hosted on: anything older is
 /// stock.
 const HOSTED_MIN: [u32; 3] = [C6_FIRMWARE[0], C6_FIRMWARE[1], 0];
@@ -98,7 +98,7 @@ impl C6 {
             }
             self.off();
             std::thread::sleep(Duration::from_millis(300));
-            if boot && !wanted() {
+            if !wanted() {
                 anyhow::bail!("no longer wanted");
             }
         }
@@ -125,7 +125,7 @@ fn ensure_images(transport: &Transport) -> anyhow::Result<bool> {
     let hosted = ota::version(ota::Image::Hosted);
     // An unreadable image is no reason to replace what runs.
     if !hosted.is_empty() && info.own_version != hosted {
-        // Builds before the version field send none.
+        // A protocol 1 build sends no version.
         let running = if info.own_version.is_empty() {
             "an older build"
         } else {
@@ -135,13 +135,10 @@ fn ensure_images(transport: &Transport) -> anyhow::Result<bool> {
         ota::install(transport, ota::Image::Hosted, true)?;
         return Ok(false);
     }
-    let receiver = ota::describe(ota::Image::Receiver)?;
-    if (info.other_project.as_str(), info.other_version.as_str())
-        != (receiver.0.as_str(), receiver.1.as_str())
-    {
+    let (project, version) = ota::describe(ota::Image::Receiver)?;
+    if info.other_project != project || info.other_version != version {
         log::info!(
-            "c6: installing the receiver {} into {} (held '{}' {})",
-            receiver.1,
+            "c6: installing the receiver {version} into {} (held '{}' {})",
             info.other_label,
             info.other_project,
             info.other_version
@@ -252,7 +249,7 @@ impl Drop for Transport {
 // control block from the heap, and deleted by `esp_hosted_deinit` without
 // freeing either (`hosted_thread_cancel`), ~31 KB per session. Their
 // buffers are looked up before the deinit and freed once the tasks are
-// gone. Fixed upstream after esp_hosted 2.13.1 (`docs/pitfalls.md`).
+// gone. Fixed upstream after esp_hosted 2.13.1 (`docs/upgrades.md`).
 
 /// esp_hosted's tasks (SDIO transport and RPC; `hosted_thread_create`).
 const HOSTED_TASKS: [&CStr; 7] = [
