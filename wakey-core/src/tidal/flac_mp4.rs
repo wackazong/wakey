@@ -13,8 +13,10 @@ use super::{Result, ensure, err};
 /// Largest box kept in memory (`moov`; TIDAL's are a few KiB).
 const MAX_BUFFERED: u64 = 1 << 20;
 
+#[derive(Default)]
 enum State {
     /// Collecting a box header (8 or 16 bytes) in `pending`.
+    #[default]
     Header,
     /// Keeping a whole box (`moov`) to read it.
     Keep { remaining: u64, buf: Vec<u8> },
@@ -25,27 +27,18 @@ enum State {
 }
 
 /// Unpacks a fragmented MP4 with one FLAC track into FLAC bytes.
+#[derive(Default)]
 pub struct Unpacker {
     state: State,
+    /// The bytes of a box header collected so far.
     pending: Vec<u8>,
     header_written: bool,
     media_bytes: u64,
 }
 
-impl Default for Unpacker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Unpacker {
     pub fn new() -> Self {
-        Self {
-            state: State::Header,
-            pending: Vec::new(),
-            header_written: false,
-            media_bytes: 0,
-        }
+        Self::default()
     }
 
     /// Feeds the next bytes of the MP4; appends the FLAC bytes they yield
@@ -173,21 +166,18 @@ impl Unpacker {
         let blocks = &dfla[4..];
         let mut at = 0;
         let mut header = b"fLaC".to_vec();
-        let mut first = true;
         while at < blocks.len() {
             ensure!(at + 4 <= blocks.len(), "MP4: broken FLAC header");
             let kind = blocks[at] & 0x7F;
             let len =
                 u32::from_be_bytes([0, blocks[at + 1], blocks[at + 2], blocks[at + 3]]) as usize;
             ensure!(at + 4 + len <= blocks.len(), "MP4: broken FLAC header");
-            ensure!(!first || (kind == 0 && len == 34), "MP4: no STREAMINFO");
+            ensure!(at > 0 || (kind == 0 && len == 34), "MP4: no STREAMINFO");
             let last = at + 4 + len == blocks.len();
             header.push(kind | if last { 0x80 } else { 0 });
             header.extend_from_slice(&blocks[at + 1..at + 4 + len]);
             at += 4 + len;
-            first = false;
         }
-        ensure!(!first, "MP4: empty FLAC header");
         out.extend_from_slice(&header);
         self.header_written = true;
         Ok(())
@@ -230,25 +220,17 @@ fn child<'a>(data: &'a [u8], kind: &[u8; 4]) -> impl Iterator<Item = &'a [u8]> {
 /// The `dfLa` payload of the first FLAC sample entry:
 /// moov/trak/mdia/minf/stbl/stsd/fLaC/dfLa.
 fn find_dfla(moov: &[u8]) -> Option<&[u8]> {
-    for trak in child(moov, b"trak") {
-        for mdia in child(trak, b"mdia") {
-            for minf in child(mdia, b"minf") {
-                for stbl in child(minf, b"stbl") {
-                    for stsd in child(stbl, b"stsd") {
-                        // Version, flags, entry count.
-                        let entries = stsd.get(8..)?;
-                        for flac in child(entries, b"fLaC") {
-                            // Audio sample entry fields, then child boxes.
-                            if let Some(d) = child(flac.get(28..)?, b"dfLa").next() {
-                                return Some(d);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
+    child(moov, b"trak")
+        .flat_map(|trak| child(trak, b"mdia"))
+        .flat_map(|mdia| child(mdia, b"minf"))
+        .flat_map(|minf| child(minf, b"stbl"))
+        .flat_map(|stbl| child(stbl, b"stsd"))
+        // Version, flags and entry count, then the sample entries.
+        .filter_map(|stsd| stsd.get(8..))
+        .flat_map(|entries| child(entries, b"fLaC"))
+        // Audio sample entry fields, then child boxes.
+        .filter_map(|flac| flac.get(28..))
+        .find_map(|boxes| child(boxes, b"dfLa").next())
 }
 
 #[cfg(test)]

@@ -85,9 +85,17 @@ fn children<'a, 'i>(node: Node<'a, 'i>, name: &str) -> Vec<Node<'a, 'i>> {
     node.children().filter(|n| n.has_tag_name(name)).collect()
 }
 
-fn integer(node: Node<'_, '_>, key: &str, default: u64) -> Result<u64> {
-    match node.attribute(key) {
-        Some(v) => v.parse().map_err(|_| Error(format!("DASH: invalid {key}"))),
+fn first_child<'a, 'i>(node: Node<'a, 'i>, name: &str) -> Option<Node<'a, 'i>> {
+    node.children().find(|n| n.has_tag_name(name))
+}
+
+/// The attribute `name` as a number (`value`: its text), or `default`
+/// without one.
+fn integer(value: Option<&str>, name: &str, default: u64) -> Result<u64> {
+    match value {
+        Some(v) => v
+            .parse()
+            .map_err(|_| Error(format!("DASH: invalid {name}"))),
         None => Ok(default),
     }
 }
@@ -188,39 +196,12 @@ fn dash_urls(xml: &str, seconds: f64) -> Result<Vec<String>> {
         Some(d) => presentation_seconds(d)?,
         None => seconds,
     };
-    let mut choices = Vec::new();
-    for adaptation in children(period, "AdaptationSet") {
-        for rep in children(adaptation, "Representation") {
-            let mime = rep
-                .attribute("mimeType")
-                .or_else(|| adaptation.attribute("mimeType"))
-                .unwrap_or("");
-            if mime.starts_with("audio/") || adaptation.attribute("contentType") == Some("audio") {
-                choices.push((integer(rep, "bandwidth", 0)?, adaptation, rep));
-            }
-        }
-    }
-    let (_, adaptation, rep) = choices
-        .into_iter()
-        .max_by_key(|c| c.0)
-        .ok_or_else(|| err("DASH: no audio"))?;
+    let (adaptation, rep) = audio_representation(period)?;
     let codecs = rep
         .attribute("codecs")
         .or_else(|| adaptation.attribute("codecs"));
     ensure!(codecs.is_none_or(is_flac), "stream: not FLAC");
-    let mut base: Option<Url> = None;
-    for node in [root, period, adaptation, rep] {
-        if let Some(child) = children(node, "BaseURL").first() {
-            let value = child
-                .text()
-                .ok_or_else(|| err("DASH: empty BaseURL"))?
-                .trim();
-            base = Some(match base {
-                Some(ref b) => b.join(value).map_err(|_| err("DASH: invalid BaseURL"))?,
-                None => https_url(value)?,
-            });
-        }
-    }
+    let base = base_url([root, period, adaptation, rep])?;
     let resolve = |value: &str| -> Result<String> {
         let url = match &base {
             Some(b) => b
@@ -230,52 +211,109 @@ fn dash_urls(xml: &str, seconds: f64) -> Result<Vec<String>> {
         };
         https_url(url.as_str()).map(String::from)
     };
-    let templates: Vec<_> = [rep, adaptation, period]
+    // Innermost first: a representation's own segments come before those
+    // its adaptation set or period give.
+    let levels = [rep, adaptation, period];
+    if let Some(list) = levels
+        .into_iter()
+        .find_map(|n| first_child(n, "SegmentList"))
+    {
+        return segment_list_urls(list, resolve);
+    }
+    let templates: Vec<_> = levels
         .into_iter()
         .flat_map(|n| children(n, "SegmentTemplate"))
         .collect();
-    let attribute = |name: &str| templates.iter().find_map(|n| n.attribute(name));
-    let template_integer = |name: &str, default: u64| -> Result<u64> {
-        match attribute(name) {
-            Some(v) => v
-                .parse()
-                .map_err(|_| Error(format!("DASH: invalid {name}"))),
-            None => Ok(default),
-        }
-    };
-    let list = [rep, adaptation, period]
-        .into_iter()
-        .find_map(|n| children(n, "SegmentList").first().copied());
-    if let Some(list) = list {
-        let mut urls = Vec::new();
-        if let Some(init) = children(list, "Initialization").first() {
-            ensure!(init.attribute("range").is_none(), "DASH: byte ranges");
-            let src = init
-                .attribute("sourceURL")
-                .ok_or_else(|| err("DASH: no initialization URL"))?;
-            urls.push(resolve(src)?);
-        }
-        for seg in children(list, "SegmentURL") {
-            ensure!(seg.attribute("mediaRange").is_none(), "DASH: byte ranges");
-            urls.push(resolve(
-                seg.attribute("media")
-                    .ok_or_else(|| err("DASH: no media URL"))?,
-            )?);
-        }
-        ensure!(
-            !urls.is_empty() && urls.len() <= MAX_SEGMENTS,
-            "DASH: invalid segment count"
-        );
-        return Ok(urls);
-    }
     if templates.is_empty() {
         ensure!(
             !doc.descendants().any(|n| n.has_tag_name("SegmentBase")),
             "DASH: SegmentBase unsupported"
         );
-        let base = base.ok_or_else(|| err("DASH: no media URL"))?;
+        let base = base.as_ref().ok_or_else(|| err("DASH: no media URL"))?;
         return Ok(vec![https_url(base.as_str())?.into()]);
     }
+    template_urls(&templates, rep, seconds, resolve)
+}
+
+/// The audio representation with the highest bandwidth, after its
+/// adaptation set.
+fn audio_representation<'a, 'i>(period: Node<'a, 'i>) -> Result<(Node<'a, 'i>, Node<'a, 'i>)> {
+    let mut choices = Vec::new();
+    for adaptation in children(period, "AdaptationSet") {
+        for rep in children(adaptation, "Representation") {
+            let mime = rep
+                .attribute("mimeType")
+                .or_else(|| adaptation.attribute("mimeType"))
+                .unwrap_or("");
+            if mime.starts_with("audio/") || adaptation.attribute("contentType") == Some("audio") {
+                let bandwidth = integer(rep.attribute("bandwidth"), "bandwidth", 0)?;
+                choices.push((bandwidth, adaptation, rep));
+            }
+        }
+    }
+    choices
+        .into_iter()
+        .max_by_key(|c| c.0)
+        .map(|(_, adaptation, rep)| (adaptation, rep))
+        .ok_or_else(|| err("DASH: no audio"))
+}
+
+/// The base URL the `BaseURL`s of `levels` (outermost first) add up to.
+fn base_url(levels: [Node<'_, '_>; 4]) -> Result<Option<Url>> {
+    let mut base: Option<Url> = None;
+    for node in levels {
+        if let Some(child) = first_child(node, "BaseURL") {
+            let value = child
+                .text()
+                .ok_or_else(|| err("DASH: empty BaseURL"))?
+                .trim();
+            base = Some(match base {
+                Some(b) => b.join(value).map_err(|_| err("DASH: invalid BaseURL"))?,
+                None => https_url(value)?,
+            });
+        }
+    }
+    Ok(base)
+}
+
+/// The URLs a `SegmentList` names, initialization first.
+fn segment_list_urls(
+    list: Node<'_, '_>,
+    resolve: impl Fn(&str) -> Result<String>,
+) -> Result<Vec<String>> {
+    let mut urls = Vec::new();
+    if let Some(init) = first_child(list, "Initialization") {
+        ensure!(init.attribute("range").is_none(), "DASH: byte ranges");
+        let src = init
+            .attribute("sourceURL")
+            .ok_or_else(|| err("DASH: no initialization URL"))?;
+        urls.push(resolve(src)?);
+    }
+    for seg in children(list, "SegmentURL") {
+        ensure!(seg.attribute("mediaRange").is_none(), "DASH: byte ranges");
+        let media = seg
+            .attribute("media")
+            .ok_or_else(|| err("DASH: no media URL"))?;
+        urls.push(resolve(media)?);
+    }
+    ensure!(
+        !urls.is_empty() && urls.len() <= MAX_SEGMENTS,
+        "DASH: invalid segment count"
+    );
+    Ok(urls)
+}
+
+/// The URLs the `SegmentTemplate`s of a representation (`templates`:
+/// innermost first) stand for in a presentation of `seconds`,
+/// initialization first.
+fn template_urls(
+    templates: &[Node<'_, '_>],
+    rep: Node<'_, '_>,
+    seconds: f64,
+    resolve: impl Fn(&str) -> Result<String>,
+) -> Result<Vec<String>> {
+    let attribute = |name: &str| templates.iter().find_map(|n| n.attribute(name));
+    let template_integer = |name: &str, default: u64| integer(attribute(name), name, default);
     let id = rep.attribute("id").unwrap_or("");
     let bandwidth = rep.attribute("bandwidth").unwrap_or("");
     let media = attribute("media").ok_or_else(|| err("DASH: no media template"))?;
@@ -290,10 +328,11 @@ fn dash_urls(xml: &str, seconds: f64) -> Result<Vec<String>> {
     if let Some(init) = attribute("initialization") {
         urls.push(resolve(&substitute(init, id, bandwidth, number, 0)?)?);
     }
-    let timeline = templates
+    let entries = templates
         .iter()
-        .find_map(|n| children(*n, "SegmentTimeline").first().copied());
-    let entries = timeline.map(|n| children(n, "S")).unwrap_or_default();
+        .find_map(|n| first_child(*n, "SegmentTimeline"))
+        .map(|n| children(n, "S"))
+        .unwrap_or_default();
     let mut append = |time: u64, number: u64| -> Result<()> {
         ensure!(urls.len() < MAX_SEGMENTS, "DASH: too many segments");
         urls.push(resolve(&substitute(media, id, bandwidth, number, time)?)?);
@@ -313,8 +352,8 @@ fn dash_urls(xml: &str, seconds: f64) -> Result<Vec<String>> {
     } else {
         let mut time = 0;
         for (index, entry) in entries.iter().enumerate() {
-            time = integer(*entry, "t", time)?;
-            let duration = integer(*entry, "d", 0)?;
+            time = integer(entry.attribute("t"), "t", time)?;
+            let duration = integer(entry.attribute("d"), "d", 0)?;
             ensure!(duration > 0, "DASH: invalid segment duration");
             let repeat: i64 = entry
                 .attribute("r")
@@ -322,9 +361,10 @@ fn dash_urls(xml: &str, seconds: f64) -> Result<Vec<String>> {
                 .parse()
                 .map_err(|_| err("DASH: invalid repetition"))?;
             ensure!(repeat >= -1, "DASH: invalid repetition");
+            // -1: up to the next entry, or the end.
             let count = if repeat == -1 {
                 let until = match entries.get(index + 1) {
-                    Some(n) => integer(*n, "t", end_time)?,
+                    Some(next) => integer(next.attribute("t"), "t", end_time)?,
                     None => end_time,
                 };
                 ensure!(until > time, "DASH: invalid timeline");
@@ -420,6 +460,51 @@ mod tests {
                 "https://cdn.example/a/seg_001_2.mp4",
             ]
         );
+    }
+
+    #[test]
+    fn dash_timeline_repeated_to_the_end() {
+        let xml = r#"<MPD mediaPresentationDuration="PT10S"><Period>
+          <AdaptationSet contentType="audio"><Representation id="r" codecs="flac">
+            <SegmentTemplate media="https://x.example/$Time$.mp4">
+              <SegmentTimeline><S d="4" r="-1"/></SegmentTimeline>
+            </SegmentTemplate>
+          </Representation></AdaptationSet></Period></MPD>"#;
+        assert_eq!(
+            dash_urls(xml, 99.0).unwrap(),
+            vec![
+                "https://x.example/0.mp4",
+                "https://x.example/4.mp4",
+                "https://x.example/8.mp4",
+            ]
+        );
+    }
+
+    #[test]
+    fn dash_segment_list_and_single_file() {
+        let list = r#"<MPD><Period><AdaptationSet mimeType="audio/mp4">
+          <BaseURL>https://cdn.example/a/</BaseURL>
+          <Representation codecs="flac"><SegmentList>
+            <Initialization sourceURL="init.mp4"/>
+            <SegmentURL media="1.mp4"/><SegmentURL media="2.mp4"/>
+          </SegmentList></Representation></AdaptationSet></Period></MPD>"#;
+        assert_eq!(
+            dash_urls(list, 10.0).unwrap(),
+            vec![
+                "https://cdn.example/a/init.mp4",
+                "https://cdn.example/a/1.mp4",
+                "https://cdn.example/a/2.mp4",
+            ]
+        );
+        let file = r#"<MPD><Period><AdaptationSet mimeType="audio/mp4">
+          <Representation codecs="flac"><BaseURL>https://cdn.example/a.flac</BaseURL>
+          </Representation></AdaptationSet></Period></MPD>"#;
+        assert_eq!(
+            dash_urls(file, 10.0).unwrap(),
+            vec!["https://cdn.example/a.flac"]
+        );
+        let http = file.replace("https:", "http:");
+        assert!(dash_urls(&http, 10.0).is_err());
     }
 
     #[test]

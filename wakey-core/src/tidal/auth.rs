@@ -12,7 +12,7 @@
 //! The device authorization sends only the client id; the polling sends the
 //! secret in the form; the refresh uses HTTP Basic with both.
 
-use super::{Request, Result, ensure, json, status_error};
+use super::{Request, Result, ensure, err, expect_ok, json, status_error};
 use crate::config::{TidalConfig, TidalSession};
 use base64::Engine;
 use serde::Deserialize;
@@ -54,7 +54,7 @@ pub fn parse_device_authorization(status: u16, body: &[u8]) -> Result<DeviceCode
         expires_in: u64,
         interval: u64,
     }
-    ensure!(status == 200, "{}", status_error("login code", status));
+    expect_ok("login code", status)?;
     let a: Answer = json("login code", body)?;
     let url = if a.verification_uri_complete.contains("://") {
         a.verification_uri_complete
@@ -118,6 +118,18 @@ struct User {
     country_code: Option<String>,
 }
 
+impl TokenAnswer {
+    /// The user's id, at the top level or in `user`.
+    fn user_id(&self) -> Option<u64> {
+        self.user_id
+            .or_else(|| self.user.as_ref().and_then(|u| u.user_id))
+    }
+
+    fn country_code(&self) -> Option<String> {
+        self.user.as_ref().and_then(|u| u.country_code.clone())
+    }
+}
+
 pub fn parse_poll(status: u16, body: &[u8], now: i64) -> Result<Poll> {
     #[derive(Deserialize)]
     struct Refusal {
@@ -126,13 +138,10 @@ pub fn parse_poll(status: u16, body: &[u8], now: i64) -> Result<Poll> {
     match status {
         200 => {
             let t: TokenAnswer = json("login", body)?;
-            let user = t.user.as_ref();
-            let user_id = t.user_id.or_else(|| user.and_then(|u| u.user_id));
-            let country = user.and_then(|u| u.country_code.clone());
             ensure!(!t.access_token.is_empty(), "login: no access token");
             ensure!(t.expires_in > 0, "login: no token lifetime");
-            let (Some(user_id), Some(country_code)) = (user_id, country) else {
-                return Err(super::err("login: no user or country"));
+            let (Some(user_id), Some(country_code)) = (t.user_id(), t.country_code()) else {
+                return Err(err("login: no user or country"));
             };
             Ok(Poll::Done(TidalSession {
                 access_token: t.access_token,
@@ -181,11 +190,12 @@ pub fn parse_refresh(
     old: &TidalSession,
     now: i64,
 ) -> Result<TidalSession> {
-    ensure!(status == 200, "{}", status_error("token refresh", status));
+    expect_ok("token refresh", status)?;
     let t: TokenAnswer = json("token refresh", body)?;
     ensure!(!t.access_token.is_empty(), "token refresh: no access token");
     ensure!(t.expires_in > 0, "token refresh: no token lifetime");
-    let user = t.user.as_ref();
+    let user_id = t.user_id().unwrap_or(old.user_id);
+    let country_code = t.country_code().unwrap_or_else(|| old.country_code.clone());
     Ok(TidalSession {
         access_token: t.access_token,
         refresh_token: t
@@ -193,13 +203,8 @@ pub fn parse_refresh(
             .filter(|r| !r.is_empty())
             .unwrap_or_else(|| old.refresh_token.clone()),
         expires_at: now + t.expires_in,
-        user_id: t
-            .user_id
-            .or_else(|| user.and_then(|u| u.user_id))
-            .unwrap_or(old.user_id),
-        country_code: user
-            .and_then(|u| u.country_code.clone())
-            .unwrap_or_else(|| old.country_code.clone()),
+        user_id,
+        country_code,
     })
 }
 
@@ -292,7 +297,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.refresh_token, "r2");
-        assert!(needs_refresh(&session(), 950));
-        assert!(!needs_refresh(&session(), 900));
+    }
+
+    #[test]
+    fn refresh_is_due_a_minute_before_expiry() {
+        assert!(!needs_refresh(&session(), 939));
+        assert!(needs_refresh(&session(), 940));
     }
 }

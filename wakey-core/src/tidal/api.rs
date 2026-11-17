@@ -3,17 +3,24 @@
 //! manifest of a track.
 
 use super::manifest::{self, MediaPlan};
-use super::{Request, Result, ensure, json, percent_encode, status_error};
+use super::{Request, Result, ensure, expect_ok, json, percent_encode};
 use crate::config::TidalSession;
 use serde::{Deserialize, Serialize};
 
-pub const API: &str = "https://api.tidal.com/v1";
+const API: &str = "https://api.tidal.com/v1";
 /// Playlists and tracks per page (the API's maximum for tracks is 100).
 const PLAYLISTS_PAGE: u32 = 50;
 const TRACKS_PAGE: u32 = 100;
 
 fn authed(url: String, session: &TidalSession) -> Request {
     Request::get(url).header("Authorization", format!("Bearer {}", session.access_token))
+}
+
+/// The offset of the page after one of `items` entries at `offset`; `None`
+/// after the last (`total` absent: this is the last page).
+fn next_offset(offset: u32, items: usize, total: Option<u32>) -> Option<u32> {
+    let next = offset + items as u32;
+    (items > 0 && total.is_some_and(|t| next < t)).then_some(next)
 }
 
 /// The API session for the token. Called first: without it TIDAL refuses
@@ -31,7 +38,7 @@ pub fn parse_sessions(status: u16, body: &[u8]) -> Result<(u64, String)> {
         user_id: u64,
         country_code: String,
     }
-    ensure!(status == 200, "{}", status_error("session", status));
+    expect_ok("session", status)?;
     let a: Answer = json("session", body)?;
     Ok((a.user_id, a.country_code))
 }
@@ -64,7 +71,6 @@ pub fn parse_playlists(
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Page {
-        /// Absent: this is the last page.
         total_number_of_items: Option<u32>,
         items: Vec<Item>,
     }
@@ -76,11 +82,9 @@ pub fn parse_playlists(
         #[serde(default)]
         number_of_tracks: u32,
     }
-    ensure!(status == 200, "{}", status_error("playlists", status));
+    expect_ok("playlists", status)?;
     let page: Page = json("playlists", body)?;
-    let n = page.items.len() as u32;
-    let next = offset + n;
-    let more = n > 0 && page.total_number_of_items.is_some_and(|t| next < t);
+    let next = next_offset(offset, page.items.len(), page.total_number_of_items);
     let items = page
         .items
         .into_iter()
@@ -90,7 +94,7 @@ pub fn parse_playlists(
             tracks: i.number_of_tracks,
         })
         .collect();
-    Ok((items, more.then_some(next)))
+    Ok((items, next))
 }
 
 /// The playlist called `name` (case and surrounding spaces ignored).
@@ -138,7 +142,7 @@ pub fn parse_playlist(status: u16, body: &[u8]) -> Result<Option<PlaylistInfo>> 
     if status == 404 {
         return Ok(None);
     }
-    ensure!(status == 200, "{}", status_error("playlist", status));
+    expect_ok("playlist", status)?;
     let a: Answer = json("playlist", body)?;
     Ok(Some(PlaylistInfo {
         title: a.title,
@@ -183,7 +187,6 @@ pub fn parse_playlist_items(
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Page {
-        /// Absent: this is the last page.
         total_number_of_items: Option<u32>,
         items: Vec<Entry>,
     }
@@ -224,10 +227,9 @@ pub fn parse_playlist_items(
     fn yes() -> bool {
         true
     }
-    ensure!(status == 200, "{}", status_error("playlist", status));
+    expect_ok("playlist", status)?;
     let page: Page = json("playlist", body)?;
-    let n = page.items.len() as u32;
-    let next = offset + n;
+    let next = next_offset(offset, page.items.len(), page.total_number_of_items);
     let mut tracks = Vec::new();
     for e in page.items {
         if e.kind != "track" {
@@ -256,8 +258,7 @@ pub fn parse_playlist_items(
             cover: i.album.and_then(|a| a.cover).filter(|c| !c.is_empty()),
         });
     }
-    let more = n > 0 && page.total_number_of_items.is_some_and(|t| next < t);
-    Ok((tracks, more.then_some(next)))
+    Ok((tracks, next))
 }
 
 /// A cover image (JPEG) of `px` × `px` (80, 160, 320, 640, 1280).
@@ -301,7 +302,7 @@ pub fn parse_playback_info(
         manifest_mime_type: String,
         manifest: String,
     }
-    ensure!(status == 200, "{}", status_error("stream", status));
+    expect_ok("stream", status)?;
     let a: Answer = json("stream", body)?;
     ensure!(a.track_id == track, "stream: another track came back");
     ensure!(a.asset_presentation == "FULL", "stream: only a preview");
@@ -323,6 +324,16 @@ pub fn parse_playback_info(
 mod tests {
     use super::*;
 
+    fn session() -> TidalSession {
+        TidalSession {
+            access_token: "tok".into(),
+            refresh_token: "r".into(),
+            expires_at: 0,
+            user_id: 42,
+            country_code: "CH".into(),
+        }
+    }
+
     #[test]
     fn playlist_info() {
         let r = playlist(&session(), "ab-cd");
@@ -335,16 +346,6 @@ mod tests {
         assert_eq!(info.last_updated, "2026-11-13T10:00:00.000+0000");
         assert_eq!(parse_playlist(404, b"{}").unwrap(), None);
         assert!(parse_playlist(500, b"{}").is_err());
-    }
-
-    fn session() -> TidalSession {
-        TidalSession {
-            access_token: "tok".into(),
-            refresh_token: "r".into(),
-            expires_at: 0,
-            user_id: 42,
-            country_code: "CH".into(),
-        }
     }
 
     #[test]
@@ -414,11 +415,19 @@ mod tests {
     }
 
     #[test]
-    fn playback_info_refuses_atmos() {
+    fn playback_info_refuses_what_is_not_lossless_stereo() {
         let atmos = br#"{"trackId":7,"assetPresentation":"FULL","audioMode":"DOLBY_ATMOS",
             "audioQuality":"LOSSLESS","manifestMimeType":"application/vnd.tidal.bts","manifest":""}"#;
         let e = parse_playback_info(200, atmos, 7, 100.0).unwrap_err();
         assert!(e.to_string().contains("not stereo"), "{e}");
+        let low = br#"{"trackId":7,"assetPresentation":"FULL","audioMode":"STEREO",
+            "audioQuality":"LOW","manifestMimeType":"application/vnd.tidal.bts","manifest":""}"#;
+        let e = parse_playback_info(200, low, 7, 100.0).unwrap_err();
+        assert_eq!(e.to_string(), "stream: not lossless (LOW)");
+        let preview = br#"{"trackId":7,"assetPresentation":"PREVIEW","audioMode":"STEREO",
+            "audioQuality":"LOSSLESS","manifestMimeType":"application/vnd.tidal.bts","manifest":""}"#;
+        assert!(parse_playback_info(200, preview, 7, 100.0).is_err());
+        assert!(parse_playback_info(200, atmos, 8, 100.0).is_err());
     }
 
     #[test]

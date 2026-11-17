@@ -8,7 +8,8 @@
 //! undocumented (see the `tidlers` crate):
 //!
 //! - [`auth`]: device code login, token refresh.
-//! - [`api`]: playlists, their tracks, covers, the stream manifest.
+//! - [`api`]: playlists, their tracks, cover URLs, the stream manifest.
+//! - [`cover`]: album covers, decoded to the size the list shows.
 //! - [`manifest`]: BTS (mirrors of one file) and DASH (segments).
 //! - [`flac_mp4`]: DASH lossless is FLAC in fragmented MP4; unpacked to a
 //!   plain `.flac` while it downloads.
@@ -95,6 +96,15 @@ pub(crate) use ensure;
 
 fn err(msg: impl Into<String>) -> Error {
     Error(msg.into())
+}
+
+/// An error unless the HTTP status is 200.
+fn expect_ok(stage: &str, status: u16) -> Result<()> {
+    if status == 200 {
+        Ok(())
+    } else {
+        Err(status_error(stage, status))
+    }
 }
 
 /// An unexpected HTTP status, with a hint (no body: it may carry tokens).
