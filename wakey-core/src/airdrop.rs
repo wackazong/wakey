@@ -13,7 +13,8 @@
 //! verdict comes after the last file). Files the clock cannot play, and the
 //! AppleDouble companions (`._name`) iOS sends along, are skipped.
 
-use std::fmt;
+use std::io;
+use unicode_normalization::UnicodeNormalization;
 
 const MAGIC: [u8; 2] = [0xA5, 0x5A];
 /// The largest payload the C6 sends (a data frame: offset + 1024 bytes),
@@ -184,8 +185,7 @@ pub const SOUND_EXTENSIONS: [&str; 8] = ["wav", "aif", "aiff", "aifc", "flac", "
 /// draw as one letter), replaces characters FAT does not allow and control
 /// characters, and shortens the stem to 100 bytes.
 pub fn sound_name(received: &str) -> Option<String> {
-    use unicode_normalization::UnicodeNormalization;
-    let received: String = received.nfc().collect();
+    let received = nfc(received);
     let base = received
         .rsplit(['/', '\\'])
         .next()
@@ -209,8 +209,6 @@ pub fn sound_name(received: &str) -> Option<String> {
     if !SOUND_EXTENSIONS.contains(&ext.as_str()) {
         return None;
     }
-    let stem = stem.trim();
-    let stem = if stem.is_empty() { "AirDrop" } else { stem };
     let mut cut = stem.len().min(100);
     while !stem.is_char_boundary(cut) {
         cut -= 1;
@@ -220,7 +218,6 @@ pub fn sound_name(received: &str) -> Option<String> {
 
 /// `text` in composed form (NFC), for names shown.
 pub fn nfc(text: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
     text.nfc().collect()
 }
 
@@ -250,12 +247,12 @@ pub trait Store {
     /// True if a sound file of this name exists (or is being received).
     fn exists(&self, name: &str) -> bool;
     /// Starts the part file for `name`.
-    fn create(&mut self, name: &str, size: u32) -> std::io::Result<Self::File>;
-    fn write(&mut self, file: &mut Self::File, bytes: &[u8]) -> std::io::Result<()>;
+    fn create(&mut self, name: &str, size: u32) -> io::Result<Self::File>;
+    fn write(&mut self, file: &mut Self::File, bytes: &[u8]) -> io::Result<()>;
     /// Closes the part file.
-    fn close(&mut self, file: Self::File) -> std::io::Result<()>;
+    fn close(&mut self, file: Self::File) -> io::Result<()>;
     /// Makes the closed part file `name` the sound file.
-    fn commit(&mut self, name: &str) -> std::io::Result<()>;
+    fn commit(&mut self, name: &str) -> io::Result<()>;
     /// Deletes the part file of `name`.
     fn discard(&mut self, name: &str);
 }
@@ -282,12 +279,6 @@ pub enum Event {
         kept: Vec<String>,
         error: Option<String>,
     },
-}
-
-impl fmt::Display for Progress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} ({} of {} bytes)", self.name, self.got, self.size)
-    }
 }
 
 struct Current<F> {
@@ -321,19 +312,13 @@ impl<S: Store> Receiver<S> {
         }
     }
 
-    pub fn store(&self) -> &S {
-        &self.store
-    }
-
     /// The file being received, if any.
     pub fn progress(&self) -> Option<&Progress> {
         self.current.as_ref().map(|c| &c.progress)
     }
 
     fn fail(&mut self, why: String) {
-        if self.error.is_none() {
-            self.error = Some(why);
-        }
+        self.error.get_or_insert(why);
     }
 
     /// Closes the current file; it joins the transfer only if all its
@@ -383,32 +368,31 @@ impl<S: Store> Receiver<S> {
                     self.error = None;
                 }
                 self.close_current();
-                let file = match sound_name(&name) {
-                    Some(n) => {
-                        let n = unique_name(&n, |c| {
-                            self.store.exists(c) || self.done.iter().any(|d| d == c)
-                        });
-                        match self.store.create(&n, size) {
-                            Ok(f) => Some((n, f)),
-                            Err(e) => {
-                                self.fail(format!("{n}: {e}"));
-                                None
-                            }
+                let file = sound_name(&name).and_then(|name| {
+                    let name = unique_name(&name, |candidate| {
+                        self.store.exists(candidate) || self.done.iter().any(|d| d == candidate)
+                    });
+                    match self.store.create(&name, size) {
+                        Ok(file) => Some((name, file)),
+                        Err(e) => {
+                            self.fail(format!("{name}: {e}"));
+                            None
                         }
                     }
-                    None => None,
-                };
-                let shown = file.as_ref().map_or(name, |(n, _)| n.clone());
+                });
+                // Skipped files (companions, other types) are not shown.
+                let shown = file.is_some();
                 let progress = Progress {
-                    name: shown,
+                    name: file.as_ref().map_or(name, |(stored, _)| stored.clone()),
                     got: 0,
                     size,
                 };
-                let event = Event::Progress(progress.clone());
-                self.current = Some(Current { file, progress });
-                // Skipped files (companions, other types) are not shown.
-                if self.current.as_ref().is_some_and(|c| c.file.is_some()) {
-                    event
+                self.current = Some(Current {
+                    file,
+                    progress: progress.clone(),
+                });
+                if shown {
+                    Event::Progress(progress)
                 } else {
                     Event::None
                 }
@@ -427,18 +411,21 @@ impl<S: Store> Receiver<S> {
                     return Event::None;
                 }
                 cur.progress.got += bytes.len() as u32;
-                let Some((_, file)) = cur.file.as_mut() else {
+                let Some((name, mut file)) = cur.file.take() else {
                     return Event::None;
                 };
-                if let Err(e) = self.store.write(file, &bytes) {
-                    let why = format!("{}: {e}", cur.progress.name);
-                    let (name, file) = cur.file.take().unwrap();
-                    let _ = self.store.close(file);
-                    self.store.discard(&name);
-                    self.fail(why);
-                    return Event::None;
+                match self.store.write(&mut file, &bytes) {
+                    Ok(()) => {
+                        cur.file = Some((name, file));
+                        Event::Progress(cur.progress.clone())
+                    }
+                    Err(e) => {
+                        let _ = self.store.close(file);
+                        self.store.discard(&name);
+                        self.fail(format!("{name}: {e}"));
+                        Event::None
+                    }
                 }
-                Event::Progress(cur.progress.clone())
             }
             Frame::End { complete } => {
                 if !complete
@@ -454,20 +441,20 @@ impl<S: Store> Receiver<S> {
             Frame::Done { ok, why } => {
                 self.close_current();
                 self.in_transfer = false;
-                let error = if ok {
-                    self.error.take()
-                } else {
-                    Some(self.error.take().unwrap_or(why))
-                };
+                let mut error = self.error.take().or_else(|| (!ok).then_some(why));
+                let intact = error.is_none();
                 let mut kept = Vec::new();
                 for name in self.done.drain(..) {
-                    if error.is_none() {
-                        match self.store.commit(&name) {
-                            Ok(()) => kept.push(name),
-                            Err(_) => self.store.discard(&name),
-                        }
-                    } else {
+                    if !intact {
                         self.store.discard(&name);
+                        continue;
+                    }
+                    match self.store.commit(&name) {
+                        Ok(()) => kept.push(name),
+                        Err(e) => {
+                            self.store.discard(&name);
+                            error.get_or_insert(format!("{name}: {e}"));
+                        }
                     }
                 }
                 Event::Finished { kept, error }
@@ -519,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn names() {
+    fn sound_names() {
         assert_eq!(
             sound_name("Tintenfischsong.m4a").as_deref(),
             Some("Tintenfischsong.m4a")
@@ -531,6 +518,7 @@ mod tests {
             Some("Weck_ mich_.mp3")
         );
         assert_eq!(sound_name("noext"), None);
+        assert_eq!(sound_name(" a .wav ").as_deref(), Some("a.wav"));
         // NFD from iOS → NFC.
         assert_eq!(
             sound_name("Schneeglo\u{308}ckchen.m4a").as_deref(),
@@ -539,6 +527,11 @@ mod tests {
         let long = format!("{}.wav", "ä".repeat(80));
         let n = sound_name(&long).unwrap();
         assert!(n.len() <= 104 && n.ends_with(".wav"), "{n}");
+    }
+
+    #[test]
+    fn a_taken_name_gets_the_next_free_number() {
+        assert_eq!(unique_name("a.m4a", |_| false), "a.m4a");
         assert_eq!(
             unique_name("a.m4a", |n| n == "a.m4a" || n == "a 2.m4a"),
             "a 3.m4a"
@@ -550,6 +543,8 @@ mod tests {
     struct Mem {
         parts: BTreeMap<String, Vec<u8>>,
         files: BTreeMap<String, Vec<u8>>,
+        /// The card refuses the rename.
+        commit_fails: bool,
     }
 
     impl Store for Mem {
@@ -557,18 +552,21 @@ mod tests {
         fn exists(&self, name: &str) -> bool {
             self.files.contains_key(name) || self.parts.contains_key(name)
         }
-        fn create(&mut self, name: &str, _size: u32) -> std::io::Result<String> {
+        fn create(&mut self, name: &str, _size: u32) -> io::Result<String> {
             self.parts.insert(name.into(), Vec::new());
             Ok(name.into())
         }
-        fn write(&mut self, file: &mut String, bytes: &[u8]) -> std::io::Result<()> {
+        fn write(&mut self, file: &mut String, bytes: &[u8]) -> io::Result<()> {
             self.parts.get_mut(file).unwrap().extend_from_slice(bytes);
             Ok(())
         }
-        fn close(&mut self, _file: String) -> std::io::Result<()> {
+        fn close(&mut self, _file: String) -> io::Result<()> {
             Ok(())
         }
-        fn commit(&mut self, name: &str) -> std::io::Result<()> {
+        fn commit(&mut self, name: &str) -> io::Result<()> {
+            if self.commit_fails {
+                return Err(io::Error::other("rename failed"));
+            }
             let data = self.parts.remove(name).unwrap();
             self.files.insert(name.into(), data);
             Ok(())
@@ -616,8 +614,8 @@ mod tests {
                 error: None
             }
         );
-        assert_eq!(rx.store().files.get("a.m4a").unwrap(), b"abcd");
-        assert!(rx.store().parts.is_empty());
+        assert_eq!(rx.store.files.get("a.m4a").unwrap(), b"abcd");
+        assert!(rx.store.parts.is_empty());
         // The same name again: kept beside the first.
         let ev = transfer(&mut rx, true);
         assert_eq!(
@@ -640,7 +638,7 @@ mod tests {
                 error: Some("bad record".into())
             }
         );
-        assert!(rx.store().files.is_empty() && rx.store().parts.is_empty());
+        assert!(rx.store.files.is_empty() && rx.store.parts.is_empty());
 
         rx.frame(Frame::Begin {
             size: 4,
@@ -656,7 +654,7 @@ mod tests {
             panic!()
         };
         assert!(kept.is_empty() && error.unwrap().contains("gap"));
-        assert!(rx.store().parts.is_empty());
+        assert!(rx.store.parts.is_empty());
     }
 
     #[test]
@@ -697,7 +695,20 @@ mod tests {
             panic!()
         };
         assert!(kept.is_empty() && error.unwrap().contains("incomplete"));
-        assert!(rx.store().files.is_empty() && rx.store().parts.is_empty());
+        assert!(rx.store.files.is_empty() && rx.store.parts.is_empty());
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_renamed_is_reported() {
+        let mut rx = Receiver::new(Mem {
+            commit_fails: true,
+            ..Mem::default()
+        });
+        let Event::Finished { kept, error } = transfer(&mut rx, true) else {
+            panic!()
+        };
+        assert!(kept.is_empty() && error.unwrap().contains("a.m4a"));
+        assert!(rx.store.files.is_empty() && rx.store.parts.is_empty());
     }
 
     #[test]
@@ -724,6 +735,6 @@ mod tests {
         rx.frame(data(0, b"ab"));
         assert_eq!(rx.progress().map(|p| p.got), Some(2));
         rx.frame(Frame::Hello("1.0.0".into()));
-        assert!(rx.progress().is_none() && rx.store().parts.is_empty());
+        assert!(rx.progress().is_none() && rx.store.parts.is_empty());
     }
 }

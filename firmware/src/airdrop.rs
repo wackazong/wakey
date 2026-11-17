@@ -156,7 +156,7 @@ fn receive(link: &mut C6Link) -> anyhow::Result<()> {
                 Event::Progress(p) => set_state(State::Receiving(p)),
                 Event::Finished { kept, error } => {
                     if let Some(e) = &error {
-                        log::warn!("airdrop: nothing kept: {e}");
+                        log::warn!("airdrop: not all kept: {e}");
                     }
                     if !kept.is_empty() {
                         log::info!("airdrop: kept {kept:?}");
