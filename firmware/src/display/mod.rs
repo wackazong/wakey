@@ -579,8 +579,9 @@ impl Display {
     /// shown; only their cache lines are written back to PSRAM.
     ///
     /// Must be called from the core that created the display (the core the
-    /// DMA ISR runs on), so the ISR cannot interleave with the index switch
-    /// and the counter read below.
+    /// DMA ISR runs on). The ISR can still run between the buffer switch and
+    /// the counter read below; reading the counter after the switch makes
+    /// that harmless (see there).
     pub fn present(&mut self, rows: Range<usize>) -> Result<(), EspError> {
         let back = 1 - self.front;
         // The driver rejects empty areas; a one-row write-back costs nothing.

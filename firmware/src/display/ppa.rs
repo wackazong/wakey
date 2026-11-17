@@ -56,6 +56,11 @@ const MIN_LINES: usize = 8;
 /// Submissions remembered for the stall report.
 const RECENT: usize = 8;
 
+/// How long a wait for the PPA may last before it counts as hung. One
+/// transaction (a strip of at most a few hundred kB) takes well under a
+/// millisecond.
+const STALL_LIMIT_US: u32 = 2_000_000;
+
 /// Microseconds the CPU spent waiting for the PPA (diagnostics).
 pub static WAIT_US: AtomicU32 = AtomicU32::new(0);
 
@@ -203,26 +208,35 @@ impl PpaRotator {
         DONE.load(Ordering::Acquire)
     }
 
-    fn report_stall(&self, spins: &mut u32) {
-        *spins += 1;
-        if *spins == 20_000_000 {
-            log::error!(
-                "ppa: stalled, submitted {} done {}; recent: {:?}",
-                self.submitted,
-                Self::done(),
-                self.recent
-                    .iter()
-                    .map(|(n, o)| (*n, o.range.clone(), o.first_line, o.lines))
-                    .collect::<heapless::Vec<_, RECENT>>()
-            );
+    /// Counts one turn of a wait that began at `since` (µs). When the PPA
+    /// has not moved for [`STALL_LIMIT_US`], logs the last submissions and
+    /// panics: there is no way to reset it, and the reboot that follows
+    /// the panic gives back a working clock (an alarm in progress resumes
+    /// from NVS), where waiting would freeze the screen for good.
+    fn report_stall(&self, spins: &mut u32, since: u32) {
+        *spins = spins.wrapping_add(1);
+        // The clock is read only now and then: the wait is a tight spin.
+        if !spins.is_multiple_of(4096) || now_us().wrapping_sub(since) <= STALL_LIMIT_US {
+            return;
         }
+        log::error!(
+            "ppa: stalled, submitted {} done {}; recent: {:?}",
+            self.submitted,
+            Self::done(),
+            self.recent
+                .iter()
+                .map(|(n, o)| (*n, o.range.clone(), o.first_line, o.lines))
+                .collect::<heapless::Vec<_, RECENT>>()
+        );
+        panic!("ppa: no progress for {} ms", STALL_LIMIT_US / 1000);
     }
 
     /// A buffer that is neither open nor still read by the PPA.
     fn free_buffer(&mut self) -> usize {
         let mut spins = 0;
+        let since = now_us();
         loop {
-            self.report_stall(&mut spins);
+            self.report_stall(&mut spins, since);
             for i in 0..NUM_BUFS {
                 let in_use = self.open.iter().any(|o| o.buf == i);
                 let busy = (Self::done().wrapping_sub(self.buf_seq[i]) as i32) < 0;
@@ -396,7 +410,7 @@ impl PpaRotator {
         let mut spins = 0;
         let t0 = now_us();
         while Self::done() != self.submitted {
-            self.report_stall(&mut spins);
+            self.report_stall(&mut spins, t0);
             core::hint::spin_loop();
         }
         WAIT_US.fetch_add(now_us().wrapping_sub(t0), Ordering::Relaxed);
