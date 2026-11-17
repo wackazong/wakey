@@ -1,7 +1,7 @@
 # ESP-IDF targets (riscv32imafc-esp-espidf) are tier 3: nightly + build-std.
-# 2026-10-17 is the only window right now: earlier nightlies ICE on
-# esp-idf-svc (rust-lang/rust#164318), later ones cannot build std for
-# espidf (rust-lang/rust#164555). See docs/pitfalls.md.
+# This nightly is the only one that builds: earlier ones ICE on esp-idf-svc
+# (rust-lang/rust#164318), later ones cannot build std for espidf
+# (rust-lang/rust#164555). See docs/pitfalls.md.
 [toolchain]
 channel = "nightly-2026-10-17"
 components = ["rust-src", "rustfmt", "clippy"]

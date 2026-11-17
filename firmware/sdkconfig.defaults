@@ -17,10 +17,10 @@ CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 # malloc() takes PSRAM first; internal RAM is left to what asks for it
 # (DMA buffers, FreeRTOS objects, stacks). With the default (up to 16 KiB
-# internal first), Slint's small allocations filled internal RAM when the
-# alarm list opened: the SD card driver found no DMA buffer (saving failed),
-# std could not create a mutex (abort), and frames ran ~4x slower. A larger
-# CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL did not help: malloc used it up too.
+# internal first), Slint's small allocations fill internal RAM when the
+# alarm list opens: the SD card driver finds no DMA buffer (saving fails),
+# std cannot create a mutex (abort), and frames run ~4x slower. A larger
+# CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL does not help: malloc uses it up too.
 # Loads from cached PSRAM take as long as from internal RAM (6 cycles).
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
 CONFIG_SPIRAM_XIP_FROM_PSRAM=y
@@ -100,9 +100,9 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # RFC 5077) instead of a full handshake (~1.5 s on this chip): `http.rs`.
 CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 # ChaCha20-Poly1305: mbedTLS offers it first and TIDAL's CDN (Fastly)
-# takes the client's order. AES-GCM cost ~60 % of core 0 at 1 MiB/s: the
+# takes the client's order. AES-GCM costs ~60 % of core 0 at 1 MiB/s: the
 # AES DMA driver syncs caches with interrupts off for each record (buffers
-# in PSRAM), GHASH runs in software; software AES was slower still.
+# in PSRAM), GHASH runs in software; software AES is slower still.
 CONFIG_MBEDTLS_CHACHA20_C=y
 CONFIG_MBEDTLS_POLY1305_C=y
 CONFIG_MBEDTLS_CHACHAPOLY_C=y

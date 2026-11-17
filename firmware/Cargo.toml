@@ -34,7 +34,8 @@ missing_const_for_thread_local = "allow"
 # config, scroll physics), tested on the host.
 wakey-core = { path = "../wakey-core" }
 esp-idf-svc = { version = "0.53", features = ["std", "binstart", "alloc", "embassy-time-driver", "embassy-sync", "critical-section"] }
-esp-idf-hal = "0.47"
+# Used through `esp_idf_svc::sys`; named here because `build.rs` and the
+# `[package.metadata.esp-idf-sys]` sections below need a direct dependency.
 esp-idf-sys = "0.38.1"
 log = "0.4"
 anyhow = "1"
@@ -46,7 +47,6 @@ embassy-time = { version = "0.5.1", features = ["log"] }
 embassy-sync = "0.8"
 embassy-futures = "0.1"
 static_cell = "2.1"
-
 
 slint = { version = "1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 # Path drawing (the icons in `ui/wakey/theme.slint`).
@@ -87,7 +87,8 @@ debug = 2          # symbols stay in the ELF only, not in the flashed image
 opt-level = "s"
 debug = 2
 
-# Extra ESP-IDF bindings (no extra component is built).
+# Extra ESP-IDF bindings: PPA, camera (CSI, ISP), esp_hosted (no extra
+# component is built).
 [[package.metadata.esp-idf-sys.extra_components]]
 bindings_header = "bindings/extra.h"
 
@@ -106,10 +107,14 @@ remote_component = { name = "espressif/esp_hosted", version = "==2.13.1" }
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_wifi_remote", version = "==1.6.5" }
 
-# Slint's software renderer with a glyph fast path (vendor/README.md).
+# Patched copies; what each changes and when it can go: vendor/README.md.
 [patch.crates-io]
+# Slint's software renderer: glyph fast path, paths in line-by-line mode,
+# opaque rounded rectangles, dithered gradients.
 i-slint-renderer-software = { path = "vendor/i-slint-renderer-software" }
+# More dirty rectangles, merged into bands when they share lines.
 i-slint-core = { path = "vendor/i-slint-core" }
 # HTTP client: headers of the previous request deleted on a reused
-# connection, TLS session tickets (vendor/README.md).
+# connection, TLS session tickets; the embassy time driver's overflow after
+# 24 h of uptime.
 esp-idf-svc = { path = "vendor/esp-idf-svc" }
