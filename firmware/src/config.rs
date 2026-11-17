@@ -1,19 +1,22 @@
-//! Loading `config.json` from the SD card root (model and format:
-//! [`wakey_core::config`]).
+//! `config.json` in the SD card root: loading it, and writing the parts
+//! the clock changes itself, the alarms and the TIDAL session (model and
+//! format: [`wakey_core::config`]).
 //!
 //! For development the build environment can provide Wi-Fi credentials
 //! when the file has none (`WAKEY_WIFI_SSID`, `WAKEY_WIFI_PASSWORD`) and
 //! replace the alarms with one test alarm (`WAKEY_ALARM=HH:MM`: every day).
 
 use crate::board::sd;
+use std::io;
+use std::sync::Mutex;
 use wakey_core::alarm::{self, AlarmConfig};
 pub use wakey_core::config::{Config, TidalConfig, TidalSession, WifiConfig};
 
+pub const FILE: &str = "config.json";
+
 /// One writer at a time: alarms from the UI thread, the TIDAL session from
 /// the `wifi` thread.
-static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub const FILE: &str = "config.json";
+static WRITE: Mutex<()> = Mutex::new(());
 
 /// Reads the configuration; a missing file gives the defaults (first
 /// setup). A file that cannot be read is an error (in words, for the
@@ -37,7 +40,7 @@ pub fn load() -> Result<Config, String> {
                 return Err(e.to_string());
             }
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
             log::info!("config: no {FILE} ({e})");
             Config::default()
         }
@@ -73,28 +76,16 @@ pub fn load() -> Result<Config, String> {
 }
 
 /// Writes `alarms` into `config.json`, keeping the rest of the file.
-pub fn save_alarms(alarms: &[AlarmConfig]) -> std::io::Result<()> {
-    let _w = WRITE.lock().unwrap_or_else(|e| e.into_inner());
-    let path = sd::path(FILE);
-    let old = std::fs::read_to_string(&path).ok();
-    sd::replace(
-        &path,
-        Config::with_alarms(old.as_deref(), alarms).as_bytes(),
-    )?;
+pub fn save_alarms(alarms: &[AlarmConfig]) -> io::Result<()> {
+    rewrite(|old| Config::with_alarms(old, alarms))?;
     log::info!("config: alarms saved to {FILE}");
     Ok(())
 }
 
 /// Writes the TIDAL session into `config.json` (`None`: removes it),
 /// keeping the rest of the file.
-pub fn save_tidal_session(session: Option<&TidalSession>) -> std::io::Result<()> {
-    let _w = WRITE.lock().unwrap_or_else(|e| e.into_inner());
-    let path = sd::path(FILE);
-    let old = std::fs::read_to_string(&path).ok();
-    sd::replace(
-        &path,
-        Config::with_tidal_session(old.as_deref(), session).as_bytes(),
-    )?;
+pub fn save_tidal_session(session: Option<&TidalSession>) -> io::Result<()> {
+    rewrite(|old| Config::with_tidal_session(old, session))?;
     log::info!(
         "config: TIDAL session {}",
         if session.is_some() {
@@ -104,4 +95,18 @@ pub fn save_tidal_session(session: Option<&TidalSession>) -> std::io::Result<()>
         }
     );
     Ok(())
+}
+
+/// Replaces `config.json` with what `edit` makes of its text (`None`: no
+/// file yet). A file that is there but cannot be read is an error: it must
+/// not be replaced by one that holds only what `edit` adds.
+fn rewrite(edit: impl FnOnce(Option<&str>) -> String) -> io::Result<()> {
+    let _writer = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let path = sd::path(FILE);
+    let old = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    sd::replace(&path, edit(old.as_deref()).as_bytes())
 }
