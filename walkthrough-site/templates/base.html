@@ -18,6 +18,8 @@
   <title>{% block title %}{{ config.title }}{% endblock title %}</title>
   <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}">
   <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="{{ root }}favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="{{ root }}apple-touch-icon.png">
   <link rel="preload" href="{{ root }}fonts/source-serif-4-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="{{ root }}fonts/archivo-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ root }}main.css">
@@ -34,9 +36,11 @@
 
   <header class="topbar">
     {% block menu_button %}{% endblock menu_button %}
-    <a class="topbar__brand" href="{{ root }}">
-      <svg class="topbar__mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h8v14H3zM13 5h8v6h-8zM13 13h8v6h-8z"/></svg>
-      <span>{{ config.title }}</span>
+    <a class="topbar__brand" href="{{ root }}" aria-label="{{ config.extra | get(key='brand', default=config.title) }}: home">
+      {# The author's GitHub picture (static/img/avatar.jpg; the favicons
+         are made from the same picture). #}
+      <img class="topbar__mark topbar__avatar" src="{{ root }}img/avatar.jpg" alt="" width="128" height="128">
+      <span>{{ config.extra | get(key="brand", default=config.title) }}</span>
     </a>
     <span class="topbar__crumb">{% block crumb %}{% endblock crumb %}</span>
     <button class="topbar__search" type="button" id="search-open" aria-haspopup="dialog">

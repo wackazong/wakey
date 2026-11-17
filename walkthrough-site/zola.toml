@@ -5,8 +5,8 @@
 # base URL without a rebuild (templates/partials/paths.html).
 base_url = "https://walkthrough.invalid"
 
-title = "Code walkthroughs"
-description = "Guided tours through real source code, for readers who know the language and want to see how a working application fits together."
+title = "Wrapping my head around things"
+description = "Tutorials, walkthroughs, explorations and ideas about all things tech."
 default_language = "en"
 
 compile_sass = true
@@ -35,6 +35,12 @@ include_content = true
 internal_level = "error"
 
 [extra]
+# The name in the top bar's left corner: where the site is deployed.
+brand = "wackazong.com"
+# The small line above the landing page's title.
+eyebrow = "Random projects for your enjoyment"
+# The author's GitHub profile, linked from the landing page.
+github = "https://github.com/wackazong"
 # Reading speed in words per minute, code included, unless a walkthrough
 # sets its own (`extra.wpm` in its _index.md).
 wpm = 155

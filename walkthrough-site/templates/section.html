@@ -9,6 +9,8 @@
 {%- set total = sums | last | int -%}
 {%- set commit = section.extra | get(key="commit", default="") -%}
 {%- set repo = section.extra | get(key="repo", default="") -%}
+{%- set shots = section.extra | get(key="shots", default=[]) -%}
+{%- set here = section.permalink | replace(from=base, to=root) -%}
 {#- The first chapter that is written. -#}
 {%- set first = false -%}
 {%- for p in section.pages | reverse -%}{%- if not p.extra | get(key="planned", default=false) -%}{%- set_global first = p -%}{%- endif -%}{%- endfor -%}
@@ -22,8 +24,9 @@
 
 {% block body %}
 <main id="content" class="overview">
-  <section class="hero">
+  <section class="hero{% if shots %} hero--shots{% endif %}">
     <div class="hero__inner">
+      <div class="hero__text">
       <p class="eyebrow">{{ section.extra | get(key="kicker", default="Walkthrough") }}</p>
       <h1 class="hero__title">{{ section.title }}</h1>
       <p class="hero__lede">{{ section.description }}</p>
@@ -34,8 +37,22 @@
         <div><dt>Commit</dt><dd>{% if repo %}<a href="{{ repo }}/tree/{{ commit }}">{{ commit | truncate(length=7, end="") }}</a>{% else %}{{ commit | truncate(length=7, end="") }}{% endif %}</dd></div>
         {% endif %}
       </dl>
-      {% if first %}
-      <a class="button" href="{{ first.permalink | replace(from=base, to=root) }}">Start reading</a>
+      <p class="hero__actions">
+        {% if first %}
+        <a class="button" href="{{ first.permalink | replace(from=base, to=root) }}">Start reading</a>
+        {% endif %}
+        {% if repo %}
+        <a class="button button--ghost" href="{{ repo }}">{{ <github_mark /> | safe }}<span>{{ repo | replace(from="https://github.com/", to="") }} on GitHub</span></a>
+        {% endif %}
+      </p>
+      </div>
+      {% if shots %}
+      {# Screenshots fanned out beside the text: the first in front. #}
+      <div class="shots" role="group" aria-label="Screenshots of {{ section.title }}">
+        {% for s in shots %}
+        <figure class="shot shot--{{ loop.index }}"><img src="{{ here }}{{ s.src }}" alt="{{ s.alt }}" width="1280" height="720"></figure>
+        {% endfor %}
+      </div>
       {% endif %}
     </div>
   </section>

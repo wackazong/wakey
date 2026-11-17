@@ -19,8 +19,14 @@ commit = "0000000000000000000000000000000000000000"
 # The Git repository the commit is in, as a path from the site folder.
 # Leave it out if the site lives inside that repository.
 # source = "../../other-project"
-# Where a file name above an excerpt links to. Leave it out for no links.
+# Where a file name above an excerpt links to, and the repository button on
+# the overview. Leave it out for neither.
 # repo = "https://github.com/someone/project"
+# Screenshots fanned out beside the overview's title, the first in front
+# (16:9 pictures in img/; one to three). Leave it out for none.
+# shots = [
+#   { src = "img/main.png", alt = "What the picture shows" },
+# ]
 # The "where we are" map in this folder. Leave it out for no mini-map.
 map = "map.svg"
 # Two colours: `accent` for the blocks (white text must be readable on

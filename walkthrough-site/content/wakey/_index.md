@@ -12,6 +12,12 @@ commit = "888a2a19da0f9dc0081ce345797b496f491d0d94"
 repo = "https://github.com/wackazong/wakey"
 # The "where we are" map, in this folder.
 map = "map.svg"
+# Beside the title on the overview, the first in front (16:9 screenshots).
+shots = [
+  { src = "img/ui-clock-sunrise.jpg", alt = "The clock face at sunrise: 05:35 in large digits on an orange sky, the next alarm below" },
+  { src = "img/ui-alarm-page.png", alt = "The alarm page with hour and minute wheels, weekdays and sound settings" },
+  { src = "img/ui-sound-tidal.png", alt = "The sound page with tracks from a TIDAL playlist" },
+]
 # The night sky and the sunrise of the clock's own face.
 accent = "#3a1d6e"
 spark = "#ff8f3f"

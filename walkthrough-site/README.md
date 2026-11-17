@@ -55,7 +55,8 @@ Content files hold Markdown and component calls, and no HTML. If a chapter needs
 2. Edit `content/<name>/_index.md`. Its comments explain every setting. The ones that matter most:
    - `commit`: the commit the walkthrough describes. Every excerpt is read at this commit.
    - `source`: the path from this folder to the Git repository, if the site is not inside it.
-   - `repo`: the repository's web address; the file name above each excerpt then links to the file at the commit.
+   - `repo`: the repository's web address; the file name above each excerpt then links to the file at the commit, and the overview shows a button to the repository.
+   - `shots`: one to three screenshots (16:9, in `img/`, each with `src` and `alt`) that the overview fans out beside its title, the first in front.
    - `accent` and `spark`: the walkthrough's two colours. `accent` fills the large blocks and needs to be dark enough for white text. `spark` is the highlight and needs to be light enough for dark text.
    - `map`: the "where we are" map (below).
 3. Draw the map, `content/<name>/map.svg`: one `<g data-part="name">` per part of the project, each holding a `<rect class="m-box">` and a `<text class="m-label">`. A chapter lights up parts by naming them in its front matter.
@@ -201,6 +202,8 @@ A diagram never shrinks until its text is unreadable: below a least width it scr
 Two rules for SVG files: no blank lines (one would cut the figure in two), and every `<marker>` id unique across the site, because all SVGs of a page share one document. `content/wakey/img/executor.svg` is a model.
 
 ## Design
+
+The site's own words are in `zola.toml`: `title` and `description` are the landing page's heading and the line below it, and `[extra]` holds `brand` (the name in the top bar's left corner, where the site is deployed), `eyebrow` (the small line above the heading) and `github` (the author's profile, a button on the landing page). The picture in the top bar is `static/img/avatar.jpg`, the author's GitHub picture; `static/favicon-32.png` and `static/apple-touch-icon.png` are made from it (with ImageMagick: `magick avatar -resize 32x32 favicon-32.png`, and 180x180 for the touch icon), so replace all three together.
 
 The look is set by custom properties in `sass/_theme.scss`: the paper, ink and rule colours for light and dark, the callout colours, and the three type families. A walkthrough only brings its `accent` and `spark`. The text column is limited to about 70 characters (`--measure`); code, figures and tables may use the full column.
 

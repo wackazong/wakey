@@ -7,9 +7,15 @@
 <main id="content" class="landing">
   <section class="hero hero--site">
     <div class="hero__inner">
-      <p class="eyebrow">Read the code with a guide</p>
+      <p class="eyebrow">{{ config.extra | get(key="eyebrow", default="") }}</p>
       <h1 class="hero__title">{{ config.title }}</h1>
       <p class="hero__lede">{{ config.description }}</p>
+      {% set github = config.extra | get(key="github", default="") %}
+      {% if github %}
+      <p class="hero__actions">
+        <a class="button button--ghost" href="{{ github }}">{{ <github_mark /> | safe }}<span>{{ github | replace(from="https://", to="") }}</span></a>
+      </p>
+      {% endif %}
     </div>
   </section>
 
