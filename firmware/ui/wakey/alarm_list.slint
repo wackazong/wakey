@@ -77,6 +77,9 @@ export global AlarmList {
     // The list layer is showing the list (scrolling, or a row being
     // swiped): no touch feedback here.
     in property <bool> layer-active;
+    // A switch or delete that could not be saved (empty: none), shown in
+    // the header until the next change or the page is opened again.
+    in property <string> error;
     callback back();
     callback add();
     callback open(int);
@@ -196,6 +199,18 @@ export component AlarmListPage inherits Rectangle {
         text: Lang.labels.new-alarm;
         on-press: true;
         clicked => { AlarmList.add(); }
+    }
+    if AlarmList.error != "": Text {
+        x: 288px;
+        y: 20px;
+        width: parent.width - 2 * 288px;
+        height: 88px;
+        text: AlarmList.error;
+        font-size: 30px;
+        color: Theme.error;
+        overflow: elide;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 
     if AlarmList.rows.length == 0: Text {

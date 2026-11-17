@@ -78,9 +78,34 @@ fn to_landscape(px: u16, py: u16) -> (f32, f32) {
     (x, y)
 }
 
+/// Moves dropped because [`EVENTS`] was full, for the log.
+static DROPPED: AtomicU32 = AtomicU32::new(0);
+
+/// Puts `event` into [`EVENTS`]. The queue fills only when the render loop
+/// has not drained it for about 320 ms (a long frame during a drag). A move
+/// can then go: the next one says where the finger is. A press or a
+/// release cannot: without it the UI would think the finger is still up,
+/// or still down until the next touch. They wait for room.
+fn queue(event: TouchEvent) {
+    if EVENTS.try_send(event).is_ok() {
+        return;
+    }
+    if event.phase == Phase::Move {
+        let dropped = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+        if dropped.is_power_of_two() {
+            log::warn!("touch: queue full, {dropped} moves dropped so far");
+        }
+        return;
+    }
+    log::warn!("touch: queue full, waiting to deliver {:?}", event.phase);
+    while EVENTS.try_send(event).is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 fn release(down: &mut bool, last: (f32, f32)) {
     if *down {
-        let _ = EVENTS.try_send(TouchEvent {
+        queue(TouchEvent {
             phase: Phase::Up,
             x: last.0,
             y: last.1,
@@ -108,15 +133,14 @@ fn reset_controller(bus: &SharedI2c, ioexp: &IoExpanders) {
 
 /// Starts the touch thread: on core 1 above the audio decoder (5), which
 /// could otherwise hold it off while it decodes; a poll takes well under
-/// a millisecond.
+/// a millisecond. Without it the clock cannot be operated, so a failed
+/// start is fatal, like that of the other threads the clock needs.
 pub fn start(bus: SharedI2c, ioexp: IoExpanders) {
-    if let Err(e) = crate::runtime::Thread::new(c"touch", 6 * 1024)
+    crate::runtime::Thread::new(c"touch", 6 * 1024)
         .core(Core::Core1)
         .priority(6)
         .spawn(move || poll(bus, ioexp))
-    {
-        log::error!("touch: thread not started: {e}");
-    }
+        .expect("touch thread");
 }
 
 /// Polls the touch controller forever (shares the system I2C bus), and
@@ -143,7 +167,7 @@ fn poll(bus: SharedI2c, ioexp: IoExpanders) {
                 let (x, y) = to_landscape(px, py);
                 let phase = if down { Phase::Move } else { Phase::Down };
                 if phase == Phase::Down || (x, y) != last {
-                    let _ = EVENTS.try_send(TouchEvent {
+                    queue(TouchEvent {
                         phase,
                         x,
                         y,

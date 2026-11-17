@@ -8,7 +8,7 @@
 
 use super::alarm::AlarmClock;
 use super::screens::{AlarmList, AlarmListLayout, AlarmRow, AppWindow, Clock, Page, Theme};
-use super::{Ctx, alarm_page, show_page};
+use super::{Ctx, alarm_page, show_page, texts};
 use crate::ui::list_layer::{Layout, ListLayer, ListSource, SwipeEnd, SwipePart};
 use crate::ui::{platform, rgb565};
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
@@ -63,6 +63,7 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
         .global::<Clock>()
         .on_open_alarm(ctx.with(|window, ctx| {
             refresh(window, &ctx.alarm.borrow());
+            window.global::<AlarmList>().set_error("".into());
             window.global::<AlarmList>().set_scroll(0.0);
             show_page(window, ctx, Page::AlarmList);
         }));
@@ -78,18 +79,28 @@ pub fn start(window: &AppWindow, ctx: &Rc<Ctx>) {
     }));
     list.on_toggle(ctx.with_args(|window, ctx, id: i32, on: bool| {
         let result = ctx.alarm.borrow_mut().set_enabled(id as u32, on);
-        if let Err(e) = result {
-            log::error!("alarm list: saving: {e}");
-        }
+        show_result(window, result);
         refresh(window, &ctx.alarm.borrow());
     }));
     list.on_delete(ctx.with_arg(|window, ctx, id: i32| {
         let result = ctx.alarm.borrow_mut().delete(id as u32);
-        if let Err(e) = result {
-            log::error!("alarm list: saving: {e}");
-        }
+        show_result(window, result);
         refresh(window, &ctx.alarm.borrow());
     }));
+}
+
+/// Shows whether a switch or delete was saved: a failure in the header, as
+/// the alarm page does (otherwise the switch would just snap back, or the
+/// alarm reappear, without a word).
+fn show_result(window: &AppWindow, result: std::io::Result<()>) {
+    let error = match result {
+        Ok(()) => "",
+        Err(e) => {
+            log::error!("alarm list: saving: {e}");
+            texts::get().alarm.save_failed.as_str()
+        }
+    };
+    window.global::<AlarmList>().set_error(error.into());
 }
 
 /// The list layer for the alarm list. Call after `AppWindow` was created

@@ -31,7 +31,10 @@ fn factor_32() -> Option<u32> {
 pub fn set(factor: u16) {
     let factor = factor.min(FULL);
     if FACTOR.swap(factor, Ordering::Relaxed) != factor {
-        EPOCH.fetch_add(1, Ordering::Relaxed);
+        // Release, paired with the acquire in `epoch`: a reader on the
+        // other core that sees the new epoch also sees the new factor, and
+        // does not stamp rows of the old brightness with it.
+        EPOCH.fetch_add(1, Ordering::Release);
         log::debug!("dim: {factor}/256");
     }
 }
@@ -43,7 +46,7 @@ pub fn factor() -> u16 {
 
 /// Counts the changes: drawn content from another epoch is stale.
 pub fn epoch() -> u32 {
-    EPOCH.load(Ordering::Relaxed)
+    EPOCH.load(Ordering::Acquire)
 }
 
 /// True once if the dimming changed since `seen` (updated).

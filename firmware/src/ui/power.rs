@@ -34,12 +34,15 @@ pub fn asleep() -> bool {
     ASLEEP.load(Ordering::Relaxed)
 }
 
-/// Asks the render loop to put the display to sleep (any thread).
+/// Asks the render loop to put the display to sleep. Called from the UI
+/// thread (the app's power timer, the render loop itself); the request is
+/// an atomic, so another thread could call it too.
 pub fn sleep() {
     REQUEST.store(Request::Sleep as u8, Ordering::Relaxed);
 }
 
-/// Asks the render loop to wake the display (any thread).
+/// Asks the render loop to wake the display (see [`sleep`] for the
+/// callers).
 pub fn wake() {
     REQUEST.store(Request::Wake as u8, Ordering::Relaxed);
 }

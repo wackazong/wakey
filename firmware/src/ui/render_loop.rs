@@ -83,45 +83,43 @@ fn dispatch(window: &MinimalSoftwareWindow, ev: &TouchEvent) {
 const SLOW_FRAME: Duration = Duration::from_millis(35);
 /// Pixel clock while the display sleeps: 33 Hz instead of 66 Hz.
 const SLEEP_PIXEL_CLOCK_MHZ: f32 = 40.0;
-/// The longest the loop sleeps: requests from other threads ([`power`])
-/// set a flag and do not wake it.
+/// The longest the loop sleeps. While the display is asleep it waits this
+/// long each time and then runs Slint's timers (the alarm tick, the power
+/// timer that wakes the display): nothing else would run them.
 const MAX_SLEEP: Duration = Duration::from_millis(100);
 
-/// Where the render loop is, for the stall report ([`stage`]).
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u32)]
-pub enum Stage {
-    Start,
-    Touch,
-    Timers,
-    BackBuffer,
-    Render,
-    Present,
-    Sleep,
+/// Declares [`Stage`] with its names and the list of all stages in one
+/// place, so a new stage cannot be missing from the list (and be reported
+/// as "start").
+macro_rules! stages {
+    ($($stage:ident => $name:literal),* $(,)?) => {
+        /// Where the render loop is, for the stall report ([`stage`]).
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        #[repr(u32)]
+        pub enum Stage {
+            $($stage),*
+        }
+
+        impl Stage {
+            const ALL: &[Self] = &[$(Self::$stage),*];
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$stage => $name),*
+                }
+            }
+        }
+    };
 }
 
-impl Stage {
-    const ALL: [Self; 7] = [
-        Self::Start,
-        Self::Touch,
-        Self::Timers,
-        Self::BackBuffer,
-        Self::Render,
-        Self::Present,
-        Self::Sleep,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Start => "start",
-            Self::Touch => "touch",
-            Self::Timers => "timers",
-            Self::BackBuffer => "back buffer",
-            Self::Render => "render",
-            Self::Present => "present",
-            Self::Sleep => "sleep",
-        }
-    }
+stages! {
+    Start => "start",
+    Touch => "touch",
+    Timers => "timers",
+    BackBuffer => "back buffer",
+    Render => "render",
+    Present => "present",
+    Sleep => "sleep",
 }
 
 static STAGE: AtomicU32 = AtomicU32::new(Stage::Start as u32);
@@ -136,7 +134,8 @@ fn enter(stage: Stage) {
 pub fn stage() -> Stage {
     let v = STAGE.load(Ordering::Relaxed);
     Stage::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|s| *s as u32 == v)
         .unwrap_or(Stage::Start)
 }
