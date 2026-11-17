@@ -1,5 +1,5 @@
 // Page basics and the chrome every page has: top bar, scroll progress,
-// footer, the hero blocks, buttons.
+// the hero blocks, buttons.
 
 *,
 *::before,
@@ -230,25 +230,9 @@ kbd {
   @include moon;
 }
 
-// ── Footer ───────────────────────────────────────────────────────────────
-
-.footer {
-  margin-top: 6rem;
-  padding: 2.5rem 1.5rem 3rem;
-  border-top: 1px solid var(--rule);
-  font-family: var(--display);
-  font-size: 0.875rem;
-  color: var(--ink-soft);
-  text-align: center;
-}
-
-.footer p {
-  margin: 0;
-}
-
-.footer__small {
-  margin-top: 0.35rem !important;
-  color: var(--ink-faint);
+// Room below the last thing on every page.
+body > main {
+  padding-bottom: 6rem;
 }
 
 // ── Shared pieces ────────────────────────────────────────────────────────

@@ -28,7 +28,6 @@
 {% block root_style %} style="--accent: {{ walk.extra | get(key='accent', default='#1f3a5f') }}; --spark: {{ walk.extra | get(key='spark', default='#f2a93b') }};"{% endblock root_style %}
 {% block body_class %}has-sidebar{% endblock body_class %}
 {% block crumb %}<a href="{{ walk.permalink | replace(from=base, to=root) }}">{{ walk.title }}</a>{% endblock crumb %}
-{% block footer %}{{ walk.title }}{% if commit %} · describes commit {{ commit | truncate(length=7, end="") }}{% endif %}{% endblock footer %}
 
 {% block menu_button %}
 <button class="topbar__menu" type="button" id="menu-toggle" aria-controls="sidebar" aria-expanded="false" aria-label="Chapters">

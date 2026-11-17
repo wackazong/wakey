@@ -20,7 +20,6 @@
 {% block description %}{{ section.description }}{% endblock description %}
 {% block root_style %} style="--accent: {{ section.extra | get(key='accent', default='#1f3a5f') }}; --spark: {{ section.extra | get(key='spark', default='#f2a93b') }};"{% endblock root_style %}
 {% block crumb %}{{ section.title }}{% endblock crumb %}
-{% block footer %}{{ section.title }}{% if commit %} · describes commit {{ commit | truncate(length=7, end="") }}{% endif %}{% endblock footer %}
 
 {% block body %}
 <main id="content" class="overview">
