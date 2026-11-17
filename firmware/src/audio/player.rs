@@ -2,23 +2,25 @@
 //! 48 kHz stereo i16 ([`Converter`] for other rates, mostly 44.1 kHz) and
 //! fills a one-second ring buffer in PSRAM; the speaker's stream (USB or
 //! built-in, one at a time, see `audio::output`) takes from the ring
-//! through [`Player::source`]. When the ring runs empty the stream
-//! plays silence and counts an underrun.
+//! through [`Player::source`]. When the ring runs empty the stream plays
+//! silence and counts an underrun.
 //!
 //! [`Player::ring`] is the alarm: a file in a loop, or the built-in
 //! [`Beeper`] tone if there is no file or it cannot be read, with a volume
-//! and a fade-in applied in [`Player::source`]. [`Player::preview`] is the sound page's preview:
-//! the same, but silent instead of the tone when the sound cannot be
-//! played; it also plays a [`Sound::Stream`] (a track still downloading).
+//! and a fade-in applied in [`Player::source`]. [`Player::preview`] is the
+//! sound page's preview: the same, but silent instead of the tone when the
+//! sound cannot be played; it also plays a [`Sound::Stream`] (a track still
+//! downloading).
 
 use super::{SAMPLE_RATE, Source};
 use crate::runtime::Thread;
 use esp_idf_svc::hal::cpu::Core;
 use std::collections::VecDeque;
-use std::io::{BufReader, Read, Seek};
-use std::path::PathBuf;
+use std::io::{self, BufReader, Read, Seek};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 use wakey_core::audio_file::AudioFile;
 use wakey_core::resample::Converter;
 use wakey_core::tone::{self, Beeper};
@@ -56,7 +58,7 @@ pub enum Sound {
 pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
-/// Counters for logs.
+/// Times the stream found the ring empty while a sound played, for logs.
 pub static UNDERRUNS: AtomicU32 = AtomicU32::new(0);
 
 pub struct Player {
@@ -116,7 +118,7 @@ impl Player {
         })
     }
 
-    pub fn is_playing(&self) -> bool {
+    fn is_playing(&self) -> bool {
         self.ring.playing.load(Ordering::Acquire)
     }
 
@@ -165,7 +167,7 @@ impl Player {
         if self.is_playing() {
             self.stop();
             while self.is_playing() {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
         ring.samples.lock().unwrap().clear();
@@ -178,7 +180,7 @@ impl Player {
         // On core 1, away from the UI (core 0): decoding and resampling can
         // take a good part of a core, and the decoder's priority (5) is
         // above the UI task's (1). 64 KiB of stack in PSRAM: symphonia's
-        // MP4 reader and AAC decoder overflowed 8 KiB (stack protection
+        // MP4 reader and AAC decoder overflow 8 KiB (stack protection
         // fault in `MediaSourceStream::refill_buffer`).
         Thread::new(c"decoder", 64 * 1024)
             .core(Core::Core1)
@@ -190,7 +192,7 @@ impl Player {
                 ring.armed.store(false, Ordering::Release);
                 while !ring.samples.lock().unwrap().is_empty() && !ring.stop.load(Ordering::Acquire)
                 {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    std::thread::sleep(Duration::from_millis(20));
                 }
                 ring.playing.store(false, Ordering::Release);
             })
@@ -216,7 +218,7 @@ fn play_sound(sound: Sound, ring: &Ring) -> Result<(), String> {
 }
 
 /// Decodes `path` into the ring, from the start again at its end.
-fn decode(path: &std::path::Path, ring: &Ring) -> std::io::Result<()> {
+fn decode(path: &Path, ring: &Ring) -> io::Result<()> {
     let file = AudioFile::open(path)?;
     decode_from(&path.display().to_string(), file, ring)
 }
@@ -226,7 +228,7 @@ fn decode_from<R: Read + Seek + Send + 'static>(
     name: &str,
     mut file: AudioFile<R>,
     ring: &Ring,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let f = file.format.clone();
     log::info!(
         "player: {}: {:?}, {} Hz, {} ch, {} bit, {:.1} s",
@@ -238,7 +240,7 @@ fn decode_from<R: Read + Seek + Send + 'static>(
         f.duration_s()
     );
     let mut resampler = if f.sample_rate != SAMPLE_RATE {
-        let c = Converter::new(f.sample_rate, SAMPLE_RATE).map_err(std::io::Error::other)?;
+        let c = Converter::new(f.sample_rate, SAMPLE_RATE).map_err(io::Error::other)?;
         log::info!(
             "player: converting {} Hz → {} Hz ({} frames per block)",
             f.sample_rate,
@@ -251,6 +253,8 @@ fn decode_from<R: Read + Seek + Send + 'static>(
     };
     let mut input = vec![0i16; CHUNK_FRAMES * 2];
     let mut converted = Vec::with_capacity(CHUNK_FRAMES * 2 * 2);
+    // Frames read since the file was opened or rewound.
+    let mut pass_frames = 0;
     loop {
         if ring.stop.load(Ordering::Acquire) {
             ring.samples.lock().unwrap().clear();
@@ -258,12 +262,19 @@ fn decode_from<R: Read + Seek + Send + 'static>(
         }
         let frames = file.read(&mut input)?;
         if frames == 0 {
-            if f.frames > 0 {
-                file.rewind()?;
-                continue;
+            if f.frames == 0 {
+                return Ok(());
             }
-            return Ok(());
+            // A file that announces frames and yields none would be
+            // rewound in a busy loop.
+            if pass_frames == 0 {
+                return Err(io::Error::other("no audio data"));
+            }
+            file.rewind()?;
+            pass_frames = 0;
+            continue;
         }
+        pass_frames += frames;
         let out: &[i16] = match resampler.as_mut() {
             Some(r) => {
                 converted.clear();
