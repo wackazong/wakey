@@ -13,7 +13,8 @@
  * zlib stream or literal bytes. Together they make one cpio archive (odc as Apple
  * senders write it, or newc), whose regular files are handed to the sink.
  *
- * Every byte comes from a remote device, so every length is bounded before it is used.
+ * Every byte comes from a remote device, so every length is bounded before it is used,
+ * and so is the transfer as a whole (AD_STREAM_MAX_BYTES).
  * Plain C, no platform calls: the same file builds into the firmware (the C6's ROM
  * inflater) and into the host test (miniz 1.14, the same tinfl).
  */
@@ -48,12 +49,19 @@ struct AdStreamSink {
   void *ctx;
 };
 
+/* The largest transfer accepted: no entry may announce more, and the decoded archive
+ * (the files, their headers and padding) may not be longer. The files are alarm sounds
+ * (a song as FLAC is about 30 MB), and at this link's speed (about 100 kB/s) 256 MiB
+ * already takes most of an hour. */
+#define AD_STREAM_MAX_BYTES (256u * 1024 * 1024)
+
 enum AdStreamError {
   AD_STREAM_OK = 0,
   AD_STREAM_E_RECORD,   /* a record header no sender writes (empty, or over 1 MiB)     */
   AD_STREAM_E_INFLATE,  /* a record's zlib stream is broken, short or followed by junk */
   AD_STREAM_E_ARCHIVE,  /* the cpio archive is malformed                               */
   AD_STREAM_E_SINK,     /* the sink refused data                                        */
+  AD_STREAM_E_SIZE,     /* an entry or the whole archive is over AD_STREAM_MAX_BYTES   */
 };
 
 struct AdStreamStats {

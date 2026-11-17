@@ -6,7 +6,7 @@
 cmake_minimum_required(VERSION 3.22)
 # The P4 installs the receiver again when this differs from the C6's copy:
 # bump it with every change, and name the image after it.
-set(PROJECT_VER "1.1.0")
+set(PROJECT_VER "1.1.1")
 set(MINIMAL_BUILD ON)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(wakey_airdrop_c6)

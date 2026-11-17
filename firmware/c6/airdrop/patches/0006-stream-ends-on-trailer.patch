@@ -36,7 +36,7 @@ index e854f08..e8c8fab 100644
    g_rx_active = true; g_rx_bytes = 0;
    g_rx_touch_ms = (uint32_t)(esp_timer_get_time() / 1000);
 @@ -1578,7 +1584,8 @@ static void rx_upload_stream(struct HttpRdr *r, bool chunked, int clen) {
-     why = ad_stream_error_name(AD_STREAM_E_SINK); status = "507 Insufficient Storage";
+     why = ad_stream_error_name(ad_stream_error(st)); status = "507 Insufficient Storage";
    } else if (ad_stream_error(st) != AD_STREAM_OK) {
      why = ad_stream_error_name(ad_stream_error(st)); status = "400 Bad Request";
 -  } else if (rc != RXS_END_RECORD && rc != RXS_LAST_CHUNK && rc != RXS_SILENCE) {

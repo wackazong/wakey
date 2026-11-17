@@ -95,6 +95,7 @@ static bool cpio_header(AdStream *s) {
                           parse_num(s->chdr + 59, 6, 8, &namesize) &&
                           parse_num(s->chdr + 65, 11, 8, &filesize);
   if (!ok || namesize == 0 || namesize > NAME_MAX_LEN + 1) return fail(s, AD_STREAM_E_ARCHIVE);
+  if (filesize > AD_STREAM_MAX_BYTES) return fail(s, AD_STREAM_E_SIZE);
   s->name_len = namesize;
   s->name_n = 0;
   s->file_size = filesize;
@@ -150,6 +151,7 @@ static bool cpio_name(AdStream *s) {
 /* Archive bytes, as they come out of the records. */
 static bool cpio_feed(AdStream *s, const uint8_t *p, size_t n) {
   s->stats.out_bytes += n;
+  if (s->stats.out_bytes > AD_STREAM_MAX_BYTES) return fail(s, AD_STREAM_E_SIZE);
   while (n > 0) {
     switch (s->cs) {
       case C_HEADER: {
@@ -206,9 +208,11 @@ static bool inflate_feed(AdStream *s, const uint8_t **pp, size_t *pn) {
   for (;;) {
     size_t in = min_u32(s->rec_left, *pn);
     size_t out = TINFL_LZ_DICT_SIZE - s->win_pos;
-    mz_uint32 flags = TINFL_FLAG_PARSE_ZLIB_HEADER;
-    if (s->rec_left > in) flags |= TINFL_FLAG_HAS_MORE_INPUT;
-    tinfl_status st = tinfl_decompress(&s->inf, *pp, &in, s->win, s->win + s->win_pos, &out, flags);
+    /* Always HAS_MORE_INPUT: without it tinfl reads zeros past the input's end and goes
+       on producing output; with it a stream longer than its record asks for input the
+       record does not have (NEEDS_MORE_INPUT below). */
+    tinfl_status st = tinfl_decompress(&s->inf, *pp, &in, s->win, s->win + s->win_pos, &out,
+                                       TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_HAS_MORE_INPUT);
     *pp += in, *pn -= in, s->rec_left -= (uint32_t)in;
     if (out > 0) {
       if (!cpio_feed(s, s->win + s->win_pos, out)) return false;
@@ -304,6 +308,7 @@ const char *ad_stream_error_name(enum AdStreamError e) {
     case AD_STREAM_E_INFLATE: return "record would not inflate";
     case AD_STREAM_E_ARCHIVE: return "bad cpio archive";
     case AD_STREAM_E_SINK: return "sink refused data";
+    case AD_STREAM_E_SIZE: return "transfer too large";
   }
   return "?";
 }

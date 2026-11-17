@@ -93,8 +93,8 @@ index 738649b..23edf00 100644
 +  const char *status = "200 OK";
 +  if (!st) {
 +    why = "out of memory"; status = "507 Insufficient Storage";
-+  } else if (ad_stream_error(st) == AD_STREAM_E_SINK) {
-+    why = ad_stream_error_name(AD_STREAM_E_SINK); status = "507 Insufficient Storage";
++  } else if (ad_stream_error(st) == AD_STREAM_E_SINK || ad_stream_error(st) == AD_STREAM_E_SIZE) {
++    why = ad_stream_error_name(ad_stream_error(st)); status = "507 Insufficient Storage";
 +  } else if (ad_stream_error(st) != AD_STREAM_OK) {
 +    why = ad_stream_error_name(ad_stream_error(st)); status = "400 Bad Request";
 +  } else if (rc != RXS_END_RECORD && rc != RXS_LAST_CHUNK && rc != RXS_SILENCE) {

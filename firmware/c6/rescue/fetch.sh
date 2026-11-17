@@ -6,9 +6,9 @@
 # into vendor/. Run once before the first build.
 set -eu
 cd "$(dirname "$0")"
+commit=ddf3cdd8fa87f3d26b42f1b8ad94bbbb67745f50
 rm -rf vendor/esp-serial-flasher
 mkdir -p vendor
 git clone --quiet https://github.com/espressif/esp-serial-flasher vendor/esp-serial-flasher
-git -C vendor/esp-serial-flasher -c advice.detachedHead=false checkout --quiet \
-	ddf3cdd8fa87f3d26b42f1b8ad94bbbb67745f50
-echo "esp-serial-flasher: ddf3cdd"
+git -C vendor/esp-serial-flasher -c advice.detachedHead=false checkout --quiet "$commit"
+echo "esp-serial-flasher: $commit"

@@ -5,7 +5,7 @@
 
 Two slots: esp_hosted with Wakey's addition at 0, the receiver at 2 MiB.
 Each slot: "WKC6", the image's length (u32 LE), the image (firmware/src/
-airdrop.rs reads them).
+c6/ota.rs reads them).
 
 Usage:
   pack.py <out.bin>   writes the partition's contents, only as long as needed
@@ -17,10 +17,10 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 PARTITIONS = HERE.parent / "partitions.csv"
-# Offsets in the partition: must match `C6Image` in firmware/src/airdrop.rs.
+# Offsets in the partition: must match `Image` in firmware/src/c6/ota.rs.
 SLOTS = [
     (0x000000, HERE / "esp_hosted_slave-2.13.1-wakey2-esp32c6.bin"),
-    (0x200000, HERE / "wakey_airdrop_c6-1.1.0.bin"),
+    (0x200000, HERE / "wakey_airdrop_c6-1.1.1.bin"),
 ]
 
 

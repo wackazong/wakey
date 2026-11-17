@@ -444,6 +444,134 @@ static void test_damage(void) {
   free(f[0].data.p);
 }
 
+/* A record whose bytes end before its zlib stream does fails at the record's end, with
+   no output beyond what its bytes hold. */
+static void test_truncated_record(void) {
+  struct file f[1];
+  struct buf body = one_file_body(400 * 1024, f);
+  uint32_t rec0 = (uint32_t)body.p[1] << 16 | (uint32_t)body.p[2] << 8 | body.p[3];
+  CHECK(body.p[0] == 0 && rec0 > 1000, "short record: want a deflated record");
+  const uint32_t keep[] = {2, 100, rec0 / 2, rec0 - 4, rec0 - 1};
+  const size_t pieces[] = {SIZE_MAX, 1, 512};
+  for (size_t i = 0; i < sizeof keep / sizeof keep[0]; i++) {
+    struct buf cut = {0};
+    put_be32(&cut, keep[i]);
+    buf_put(&cut, body.p + 4, keep[i]);
+    for (size_t j = 0; j < sizeof pieces / sizeof pieces[0]; j++) {
+      struct got g = {0};
+      bool ok;
+      AdStream *s = feed(&cut, pieces[j], &g, &ok);
+      CHECK(!ok && ad_stream_error(s) == AD_STREAM_E_INFLATE, "short record %u/%zu: %s", keep[i],
+            pieces[j], ad_stream_error_name(ad_stream_error(s)));
+      struct AdStreamStats st;
+      ad_stream_stats(s, &st);
+      CHECK(st.out_bytes <= GRAIN && st.records == 0, "short record %u/%zu: %llu B out", keep[i],
+            pieces[j], (unsigned long long)st.out_bytes);
+      CHECK(g.n == 0 || g.ended[g.n - 1] == -1, "short record %u/%zu: a file left open", keep[i],
+            pieces[j]);
+      ad_stream_free(s);
+      got_free(&g);
+    }
+    free(cut.p);
+  }
+  free(body.p);
+  free(f[0].data.p);
+}
+
+/* ---- the size limit ---------------------------------------------------------------- */
+
+/* A sink that only counts: these transfers are too large to keep. */
+struct counted {
+  int begun, complete, incomplete;
+  uint64_t bytes;
+};
+
+static bool count_begin(void *ctx, const char *name, uint32_t size) {
+  (void)name, (void)size;
+  ((struct counted *)ctx)->begun++;
+  return true;
+}
+
+static bool count_data(void *ctx, const uint8_t *data, size_t len) {
+  (void)data;
+  ((struct counted *)ctx)->bytes += len;
+  return true;
+}
+
+static void count_end(void *ctx, bool complete) {
+  struct counted *c = ctx;
+  if (complete) c->complete++;
+  else c->incomplete++;
+}
+
+/* An odc header for a regular file of `size` bytes, as a stored record. */
+static void put_entry(struct buf *body, const char *name, uint32_t size) {
+  struct buf h = {0};
+  size_t ns = strlen(name) + 1;
+  buf_printf(&h, "070707%06o%06o%06o%06o%06o%06o%06o%011o%06o%011o", 0, 1, MODE_FILE, 501, 20, 1,
+             0, 0, (unsigned)ns, (unsigned)size);
+  buf_put(&h, name, ns);
+  put_be32(body, 0x80000000u | (uint32_t)h.len);
+  buf_put(body, h.p, h.len);
+  free(h.p);
+}
+
+static void test_size_limit(void) {
+  struct counted c = {0};
+  struct AdStreamSink sink = {count_begin, count_data, count_end, &c};
+
+  /* An entry announcing more than the limit is refused before the sink hears of it;
+     one of exactly the limit is announced. */
+  for (uint32_t over = 0; over <= 1; over++) {
+    struct buf body = {0};
+    put_entry(&body, "./big.wav", AD_STREAM_MAX_BYTES + over);
+    c = (struct counted){0};
+    AdStream *s = ad_stream_new(&sink);
+    bool ok = ad_stream_feed(s, body.p, body.len);
+    CHECK(ok == !over && c.begun == (over ? 0 : 1), "entry +%u: ok %d, begun %d", over, ok,
+          c.begun);
+    CHECK(ad_stream_error(s) == (over ? AD_STREAM_E_SIZE : AD_STREAM_OK), "entry +%u: %s", over,
+          ad_stream_error_name(ad_stream_error(s)));
+    ad_stream_free(s);
+    free(body.p);
+  }
+
+  /* Two files of 130 MiB, each within the limit, together over it: the stream stops
+     inside the second. The file bytes are zeros, one deflated grain sent again and again
+     (about 150 bytes per 128 KiB). */
+  const uint32_t grains = 130u * 1024 * 1024 / GRAIN;
+  struct buf zeros = {0};
+  uint8_t *z = calloc(1, GRAIN);
+  buf_put(&zeros, z, GRAIN);
+  free(z);
+  struct buf one = dvzip(&zeros, ALWAYS_DEFLATE, false);
+  CHECK(one.len < 1000, "total: a grain of zeros deflates to %zu B", one.len);
+  struct buf body = {0};
+  for (int i = 0; i < 2; i++) {
+    put_entry(&body, i ? "./b.wav" : "./a.wav", grains * GRAIN);
+    for (uint32_t k = 0; k < grains; k++) buf_put(&body, one.p, one.len);
+  }
+  c = (struct counted){0};
+  AdStream *s = ad_stream_new(&sink);
+  bool ok = true;
+  for (size_t off = 0; ok && off < body.len; off += 4096)
+    ok = ad_stream_feed(s, body.p + off, body.len - off < 4096 ? body.len - off : 4096);
+  struct AdStreamStats st;
+  ad_stream_stats(s, &st);
+  CHECK(!ok && ad_stream_error(s) == AD_STREAM_E_SIZE, "total: %s",
+        ad_stream_error_name(ad_stream_error(s)));
+  CHECK(c.begun == 2 && c.complete == 1 && c.incomplete == 1, "total: %d begun, %d complete",
+        c.begun, c.complete);
+  CHECK(c.bytes <= AD_STREAM_MAX_BYTES && st.out_bytes <= AD_STREAM_MAX_BYTES + GRAIN,
+        "total: %llu B delivered, %llu B out", (unsigned long long)c.bytes,
+        (unsigned long long)st.out_bytes);
+  CHECK(st.in_bytes < body.len, "total: the whole body was read");
+  ad_stream_free(s);
+  free(body.p);
+  free(one.p);
+  free(zeros.p);
+}
+
 /* A song-sized transfer: memory stays bounded however large the file is. */
 static void test_large(void) {
   struct file f[1] = {{"./Lied.flac", "Lied.flac", MODE_FILE, random_bytes(12u << 20)}};
@@ -465,6 +593,8 @@ int main(void) {
   test_round_trips();
   test_refusals();
   test_damage();
+  test_truncated_record();
+  test_size_limit();
   test_large();
   if (g_failed) {
     fprintf(stderr, "stream_test: %d checks FAILED\n", g_failed);

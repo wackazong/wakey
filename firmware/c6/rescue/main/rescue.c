@@ -114,7 +114,7 @@ static int read_partitions(esp_loader_t *loader, struct Part *out, int max) {
   return n;
 }
 
-/* What an app slot holds: "network_adapter 2.13.1", "wakey_airdrop_c6 1.1.0", or empty. */
+/* What an app slot holds: "network_adapter 2.13.1", "wakey_airdrop_c6 1.1.1", or empty. */
 static void describe_app(esp_loader_t *loader, uint32_t offset, char *out, size_t cap) {
   uint8_t head[APP_DESC_OFFSET + 112];
   if (esp_loader_flash_read(loader, head, offset, sizeof head) != ESP_LOADER_SUCCESS) {
@@ -248,6 +248,6 @@ void app_main(void) {
   }
   esp_loader_reset_target(&loader);
   ESP_LOGI(TAG, "bridge removed, C6 reset: it boots esp_hosted. Flash the clock firmware "
-                "(cargo run --release --bin wakey); its log shows 'C6 firmware 2.13.1'.");
+                "(cargo run --release --bin wakey); its log shows 'c6: esp_hosted [2, 13, 1]'.");
   vTaskDelay(portMAX_DELAY);
 }

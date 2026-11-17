@@ -35,7 +35,7 @@ The slave project's registry dependencies (`hosted/dependencies.lock`: espressif
 
 The same esp_hosted 2.13.1 without Wakey's modification and addition (`hosted/build.sh --stock`), embedded by [`rescue/`](rescue/main/rescue.c). Contents and licenses as above, minus the two Wakey rows.
 
-### `wakey_airdrop_c6-1.1.0.bin`
+### `wakey_airdrop_c6-1.1.1.bin`
 
 The AirDrop receiver, built from [`airdrop/`](airdrop/README.md).
 

@@ -6,6 +6,7 @@
 # installed by the firmware's first build). ESP-IDF's export.sh fails there:
 # embuild installs only the tools the firmware needs, and export.sh wants all
 # of them. So the environment is set from what is installed.
+# shellcheck shell=bash
 
 _wk_env() {
 	_wk_self=
@@ -46,4 +47,5 @@ _wk_env
 _wk_rc=$?
 unset -f _wk_env
 unset _wk_self _wk_e _wk_py _wk_gcc _wk_cmake _wk_ninja
+# The last command's status is what `.` returns: non-zero if the set-up failed.
 [ "$_wk_rc" -eq 0 ] && unset _wk_rc
