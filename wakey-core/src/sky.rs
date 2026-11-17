@@ -61,7 +61,7 @@ pub fn sun_elevation(unix: i64, place: Location) -> f32 {
     }
     .to_unix() as f64
         / 86_400.0;
-    let day_of_year = days - year_start;
+    let day_of_year = (days - year_start).floor();
     let hours = days.rem_euclid(1.0) * 24.0;
     // Fractional year, radians.
     let g = 2.0 * PI / 365.0 * (day_of_year + (hours - 12.0) / 24.0);
