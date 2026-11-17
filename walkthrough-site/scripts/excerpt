@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Prints a code excerpt, ready to paste into a chapter.
+
+    scripts/excerpt WALKTHROUGH FILE FIRST-LAST [--hl "A-B C"] [--skip "A-B ..."]
+
+    scripts/excerpt wakey firmware/src/runtime.rs 143-157 --hl 147-153
+    scripts/excerpt wakey firmware/src/app/mod.rs 164-216 --skip "181-200"
+
+The lines come from the file as it is at the walkthrough's commit (`commit`
+in content/WALKTHROUGH/_index.md), never from the working tree. `--skip`
+leaves lines out; a `// ...` line takes their place. Excerpts are not
+written by hand: scripts/verify-excerpts checks every one.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from walkthrough import CONTENT, commit_of, ranges, repo_root, source_lines
+
+# The fence language, and how that language writes a comment.
+LANGUAGES = {
+    ".rs": ("rust", "// ..."),
+    ".slint": ("slint", "// ..."),
+    ".toml": ("toml", "# ..."),
+    ".c": ("c", "// ..."),
+    ".h": ("c", "// ..."),
+    ".json": ("json", "// ..."),
+    ".sh": ("bash", "# ..."),
+    ".py": ("python", "# ..."),
+    ".csv": ("txt", "# ..."),
+}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("walkthrough", help="folder below content/")
+    ap.add_argument("file", help="path from the repository root")
+    ap.add_argument("lines", help="FIRST-LAST")
+    ap.add_argument("--hl", default="", help='lines to highlight, e.g. "147-153 156"')
+    ap.add_argument("--skip", default="", help='lines to leave out, e.g. "150-160 170-175"')
+    args = ap.parse_args()
+
+    walkthrough = CONTENT / args.walkthrough
+    lines = source_lines(repo_root(walkthrough), commit_of(walkthrough), args.file)
+    (first, last), = ranges(args.lines)
+    if not 1 <= first <= last <= len(lines):
+        raise SystemExit(f"{args.file} has no lines {first}-{last}")
+    skips = sorted(ranges(args.skip))
+    lang, marker = LANGUAGES.get(Path(args.file).suffix, ("txt", "// ..."))
+
+    body = []
+    n = first
+    while n <= last:
+        skip = next((s for s in skips if s[0] == n), None)
+        if skip:
+            resume = skip[1] + 1
+            if resume > last:
+                raise SystemExit("--skip must end before the excerpt's last line")
+            # Indented like the line the excerpt goes on with.
+            after = lines[resume - 1]
+            indent = after[: len(after) - len(after.lstrip())]
+            body.append(f"{indent}{marker} @{resume}")
+            n = resume
+        else:
+            body.append(lines[n - 1])
+            n += 1
+
+    attrs = f'file="{args.file}" lines="{first}-{last}"'
+    if args.hl:
+        attrs += f' hl="{args.hl}"'
+    if lang != "rust":
+        attrs += f' lang="{lang}"'
+    print("{% <code " + attrs + "> %}{% raw %}")
+    print("\n".join(body))
+    print("{% endraw %}{% </code> %}")
+
+
+if __name__ == "__main__":
+    main()

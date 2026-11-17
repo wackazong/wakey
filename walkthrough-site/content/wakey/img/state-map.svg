@@ -1,0 +1,52 @@
+<svg viewBox="0 0 760 386" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A map of the firmware's state in three columns. In the services, shared by several threads and lost at a reboot: atomics in statics such as power::ASLEEP and dim::FACTOR, and mutexes behind handles such as Wifi::status and Tidal::inner. On the app thread, lost at a reboot: Ctx with the draft, and AlarmClock with the alarm list and the state machine. Outside the program, surviving a reboot: config.json on the memory card, which holds the settings and the alarm list, and one NVS entry in flash, which holds the machine's State. Below all of it, the Slint properties, a projection of the state above.">
+  <title>Where the state lives, and how long it lasts</title>
+  <defs>
+    <marker id="state-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+    <marker id="state-head-spark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-head--spark" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <text class="d-text" x="8" y="22">in the services</text>
+  <text class="d-text d-text--small" x="8" y="40">shared by several threads</text>
+  <text class="d-text d-text--small" x="8" y="56">lost at a reboot</text>
+  <text class="d-text" x="228" y="22">on the app thread</text>
+  <text class="d-text d-text--small" x="228" y="40">one thread, no locks</text>
+  <text class="d-text d-text--small" x="228" y="56">lost at a reboot</text>
+  <text class="d-text" x="548" y="22">outside the program</text>
+  <text class="d-text d-text--small" x="548" y="40">written on a change</text>
+  <text class="d-text d-text--small" x="548" y="56">survives a reboot</text>
+  <rect class="d-box--dashed" x="8" y="66" width="200" height="226" rx="6"/>
+  <rect class="d-box--soft" x="22" y="80" width="172" height="92" rx="4"/>
+  <text class="d-text d-text--small" x="36" y="102">atomics in statics</text>
+  <text class="d-text d-text--mono" x="36" y="126">power::ASLEEP</text>
+  <text class="d-text d-text--mono" x="36" y="150">dim::FACTOR</text>
+  <rect class="d-box--soft" x="22" y="186" width="172" height="92" rx="4"/>
+  <text class="d-text d-text--small" x="36" y="208">mutexes behind handles</text>
+  <text class="d-text d-text--mono" x="36" y="232">Wifi::status</text>
+  <text class="d-text d-text--mono" x="36" y="256">Tidal::inner</text>
+  <rect class="d-box--dashed" x="228" y="66" width="280" height="226" rx="6"/>
+  <rect class="d-box--soft" x="242" y="80" width="252" height="80" rx="4"/>
+  <text class="d-text d-text--mono" x="256" y="104">Ctx</text>
+  <text class="d-text d-text--small" x="256" y="124">draft: the alarm being edited</text>
+  <text class="d-text d-text--small" x="256" y="142">original, name</text>
+  <rect class="d-box--accent" x="242" y="174" width="252" height="104" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="256" y="197">AlarmClock</text>
+  <text class="d-text d-text--small d-text--on-accent" x="256" y="216">alarms, ring: the settings in use</text>
+  <text class="d-text d-text--small d-text--on-accent" x="256" y="234">machine: the alarm machine</text>
+  <text class="d-text d-text--small d-text--on-accent" x="256" y="252">its State: done days and Phase</text>
+  <text class="d-text d-text--small d-text--on-accent" x="256" y="270">saved, sounding</text>
+  <rect class="d-box--dashed" x="548" y="66" width="204" height="226" rx="6"/>
+  <rect class="d-box--spark" x="562" y="80" width="176" height="92" rx="4"/>
+  <text class="d-text d-text--small" x="576" y="102">memory card</text>
+  <text class="d-text d-text--mono" x="576" y="126">config.json</text>
+  <text class="d-text d-text--small" x="576" y="146">settings, list of alarms</text>
+  <rect class="d-box--spark" x="562" y="186" width="176" height="92" rx="4"/>
+  <text class="d-text d-text--small" x="576" y="208">flash: NVS</text>
+  <text class="d-text d-text--mono" x="576" y="232">wakey / alarms</text>
+  <text class="d-text d-text--small" x="576" y="252">State as JSON</text>
+  <path class="d-line d-line--spark" d="M496 208H528V126H560" marker-start="url(#state-head-spark)" marker-end="url(#state-head-spark)"/>
+  <path class="d-line d-line--spark" d="M496 252H560" marker-start="url(#state-head-spark)" marker-end="url(#state-head-spark)"/>
+  <rect class="d-box--soft" x="8" y="322" width="744" height="56" rx="4"/>
+  <text class="d-text" x="24" y="345">Slint properties</text>
+  <text class="d-text d-text--small" x="24" y="364">a projection: Rust code on the app thread copies the state above into them for the screen</text>
+  <path class="d-line" d="M108 292v28" marker-end="url(#state-head)"/>
+  <path class="d-line" d="M368 292v28" marker-end="url(#state-head)"/>
+</svg>

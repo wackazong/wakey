@@ -1,0 +1,65 @@
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A grid of the four layers (app, services, hardware, support) against the four ways to treat a failure (stop, pass it up, report a type, log and carry on), with one example per cell. Highlighted: stop in app, report a type in services, pass it up in hardware and support.">
+  <title>Error policy by layer</title>
+  <defs>
+    <marker id="errors-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <text class="d-text" x="104" y="22">1 Stop</text>
+  <text class="d-text" x="270" y="22">2 Pass it up</text>
+  <text class="d-text" x="436" y="22">3 Report a type</text>
+  <text class="d-text" x="602" y="22">4 Log, carry on</text>
+  <path class="d-line" d="M12 298V40" marker-end="url(#errors-head)"/>
+  <rect class="d-box--dashed" x="24" y="36" width="66" height="60" rx="4"/>
+  <text class="d-text d-text--small" x="32" y="70">app</text>
+  <rect class="d-box--dashed" x="24" y="104" width="66" height="60" rx="4"/>
+  <text class="d-text d-text--small" x="32" y="138">services</text>
+  <rect class="d-box--dashed" x="24" y="172" width="66" height="60" rx="4"/>
+  <text class="d-text d-text--small" x="32" y="206">hardware</text>
+  <rect class="d-box--dashed" x="24" y="240" width="66" height="60" rx="4"/>
+  <text class="d-text d-text--small" x="32" y="274">support</text>
+  <rect class="d-box--accent" x="96" y="36" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="104" y="61">expect("NVS")</text>
+  <text class="d-text d-text--small d-text--on-accent" x="104" y="81">during start-up</text>
+  <rect class="d-box--soft" x="262" y="36" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="270" y="61">save_alarms(..)?</text>
+  <text class="d-text d-text--small" x="270" y="81">AlarmClock::set_alarms</text>
+  <rect class="d-box--soft" x="428" y="36" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="436" y="61">tidal_problem(e)</text>
+  <text class="d-text d-text--small" x="436" y="81">a type becomes words</text>
+  <rect class="d-box--soft" x="594" y="36" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="602" y="61">log::error!(..)</text>
+  <text class="d-text d-text--small" x="602" y="81">alarm list: saving</text>
+  <rect class="d-box--soft" x="96" y="104" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="104" y="129">expect("2D-DMA")</text>
+  <text class="d-text d-text--small" x="104" y="149">ui::transition</text>
+  <rect class="d-box--soft" x="262" y="104" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="270" y="129">io::Result&lt;()&gt;</text>
+  <text class="d-text d-text--small" x="270" y="149">config::rewrite</text>
+  <rect class="d-box--accent" x="428" y="104" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="436" y="129">net::Unavailable</text>
+  <text class="d-text d-text--small d-text--on-accent" x="436" y="149">and tidal::Problem</text>
+  <rect class="d-box--soft" x="594" y="104" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="602" y="129">Self::default()</text>
+  <text class="d-text d-text--small" x="602" y="149">no built-in speaker</text>
+  <rect class="d-box--soft" x="96" y="172" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="104" y="197">panic!("RX8130 ..")</text>
+  <text class="d-text d-text--small" x="104" y="217">expanders, RTC, touch</text>
+  <rect class="d-box--accent" x="262" y="172" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="270" y="197">Result&lt;_, EspError&gt;</text>
+  <text class="d-text d-text--small d-text--on-accent" x="270" y="217">driver calls</text>
+  <rect class="d-box--dashed" x="428" y="172" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--small" x="436" y="206">none</text>
+  <rect class="d-box--soft" x="594" y="172" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="602" y="197">log::warn!(..)</text>
+  <text class="d-text d-text--small" x="602" y="217">no microSD: None</text>
+  <rect class="d-box--soft" x="96" y="240" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="104" y="265">expect("app task")</text>
+  <text class="d-text d-text--small" x="104" y="285">runtime::start</text>
+  <rect class="d-box--accent" x="262" y="240" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="270" y="265">io::Result&lt;..&gt;</text>
+  <text class="d-text d-text--small d-text--on-accent" x="270" y="285">Thread::spawn</text>
+  <rect class="d-box--dashed" x="428" y="240" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--small" x="436" y="274">none</text>
+  <rect class="d-box--soft" x="594" y="240" width="160" height="60" rx="4"/>
+  <text class="d-text d-text--mono" x="602" y="265">log::warn!(..)</text>
+  <text class="d-text d-text--small" x="602" y="285">thread config not set</text>
+</svg>

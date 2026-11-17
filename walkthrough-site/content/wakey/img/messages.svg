@@ -1,0 +1,58 @@
+<svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The message paths between threads. The touch thread sends touch events to the app thread through the EVENTS channel. The app thread sends Cmd values to the uac thread, Msg values to the speaker thread and Job closures to the wifi thread. The wifi thread sends full blocks to the card-writer thread and gets written blocks back. Two closures are handed over at start: Source to the uac and speaker threads, and on_time_synced to the wifi thread.">
+  <title>Every message path between the threads</title>
+  <defs>
+    <marker id="messages-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+    <marker id="messages-head-spark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-head--spark" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <rect class="d-box--spark" x="16" y="20" width="180" height="52" rx="4"/>
+  <text class="d-text" x="32" y="43">thread "touch"</text>
+  <text class="d-text d-text--small" x="32" y="61">polls every 10 ms</text>
+  <rect class="d-box--accent" x="16" y="150" width="180" height="116" rx="4"/>
+  <text class="d-text d-text--on-accent" x="32" y="176">thread "app"</text>
+  <text class="d-text d-text--small d-text--on-accent" x="32" y="196">the one async task:</text>
+  <text class="d-text d-text--small d-text--on-accent" x="32" y="213">render loop, pages,</text>
+  <text class="d-text d-text--small d-text--on-accent" x="32" y="230">alarms</text>
+  <rect class="d-box--soft" x="540" y="20" width="200" height="52" rx="4"/>
+  <text class="d-text" x="556" y="43">thread "uac"</text>
+  <text class="d-text d-text--small" x="556" y="61">the USB speaker</text>
+  <rect class="d-box--soft" x="540" y="120" width="200" height="52" rx="4"/>
+  <text class="d-text" x="556" y="143">thread "speaker"</text>
+  <text class="d-text d-text--small" x="556" y="161">the built-in speaker</text>
+  <rect class="d-box--soft" x="540" y="220" width="200" height="52" rx="4"/>
+  <text class="d-text" x="556" y="243">thread "wifi"</text>
+  <text class="d-text d-text--small" x="556" y="261">sessions and downloads</text>
+  <rect class="d-box--soft" x="540" y="350" width="200" height="52" rx="4"/>
+  <text class="d-text" x="556" y="373">thread "card-writer"</text>
+  <text class="d-text d-text--small" x="556" y="391">one per download</text>
+  <path class="d-line d-line--spark" d="M60 72v76" marker-end="url(#messages-head-spark)"/>
+  <text class="d-text d-text--mono" x="74" y="104">EVENTS</text>
+  <text class="d-text d-text--small" x="74" y="122">TouchEvent · 32 slots</text>
+  <path class="d-line" d="M196 160H226V38H538" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="300" y="30">Cmd</text>
+  <text class="d-text d-text--small" x="334" y="30">Stream, Power · no limit</text>
+  <path class="d-line d-line--dashed" d="M196 172H246V58H538" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="300" y="76">Source</text>
+  <text class="d-text d-text--small" x="356" y="76">called for samples</text>
+  <path class="d-line" d="M196 184H266V138H538" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="300" y="130">Msg</text>
+  <text class="d-text d-text--small" x="334" y="130">Click, Wake, Stream · 8 slots</text>
+  <path class="d-line d-line--dashed" d="M196 196H286V158H538" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="300" y="176">Source</text>
+  <text class="d-text d-text--small" x="356" y="176">called for samples</text>
+  <path class="d-line" d="M196 234H538" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="212" y="226">Job</text>
+  <text class="d-text d-text--small" x="246" y="226">a boxed closure · no limit</text>
+  <path class="d-line d-line--dashed" d="M196 256H538" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="212" y="276">on_time_synced</text>
+  <text class="d-text d-text--small" x="328" y="276">called after each clock sync</text>
+  <path class="d-line" d="M590 272v76" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="580" y="304" text-anchor="end">to_writer</text>
+  <text class="d-text d-text--small" x="580" y="322" text-anchor="end">full blocks · 16 slots</text>
+  <path class="d-line" d="M640 350v-76" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--mono" x="652" y="304">free</text>
+  <text class="d-text d-text--small" x="652" y="322">written blocks</text>
+  <path class="d-line" d="M16 364h44" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--small" x="72" y="368">a channel: values are sent, one after another</text>
+  <path class="d-line d-line--dashed" d="M16 392h44" marker-end="url(#messages-head)"/>
+  <text class="d-text d-text--small" x="72" y="396">a closure: handed over once, then called by its new owner</text>
+</svg>

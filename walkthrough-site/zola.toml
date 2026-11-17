@@ -1,0 +1,40 @@
+# Code walkthroughs: site configuration (Zola 0.23.x, see README.md).
+
+# A placeholder, never a real address. The templates turn every URL that
+# starts with it into a relative one, so the built site works under any
+# base URL without a rebuild (templates/partials/paths.html).
+base_url = "https://walkthrough.invalid"
+
+title = "Code walkthroughs"
+description = "Guided tours through real source code, for readers who know the language and want to see how a working application fits together."
+default_language = "en"
+
+compile_sass = true
+build_search_index = true
+generate_feeds = false
+# Both would carry the placeholder address.
+generate_sitemap = false
+generate_robots_txt = false
+
+[markdown]
+smart_punctuation = true
+insert_anchor_links = "right"
+
+[markdown.highlighting]
+light_theme = "github-light"
+dark_theme = "github-dark"
+# Classes, not inline colours: the theme switch swaps the stylesheet.
+style = "class"
+
+[search]
+index_format = "fuse_json"
+include_title = true
+include_content = true
+
+[link_checker]
+internal_level = "error"
+
+[extra]
+# Reading speed in words per minute, code included, unless a walkthrough
+# sets its own (`extra.wpm` in its _index.md).
+wpm = 155

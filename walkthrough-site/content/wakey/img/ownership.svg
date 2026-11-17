@@ -1,0 +1,58 @@
+<svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Peripherals::take is called once inside Board::init, which returns the struct Board with nine fields. display goes to the render loop on the app thread, backlight to the ambient thread, modem, c6_link and rtc to the wifi thread, codec to the speaker thread, sd stays in a local variable of the app task, and i2c and ioexp are cloned to several owners.">
+  <title>From Peripherals::take to the final owner of each handle</title>
+  <defs>
+    <marker id="ownership-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <rect class="d-box--soft" x="8" y="44" width="172" height="54" rx="4"/>
+  <text class="d-text d-text--mono" x="20" y="67">Peripherals::take()</text>
+  <text class="d-text d-text--small" x="20" y="86">works once per program</text>
+  <rect class="d-box--accent" x="8" y="140" width="172" height="54" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="20" y="163">Board::init()</text>
+  <text class="d-text d-text--small d-text--on-accent" x="20" y="182">seven steps, in order</text>
+  <path class="d-line" d="M94 98v40" marker-end="url(#ownership-head)"/>
+  <path class="d-line" d="M180 167h40" marker-end="url(#ownership-head)"/>
+  <rect class="d-box--dashed" x="222" y="8" width="226" height="314" rx="6"/>
+  <text class="d-text d-text--small" x="236" y="30">struct Board</text>
+  <rect class="d-box--soft" x="232" y="44" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="61">display: Display</text>
+  <rect class="d-box--soft" x="232" y="74" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="91">backlight: Backlight</text>
+  <rect class="d-box--soft" x="232" y="104" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="121">modem: Modem</text>
+  <rect class="d-box--soft" x="232" y="134" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="151">c6_link: C6Link</text>
+  <rect class="d-box--soft" x="232" y="164" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="181">rtc: Rx8130</text>
+  <rect class="d-box--soft" x="232" y="194" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="211">codec: CodecPins</text>
+  <rect class="d-box--soft" x="232" y="224" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="241">sd: Option&lt;SdCard&gt;</text>
+  <rect class="d-box--soft" x="232" y="254" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="271">i2c: SharedI2c</text>
+  <rect class="d-box--soft" x="232" y="284" width="206" height="24" rx="4"/>
+  <text class="d-text d-text--mono" x="244" y="301">ioexp: IoExpanders</text>
+  <rect class="d-box--spark" x="520" y="44" width="232" height="24" rx="4"/>
+  <text class="d-text" x="532" y="61">render loop, thread "app"</text>
+  <rect class="d-box--spark" x="520" y="74" width="232" height="24" rx="4"/>
+  <text class="d-text" x="532" y="91">thread "ambient"</text>
+  <rect class="d-box--spark" x="520" y="104" width="232" height="84" rx="4"/>
+  <text class="d-text" x="532" y="130">thread "wifi"</text>
+  <text class="d-text d-text--small" x="532" y="160">rtc travels inside the</text>
+  <text class="d-text d-text--small" x="532" y="176">time-sync closure</text>
+  <rect class="d-box--spark" x="520" y="194" width="232" height="24" rx="4"/>
+  <text class="d-text" x="532" y="211">thread "speaker"</text>
+  <rect class="d-box--spark" x="520" y="224" width="232" height="24" rx="4"/>
+  <text class="d-text" x="532" y="241">local _sd in the app task</text>
+  <rect class="d-box--dashed" x="520" y="254" width="232" height="54" rx="4"/>
+  <text class="d-text" x="532" y="277">cloned for several owners</text>
+  <text class="d-text d-text--small" x="532" y="296">shared hardware: chapter 7</text>
+  <path class="d-line" d="M438 56h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line" d="M438 86h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line" d="M438 116h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line" d="M438 146h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line" d="M438 176h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line" d="M438 206h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line" d="M438 236h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line d-line--dashed" d="M438 266h80" marker-end="url(#ownership-head)"/>
+  <path class="d-line d-line--dashed" d="M438 296h80" marker-end="url(#ownership-head)"/>
+</svg>

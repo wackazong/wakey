@@ -1,0 +1,165 @@
+// The running text of a chapter or an overview: what Markdown produces.
+// Text keeps to the measure (about 70 characters); code, figures and tables
+// may use the full column.
+
+.prose > * {
+  max-width: var(--measure);
+}
+
+.prose > p,
+.prose > ul,
+.prose > ol,
+.prose > blockquote {
+  margin: 0 0 1.15em;
+}
+
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-family: var(--display);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.prose h2 {
+  margin: 3.25rem 0 1rem;
+  padding-top: 1.1rem;
+  border-top: 2px solid var(--ink);
+  font-size: clamp(1.6rem, 3vw, 2.125rem);
+  font-weight: 800;
+}
+
+.prose h3 {
+  margin: 2.25rem 0 0.6rem;
+  font-size: 1.375rem;
+  font-weight: 700;
+}
+
+.prose h4 {
+  margin: 1.75rem 0 0.4rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose > h2:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.anchor {
+  margin-left: 0.4rem;
+  font-weight: 400;
+  color: var(--ink-faint);
+  text-decoration: none;
+  opacity: 0;
+}
+
+:is(h2, h3, h4):hover .anchor,
+.anchor:focus {
+  opacity: 1;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.4rem;
+}
+
+.prose li + li {
+  margin-top: 0.3em;
+}
+
+.prose li > ul,
+.prose li > ol {
+  margin: 0.3em 0 0;
+}
+
+.prose strong {
+  font-weight: 700;
+}
+
+.prose blockquote {
+  padding: 0.1rem 0 0.1rem 1.25rem;
+  border-left: 4px solid var(--rule);
+  color: var(--ink-soft);
+}
+
+.prose hr {
+  margin: 3rem 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+:not(pre) > code {
+  padding: 0.08em 0.32em;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 0.82em;
+  overflow-wrap: anywhere;
+}
+
+a > code {
+  color: inherit;
+}
+
+// Tables scroll sideways by themselves on a narrow screen.
+.prose table {
+  display: block;
+  max-width: 100%;
+  width: max-content;
+  margin: 0 0 1.5rem;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-family: var(--display);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.prose th,
+.prose td {
+  padding: 0.55rem 1rem 0.55rem 0;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose thead th {
+  border-bottom: 2px solid var(--ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.prose td code {
+  white-space: nowrap;
+}
+
+// Code in a heading is part of the heading.
+:is(h1, h2, h3, h4) > code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.9em;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+// Code in a title outside the text (chapter list, sidebar, pager) is set
+// like the title around it.
+:is(.chapters__title, .sidebar__link, .pager__title, .card__title) code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 0.92em;
+}

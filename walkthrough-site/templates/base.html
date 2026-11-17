@@ -1,0 +1,84 @@
+{#
+  The frame of every page: head, top bar, search dialog, scripts.
+
+  URLs: Zola writes absolute ones from `base_url`, a placeholder here. `root`
+  is the relative way back to the site root ("../../"), and every template
+  replaces `base` by it, so the built site works under any address.
+#}
+{%- set root = <root_path /> | trim -%}
+{%- set base = config.base_url ~ "/" -%}
+{%- set home = get_section(path="_index.md") -%}
+{#- What a child template works out once, for all of its blocks. -#}
+{%- block setup %}{% endblock setup -%}
+<!doctype html>
+<html lang="{{ lang }}"{% block root_style %}{% endblock root_style %}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }}{% endblock title %}</title>
+  <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}">
+  <meta name="color-scheme" content="light dark">
+  <link rel="preload" href="{{ root }}fonts/source-serif-4-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{{ root }}fonts/archivo-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{ root }}main.css">
+  {# Code colours: the sheet of the system's theme; theme.js switches
+     them when the reader chooses one. #}
+  <link rel="stylesheet" href="{{ root }}giallo-light.css" media="(prefers-color-scheme: light)" data-code-theme="light">
+  <link rel="stylesheet" href="{{ root }}giallo-dark.css" media="(prefers-color-scheme: dark)" data-code-theme="dark">
+  {# Before the first paint: the theme chosen earlier, if any. #}
+  <script src="{{ root }}js/theme.js"></script>
+</head>
+<body data-root="{{ root }}" data-base="{{ base }}" class="{% block body_class %}{% endblock body_class %}">
+  <a class="skip" href="#content">Skip to the text</a>
+  <div class="progress" aria-hidden="true"><div class="progress__bar" id="scroll-progress"></div></div>
+
+  <header class="topbar">
+    {% block menu_button %}{% endblock menu_button %}
+    <a class="topbar__brand" href="{{ root }}">
+      <svg class="topbar__mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h8v14H3zM13 5h8v6h-8zM13 13h8v6h-8z"/></svg>
+      <span>{{ config.title }}</span>
+    </a>
+    <span class="topbar__crumb">{% block crumb %}{% endblock crumb %}</span>
+    <button class="topbar__search" type="button" id="search-open" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
+      <span>Search</span>
+      <kbd>/</kbd>
+    </button>
+    <button class="topbar__theme" type="button" id="theme-toggle" aria-label="Switch between light and dark">
+      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+    </button>
+  </header>
+
+  {% block body %}{% endblock body %}
+
+  <footer class="footer">
+    <p>{% block footer %}{{ config.title }}{% endblock footer %}</p>
+    <p class="footer__small">Built with Zola. Fonts and scripts are served from this site; nothing is loaded from elsewhere.</p>
+  </footer>
+
+  <dialog class="search" id="search" aria-label="Search">
+    <form method="dialog" class="search__form">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
+      <input id="search-input" type="search" placeholder="Search all walkthroughs" autocomplete="off" spellcheck="false" aria-controls="search-results">
+      <button class="search__close" type="submit" aria-label="Close search">Esc</button>
+    </form>
+    <ol class="search__results" id="search-results" role="listbox"></ol>
+    <p class="search__hint" id="search-hint">Type to search. <kbd>↑</kbd> <kbd>↓</kbd> to choose, <kbd>Enter</kbd> to open.</p>
+  </dialog>
+
+  {# What the search needs to name a result: every walkthrough and its
+     chapters, by path. #}
+  <script type="application/json" id="site-map">[
+    {%- for path in home.subsections -%}
+    {%- set w = get_section(path=path) -%}
+    {"path": "{{ w.path }}", "title": {{ w.title | json_encode | safe }}, "chapters": [
+      {%- for p in w.pages -%}
+      {"path": "{{ p.path }}", "title": {{ p.title | json_encode | safe }}, "n": {{ loop.index }}}{% if not loop.last %},{% endif %}
+      {%- endfor -%}
+    ]}{% if not loop.last %},{% endif %}
+    {%- endfor -%}
+  ]</script>
+  <script src="{{ root }}js/site.js" defer></script>
+</body>
+</html>

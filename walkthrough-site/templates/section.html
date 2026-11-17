@@ -1,0 +1,69 @@
+{#
+  A walkthrough's overview: summary, prerequisites (the section's Markdown),
+  the chapter list and the total reading time.
+#}
+{% extends "base.html" %}
+{% block setup %}
+{%- set wpm = section.extra | get(key="wpm", default=config.extra.wpm) -%}
+{%- set sums = <totals pages={section.pages} wpm={wpm} /> | trim | split(pat="|") -%}
+{%- set total = sums | last | int -%}
+{%- set commit = section.extra | get(key="commit", default="") -%}
+{%- set repo = section.extra | get(key="repo", default="") -%}
+{#- The first chapter that is written. -#}
+{%- set first = false -%}
+{%- for p in section.pages | reverse -%}{%- if not p.extra | get(key="planned", default=false) -%}{%- set_global first = p -%}{%- endif -%}{%- endfor -%}
+{% endblock setup %}
+
+{% block title %}{{ section.title }} · {{ config.title }}{% endblock title %}
+{% block description %}{{ section.description }}{% endblock description %}
+{% block root_style %} style="--accent: {{ section.extra | get(key='accent', default='#1f3a5f') }}; --spark: {{ section.extra | get(key='spark', default='#f2a93b') }};"{% endblock root_style %}
+{% block crumb %}{{ section.title }}{% endblock crumb %}
+{% block footer %}{{ section.title }}{% if commit %} · describes commit {{ commit | truncate(length=7, end="") }}{% endif %}{% endblock footer %}
+
+{% block body %}
+<main id="content" class="overview">
+  <section class="hero">
+    <div class="hero__inner">
+      <p class="eyebrow">{{ section.extra | get(key="kicker", default="Walkthrough") }}</p>
+      <h1 class="hero__title">{{ section.title }}</h1>
+      <p class="hero__lede">{{ section.description }}</p>
+      <dl class="facts">
+        <div><dt>Chapters</dt><dd>{{ sums | first }}</dd></div>
+        <div><dt>Reading time</dt><dd>{{ <duration minutes={total} /> }}</dd></div>
+        {% if commit %}
+        <div><dt>Commit</dt><dd>{% if repo %}<a href="{{ repo }}/tree/{{ commit }}">{{ commit | truncate(length=7, end="") }}</a>{% else %}{{ commit | truncate(length=7, end="") }}{% endif %}</dd></div>
+        {% endif %}
+      </dl>
+      {% if first %}
+      <a class="button" href="{{ first.permalink | replace(from=base, to=root) }}">Start reading</a>
+      {% endif %}
+    </div>
+  </section>
+
+  <div class="overview__body">
+    <div class="prose">{{ section.content | safe | replace(from=base, to=root) }}</div>
+
+    <section class="chapters" aria-labelledby="chapters-title">
+      <h2 id="chapters-title">Chapters</h2>
+      <ol class="chapters__list">
+        {% for p in section.pages %}
+        {%- set planned = p.extra | get(key="planned", default=false) -%}
+        <li class="chapters__item{% if planned %} is-planned{% endif %}">
+          <span class="chapters__num">{% if loop.index < 10 %}0{% endif %}{{ loop.index }}</span>
+          <div class="chapters__text">
+            {% if planned %}
+            <span class="chapters__title">{{ p.title | markdown(inline=true) | safe }}</span>
+            {% else %}
+            <a class="chapters__title" href="{{ p.permalink | replace(from=base, to=root) }}">{{ p.title | markdown(inline=true) | safe }}</a>
+            {% endif %}
+            {% if p.description %}<p>{{ p.description | markdown(inline=true) | safe }}</p>{% endif %}
+          </div>
+          <span class="chapters__time">{% if planned %}to come{% else %}{{ <minutes words={p.word_count} wpm={wpm} /> }} min{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ol>
+      <p class="chapters__total">Total: {{ <duration minutes={total} /> }} at {{ wpm }} words a minute, code included.</p>
+    </section>
+  </div>
+</main>
+{% endblock body %}

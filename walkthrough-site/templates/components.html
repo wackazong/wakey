@@ -1,0 +1,194 @@
+{#
+  Components for content files (Zola 0.23 / Tera 2; they take the place of
+  shortcodes). Use from Markdown:
+
+    {% <tip title="…"> %} … {% </tip> %}
+    {{ <figure src="img/x.png" alt="…" caption="…" /> }}
+
+  README.md documents each one. Components see only their arguments, plus
+  the implicit ones marked with @ (the page that calls them).
+#}
+
+{# ── Paths ─────────────────────────────────────────────────────────────── #}
+
+{# "../" once per level of the current page: the way back to the site root. #}
+{% component root_path(@current_path: string = "/") %}
+{%- set up = "" -%}
+{%- if current_path != "/" -%}
+{%- for s in current_path | trim(pat="/") | split(pat="/") -%}{%- set_global up = up ~ "../" -%}{%- endfor -%}
+{%- endif -%}
+{%- if up == "" -%}./{%- else -%}{{ up }}{%- endif -%}
+{% endcomponent root_path %}
+
+{# ── Callouts ──────────────────────────────────────────────────────────── #}
+
+{% component callout(kind: string, label: string, title: string = "", id: string = "", chapter: string = "") %}
+<aside class="callout callout--{{ kind }}"{% if id %} id="{{ id }}"{% endif %}>
+<p class="callout__label">{{ label }}</p>
+{% if title %}<p class="callout__title">{{ title | markdown(inline=true) | safe }}</p>{% endif %}
+
+{{ body }}
+
+{% if chapter %}<p class="callout__from"><a href="../{{ chapter }}/{% if id %}#{{ id }}{% endif %}">Where the code does this</a></p>{% endif %}
+</aside>
+{% endcomponent callout %}
+
+{# A concept the reader may not know (an embedded, Embassy or Slint idea). #}
+{% component concept(title: string = "", id: string = "", chapter: string = "") %}
+{% <callout kind="concept" label="Concept" title id chapter> %}{{ body }}{% </callout> %}
+{% endcomponent concept %}
+
+{# A Rust idiom, pattern or type-system technique the code demonstrates. #}
+{% component tip(title: string = "", id: string = "", chapter: string = "") %}
+{% <callout kind="tip" label="Rust tip" title id chapter> %}{{ body }}{% </callout> %}
+{% endcomponent tip %}
+
+{# Something that goes wrong easily. #}
+{% component pitfall(title: string = "", id: string = "", chapter: string = "") %}
+{% <callout kind="pitfall" label="Pitfall" title id chapter> %}{{ body }}{% </callout> %}
+{% endcomponent pitfall %}
+
+{# An `unsafe` block and what makes it sound. #}
+{% component unsafe(title: string = "", id: string = "", chapter: string = "") %}
+{% <callout kind="unsafe" label="Unsafe" title id chapter> %}{{ body }}{% </callout> %}
+{% endcomponent unsafe %}
+
+{# ── Figures ───────────────────────────────────────────────────────────── #}
+
+{# An image from the walkthrough's folder (`src` relative to it). #}
+{% component figure(src: string, alt: string, caption: string = "", width: string = "", @page) %}
+{%- set meta = get_image_metadata(path="@/" ~ page.components[0] ~ "/" ~ src, allow_missing=true) -%}
+<figure class="figure{% if width %} figure--{{ width }}{% endif %}">
+<img src="../{{ src }}" alt="{{ alt }}" loading="lazy"{% if meta %} width="{{ meta.width }}" height="{{ meta.height }}"{% endif %}>
+{% if caption %}<figcaption>{{ caption | markdown(inline=true) | safe }}</figcaption>{% endif %}
+</figure>
+{% endcomponent figure %}
+
+{# Several images side by side; the body holds `figure`s. #}
+{% component gallery(caption: string = "") %}
+<div class="gallery">
+
+{{ body }}
+
+{% if caption %}<p class="gallery__caption">{{ caption | markdown(inline=true) | safe }}</p>{% endif %}
+</div>
+{% endcomponent gallery %}
+
+{# A Mermaid diagram; the body is its source. Rendered in the browser. #}
+{% component diagram(caption: string = "", wide: bool = false) %}
+<figure class="diagram{% if wide %} diagram--wide{% endif %}">
+
+{# On its own, so that blank lines in the source do not end the block. #}
+<pre class="mermaid">{{ body | trim | escape_html | safe }}</pre>
+
+{% if caption %}<figcaption>{{ caption | markdown(inline=true) | safe }}</figcaption>{% endif %}
+</figure>
+{% endcomponent diagram %}
+
+{# A hand-written SVG from the walkthrough's folder, put into the page itself
+   so it takes the site's colours (classes in sass/_diagrams.scss). #}
+{% component svg(src: string, caption: string = "", wide: bool = false, @page) %}
+{%- set source = load_data(path="content/" ~ page.components[0] ~ "/" ~ src, format="plain") -%}
+<figure class="diagram diagram--svg{% if wide %} diagram--wide{% endif %}">
+{# Without blank lines: one would end the HTML block in Markdown. #}
+{% for line in source | split(pat="
+") %}{% if line | trim != "" %}{{ line | safe }}
+{% endif %}{% endfor %}
+{% if caption %}<figcaption>{{ caption | markdown(inline=true) | safe }}</figcaption>{% endif %}
+</figure>
+{% endcomponent svg %}
+
+{# ── Code excerpts ─────────────────────────────────────────────────────── #}
+
+{# One run of lines without a gap, numbered from `start`. `hl`: line ranges
+   in the file's own numbers; the part inside this run is highlighted. #}
+{% component code_run(lang: string, start: integer, text: array, hl: string) %}
+{%- set end = start + (text | length) - 1 -%}
+{%- set marks = "" -%}
+{%- if hl -%}
+{%- for r in hl | split(pat=" ") -%}
+{%- set ab = r | split(pat="-") -%}
+{%- set a = ab | first | int -%}
+{%- set b = ab | last | int -%}
+{%- if a < start -%}{%- set a = start -%}{%- endif -%}
+{%- if b > end -%}{%- set b = end -%}{%- endif -%}
+{%- if a <= b -%}{%- set_global marks = marks ~ " " ~ (a - start + 1) ~ "-" ~ (b - start + 1) -%}{%- endif -%}
+{%- endfor -%}
+{%- endif %}
+````{{ lang }},linenos,linenostart={{ start }}{% if marks | trim %},hl_lines={{ marks | trim }}{% endif %}
+{{ text | join(sep="
+") }}
+````
+{% endcomponent code_run %}
+
+{#
+  A verbatim excerpt of a source file at the walkthrough's commit.
+
+    file   path from the repository root
+    lines  "first-last" in that file
+    hl     lines the text discusses, e.g. "147-153 156"
+    lang   the fence language (default rust)
+
+  The page template turns the file name into a link to the repository at
+  the walkthrough's commit (`repo` and `commit` in its _index.md).
+
+  The body is the code. A line `// ... @N` stands for lines left out; the
+  excerpt goes on at line N. scripts/excerpt writes the whole call;
+  scripts/verify-excerpts checks it against the commit.
+#}
+{% component code(file: string, lines: string, hl: string = "", lang: string = "rust", @page) %}
+{%- set range = lines | split(pat="-") -%}
+{%- set first = range | first | int -%}
+{%- set last = range | last | int %}
+<figure class="code">
+<figcaption class="code__label"><span class="code__file"><a href="@source/{{ file }}#L{{ first }}-L{{ last }}">{{ file }}</a></span><span class="code__lines">{% if first == last %}line {{ first }}{% else %}lines {{ first }}–{{ last }}{% endif %}</span><button class="code__copy" type="button" hidden>Copy</button></figcaption>
+{% set start = first -%}
+{%- set run = [] -%}
+{%- for line in body | trim(pat="
+") | split(pat="
+") -%}
+{%- if line is containing(pat="... @") -%}
+{{ <code_run lang start={start} text={run} hl /> }}
+<div class="code__gap" aria-label="lines left out">{{ line | split(pat="@") | first | trim_end }}</div>
+{% set_global start = line | split(pat="@") | last | trim | int -%}
+{%- set_global run = [] -%}
+{%- else -%}
+{%- set_global run = [...run, line] -%}
+{%- endif -%}
+{%- endfor -%}
+{{ <code_run lang start={start} text={run} hl /> }}
+</figure>
+{% endcomponent code %}
+
+{# ── Reading time (used by the templates) ──────────────────────────────── #}
+
+{# Whole minutes for `words` at `wpm`, at least one. #}
+{% component minutes(words: integer, wpm: integer) %}
+{%- set m = (words / wpm) | round(method="ceil") | int -%}
+{%- if m < 1 -%}1{%- else -%}{{ m }}{%- endif -%}
+{% endcomponent minutes %}
+
+{# "12 min" or "3 h 05 min". #}
+{% component duration(minutes: integer) %}
+{%- if minutes < 60 -%}
+{{ minutes }} min
+{%- else -%}
+{%- set h = (minutes / 60) | round(method="floor") | int -%}
+{%- set m = minutes - h * 60 -%}
+{{ h }} h {% if m < 10 %}0{% endif %}{{ m }} min
+{%- endif -%}
+{% endcomponent duration %}
+
+{# What a walkthrough adds up to: "chapters|minutes" over its written
+   chapters (those not marked `planned`). #}
+{% component totals(pages: array, wpm: integer) %}
+{%- set count = 0 -%}
+{%- set total = 0 -%}
+{%- for p in pages -%}
+{%- if not p.extra | get(key="planned", default=false) -%}
+{%- set_global count = count + 1 -%}
+{%- set_global total = total + (<minutes words={p.word_count} wpm={wpm} /> | trim | int) -%}
+{%- endif -%}
+{%- endfor -%}
+{{ count }}|{{ total }}
+{% endcomponent totals %}

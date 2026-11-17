@@ -1,0 +1,59 @@
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="On the left, the .slint files are compiled by build.rs into generated Rust. In the middle, that Rust is the AppWindow type and its globals. On the right, AppWindow::new asks TabPlatform for a window, and TabPlatform takes the oldest one from the PENDING queue, which holds the main window and the offscreen row windows.">
+  <title>From .slint files to a window on the platform</title>
+  <defs>
+    <marker id="slint-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+    <marker id="slint-head-spark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-head--spark" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <text class="d-text d-text--small" x="8" y="20">at build time</text>
+  <rect class="d-box--soft" x="8" y="32" width="200" height="72" rx="4"/>
+  <text class="d-text" x="22" y="55">.slint files</text>
+  <text class="d-text d-text--mono" x="22" y="75">ui/wakey.slint</text>
+  <text class="d-text d-text--mono" x="22" y="93">ui/wakey/*.slint</text>
+  <rect class="d-box--soft" x="8" y="140" width="200" height="56" rx="4"/>
+  <text class="d-text d-text--mono" x="22" y="163">build.rs</text>
+  <text class="d-text d-text--small" x="22" y="182">runs the Slint compiler</text>
+  <rect class="d-box" x="8" y="232" width="200" height="72" rx="4"/>
+  <text class="d-text" x="22" y="255">generated Rust</text>
+  <text class="d-text d-text--mono" x="22" y="275">$OUT_DIR/wakey.rs</text>
+  <text class="d-text d-text--small" x="22" y="293">included by app/mod.rs</text>
+  <path class="d-line" d="M108 104v34" marker-end="url(#slint-head)"/>
+  <path class="d-line" d="M108 196v34" marker-end="url(#slint-head)"/>
+  <path class="d-line" d="M208 268h32" marker-end="url(#slint-head)"/>
+  <rect class="d-box--dashed" x="242" y="8" width="236" height="324" rx="6"/>
+  <text class="d-text d-text--small" x="256" y="28">mod screens: the generated types</text>
+  <rect class="d-box--accent" x="256" y="40" width="208" height="72" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="270" y="63">AppWindow</text>
+  <text class="d-text d-text--small d-text--on-accent" x="270" y="82">properties: page, error-text</text>
+  <text class="d-text d-text--small d-text--on-accent" x="270" y="99">set_page, get_page, show</text>
+  <rect class="d-box--soft" x="256" y="140" width="208" height="180" rx="4"/>
+  <text class="d-text" x="270" y="163">its globals</text>
+  <text class="d-text d-text--mono" x="270" y="185">Clock</text>
+  <text class="d-text d-text--mono" x="270" y="203">AlarmList</text>
+  <text class="d-text d-text--mono" x="270" y="221">AlarmEditor</text>
+  <text class="d-text d-text--mono" x="270" y="239">SoundPicker</text>
+  <text class="d-text d-text--mono" x="270" y="257">NameEditor</text>
+  <text class="d-text d-text--mono" x="270" y="275">Lang, Theme</text>
+  <text class="d-text d-text--small" x="270" y="299">reached with window.global</text>
+  <path class="d-line" d="M360 112v26" marker-end="url(#slint-head)"/>
+  <text class="d-text d-text--small" x="560" y="20">ui/platform.rs</text>
+  <rect class="d-box--spark" x="560" y="40" width="192" height="72" rx="4"/>
+  <text class="d-text d-text--mono" x="574" y="63">TabPlatform</text>
+  <text class="d-text d-text--small" x="574" y="82">create_window_adapter</text>
+  <text class="d-text d-text--small" x="574" y="99">duration_since_start</text>
+  <path class="d-line d-line--spark" d="M464 76h94" marker-end="url(#slint-head-spark)"/>
+  <text class="d-text d-text--small d-text--spark" x="490" y="66">new()</text>
+  <rect class="d-box" x="560" y="144" width="192" height="56" rx="4"/>
+  <text class="d-text d-text--mono" x="574" y="167">PENDING</text>
+  <text class="d-text d-text--small" x="574" y="186">queue of prepared windows</text>
+  <path class="d-line d-line--spark" d="M656 112v30" marker-end="url(#slint-head-spark)"/>
+  <text class="d-text d-text--small d-text--spark" x="666" y="132">pop_front</text>
+  <rect class="d-box--soft" x="560" y="224" width="192" height="46" rx="4"/>
+  <text class="d-text" x="574" y="244">main window</text>
+  <text class="d-text d-text--small" x="574" y="261">1280 × 720, the screen</text>
+  <rect class="d-box--soft" x="560" y="282" width="192" height="46" rx="4"/>
+  <text class="d-text" x="574" y="302">row windows</text>
+  <text class="d-text d-text--small" x="574" y="319">offscreen, one per list</text>
+  <path class="d-line" d="M560 247h-22v-75h20" marker-end="url(#slint-head)"/>
+  <path class="d-line" d="M560 305h-22v-58"/>
+  <text class="d-text d-text--small" x="536" y="214" text-anchor="end">push_back</text>
+</svg>

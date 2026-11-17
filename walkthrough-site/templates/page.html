@@ -1,0 +1,155 @@
+{#
+  A chapter. Around the Markdown the template adds what every chapter has:
+  the opener ("after this chapter", from `extra.goals`), the "where we are"
+  mini-map (`extra.map`: the parts of the walkthrough's map to highlight),
+  the takeaways (`extra.takeaways`), and the navigation.
+#}
+{% extends "base.html" %}
+
+{% block setup %}
+{%- set walk = get_section(path=page.ancestors | last) -%}
+{%- set wpm = walk.extra | get(key="wpm", default=config.extra.wpm) -%}
+{%- set commit = walk.extra | get(key="commit", default="") -%}
+{%- set repo = walk.extra | get(key="repo", default="") -%}
+{%- set sums = <totals pages={walk.pages} wpm={wpm} /> | trim | split(pat="|") -%}
+{%- set total = sums | last | int -%}
+{%- set number = 0 -%}
+{%- for p in walk.pages -%}{%- if p.path == page.path -%}{%- set_global number = loop.index -%}{%- endif -%}{%- endfor -%}
+{%- set count = walk.pages | length -%}
+{%- set mine = <minutes words={page.word_count} wpm={wpm} /> | trim | int -%}
+{%- set goals = page.extra | get(key="goals", default=[]) -%}
+{%- set takeaways = page.extra | get(key="takeaways", default=[]) -%}
+{%- set parts = page.extra | get(key="map", default=[]) -%}
+{%- set map_file = walk.extra | get(key="map", default="") -%}
+{% endblock setup %}
+
+{% block title %}{{ page.title | replace(from="`", to="") }} · {{ walk.title }}{% endblock title %}
+{% block description %}{{ page.description | default(value=walk.description) }}{% endblock description %}
+{% block root_style %} style="--accent: {{ walk.extra | get(key='accent', default='#1f3a5f') }}; --spark: {{ walk.extra | get(key='spark', default='#f2a93b') }};"{% endblock root_style %}
+{% block body_class %}has-sidebar{% endblock body_class %}
+{% block crumb %}<a href="{{ walk.permalink | replace(from=base, to=root) }}">{{ walk.title }}</a>{% endblock crumb %}
+{% block footer %}{{ walk.title }}{% if commit %} · describes commit {{ commit | truncate(length=7, end="") }}{% endif %}{% endblock footer %}
+
+{% block menu_button %}
+<button class="topbar__menu" type="button" id="menu-toggle" aria-controls="sidebar" aria-expanded="false" aria-label="Chapters">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+</button>
+{% endblock menu_button %}
+
+{% block body %}
+<div class="layout">
+  <nav class="sidebar" id="sidebar" aria-label="Chapters">
+    <a class="sidebar__title" href="{{ walk.permalink | replace(from=base, to=root) }}">{{ walk.title }}</a>
+    <div class="sidebar__progress">
+      <p>Chapter {{ number }} of {{ count }} · {{ <duration minutes={total} /> }} in all</p>
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="{{ count }}" aria-valuenow="{{ number }}" aria-label="Chapter {{ number }} of {{ count }}">
+        <div class="meter__fill" style="width: {{ (number * 100 / count) | round }}%"></div>
+      </div>
+    </div>
+    <ol class="sidebar__list">
+      {% for p in walk.pages %}
+      {%- set planned = p.extra | get(key="planned", default=false) -%}
+      <li class="{% if p.path == page.path %}is-current{% endif %}{% if planned %} is-planned{% endif %}" data-chapter="{{ p.path }}">
+        {% if planned %}
+        <span class="sidebar__link"><span class="sidebar__num">{{ loop.index }}</span><span>{{ p.title | markdown(inline=true) | safe }}</span></span>
+        {% else %}
+        <a class="sidebar__link" href="{{ p.permalink | replace(from=base, to=root) }}"{% if p.path == page.path %} aria-current="page"{% endif %}>
+          <span class="sidebar__num">{{ loop.index }}</span>
+          <span>{{ p.title | markdown(inline=true) | safe }}</span>
+          <span class="sidebar__time">{{ <minutes words={p.word_count} wpm={wpm} /> }}′</span>
+        </a>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </nav>
+  <div class="scrim" id="scrim" hidden></div>
+
+  <main id="content" class="chapter" data-chapter="{{ page.path }}">
+    <header class="chapter__head">
+      <div class="chapter__num" aria-hidden="true">{% if number < 10 %}0{% endif %}{{ number }}</div>
+      <div class="chapter__heading">
+        <p class="eyebrow">Chapter {{ number }} of {{ count }} · {{ mine }} min read</p>
+        <h1>{{ page.title | markdown(inline=true) | safe }}</h1>
+        {% if page.description %}<p class="chapter__lede">{{ page.description | markdown(inline=true) | safe }}</p>{% endif %}
+      </div>
+    </header>
+
+    {% if goals %}
+    <section class="opener" aria-labelledby="opener-title">
+      <h2 id="opener-title">After this chapter you will understand</h2>
+      <ul>
+        {% for g in goals %}<li>{{ g | markdown(inline=true) | safe }}</li>{% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if map_file and parts %}
+    <section class="minimap" aria-labelledby="minimap-title">
+      <h2 id="minimap-title">Where we are</h2>
+      {# The walkthrough's map, with this chapter's parts lit. #}
+      <style>
+        {% for part in parts %}.minimap [data-part="{{ part }}"] .m-box { fill: var(--accent); stroke: var(--accent); }
+        .minimap [data-part="{{ part }}"] .m-label { fill: var(--on-accent); }
+        {% endfor %}
+      </style>
+      <div class="minimap__map">{{ load_data(path="content/" ~ page.components[0] ~ "/" ~ map_file, format="plain") | safe }}</div>
+      {% set note = page.extra | get(key="map_note", default="") %}
+      {% if note %}<p class="minimap__note">{{ note | markdown(inline=true) | safe }}</p>{% endif %}
+    </section>
+    {% endif %}
+
+    <article class="prose">
+      {#- File names of excerpts become links to the repository at the commit
+          (`@source/` is what the `code` component writes). `safe` comes
+          first: after another filter it has no effect. -#}
+      {%- if repo and commit -%}{%- set source = repo ~ "/blob/" ~ commit ~ "/" -%}{%- else -%}{%- set source = "#source-" -%}{%- endif -%}
+      {{ page.content | safe | replace(from=base, to=root) | replace(from="@source/", to=source) }}
+    </article>
+
+    {% if takeaways %}
+    <section class="takeaways" aria-labelledby="takeaways-title">
+      <h2 id="takeaways-title">Key takeaways</h2>
+      <ol>
+        {% for t in takeaways %}<li>{{ t | markdown(inline=true) | safe }}</li>{% endfor %}
+      </ol>
+    </section>
+    {% endif %}
+
+    <nav class="pager" aria-label="Previous and next chapter">
+      {% if page.lower and not page.lower.extra | get(key="planned", default=false) %}
+      <a class="pager__link pager__link--prev" href="{{ page.lower.permalink | replace(from=base, to=root) }}">
+        <span class="pager__dir">Previous</span>
+        <span class="pager__title">{{ page.lower.title | markdown(inline=true) | safe }}</span>
+      </a>
+      {% else %}
+      <a class="pager__link pager__link--prev" href="{{ walk.permalink | replace(from=base, to=root) }}">
+        <span class="pager__dir">Overview</span>
+        <span class="pager__title">{{ walk.title }}</span>
+      </a>
+      {% endif %}
+      {% if page.higher and not page.higher.extra | get(key="planned", default=false) %}
+      <a class="pager__link pager__link--next" href="{{ page.higher.permalink | replace(from=base, to=root) }}">
+        <span class="pager__dir">Next</span>
+        <span class="pager__title">{{ page.higher.title | markdown(inline=true) | safe }}</span>
+      </a>
+      {% endif %}
+    </nav>
+  </main>
+
+  <aside class="toc" aria-labelledby="toc-title">
+    {% if page.toc %}
+    <p class="toc__title" id="toc-title">On this page</p>
+    <ol class="toc__list">
+      {% for h in page.toc %}
+      <li><a href="#{{ h.id }}">{{ h.title }}</a>
+        {% if h.children %}
+        <ol>{% for c in h.children %}<li><a href="#{{ c.id }}">{{ c.title }}</a></li>{% endfor %}</ol>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+  </aside>
+</div>
+{% endblock body %}

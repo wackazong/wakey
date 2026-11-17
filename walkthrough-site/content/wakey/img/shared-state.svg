@@ -1,0 +1,61 @@
+<svg viewBox="0 0 760 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Four shared values in the middle, in three groups. Atomics in statics: the render loop writes power::ASLEEP and the wifi and ambient threads read it; the ambient thread writes dim::FACTOR and EPOCH and the app thread reads them. A mutex behind a handle: the wifi thread writes Wifi::status and the clock screen reads it. A mutex with a condition variable: the decoder thread pushes samples into the ring, the speaker's source takes them out and notifies the decoder that there is room again.">
+  <title>Shared state: who writes and who reads</title>
+  <defs>
+    <marker id="shared-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+    <marker id="shared-head-spark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-head--spark" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <text class="d-text d-text--small" x="8" y="20">writes</text>
+  <text class="d-text d-text--small" x="572" y="20">reads</text>
+  <rect class="d-box--dashed" x="236" y="30" width="288" height="158" rx="6"/>
+  <text class="d-text d-text--small" x="250" y="50">atomics in statics</text>
+  <rect class="d-box--accent" x="250" y="60" width="260" height="52" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="264" y="82">power::ASLEEP</text>
+  <text class="d-text d-text--small d-text--on-accent" x="264" y="100">AtomicBool</text>
+  <rect class="d-box--accent" x="250" y="124" width="260" height="52" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="264" y="146">dim::FACTOR, dim::EPOCH</text>
+  <text class="d-text d-text--small d-text--on-accent" x="264" y="164">AtomicU16, AtomicU32</text>
+  <rect class="d-box--dashed" x="236" y="200" width="288" height="94" rx="6"/>
+  <text class="d-text d-text--small" x="250" y="220">a mutex behind a handle</text>
+  <rect class="d-box--accent" x="250" y="230" width="260" height="52" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="264" y="252">Wifi::status</text>
+  <text class="d-text d-text--small d-text--on-accent" x="264" y="270">Arc&lt;Mutex&lt;Status&gt;&gt;</text>
+  <rect class="d-box--dashed" x="236" y="306" width="288" height="94" rx="6"/>
+  <text class="d-text d-text--small" x="250" y="326">a mutex with a condition variable</text>
+  <rect class="d-box--accent" x="250" y="336" width="260" height="52" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="264" y="358">Ring::samples, Ring::space</text>
+  <text class="d-text d-text--small d-text--on-accent" x="264" y="376">Mutex&lt;VecDeque&lt;i16&gt;&gt;, Condvar</text>
+  <rect class="d-box--soft" x="8" y="60" width="180" height="52" rx="4"/>
+  <text class="d-text" x="22" y="82">render loop</text>
+  <text class="d-text d-text--small" x="22" y="100">thread "app"</text>
+  <rect class="d-box--soft" x="8" y="124" width="180" height="52" rx="4"/>
+  <text class="d-text" x="22" y="146">light meter</text>
+  <text class="d-text d-text--small" x="22" y="164">thread "ambient"</text>
+  <rect class="d-box--soft" x="8" y="230" width="180" height="52" rx="4"/>
+  <text class="d-text" x="22" y="252">Wi-Fi sessions</text>
+  <text class="d-text d-text--small" x="22" y="270">thread "wifi"</text>
+  <rect class="d-box--soft" x="8" y="336" width="180" height="52" rx="4"/>
+  <text class="d-text" x="22" y="358">push, waits for room</text>
+  <text class="d-text d-text--small" x="22" y="376">thread "decoder"</text>
+  <rect class="d-box--soft" x="572" y="60" width="180" height="52" rx="4"/>
+  <text class="d-text" x="586" y="82">Wi-Fi, light meter</text>
+  <text class="d-text d-text--small" x="586" y="100">"wifi", "ambient"</text>
+  <rect class="d-box--soft" x="572" y="124" width="180" height="52" rx="4"/>
+  <text class="d-text" x="586" y="146">drawing, repainting</text>
+  <text class="d-text d-text--small" x="586" y="164">thread "app"</text>
+  <rect class="d-box--soft" x="572" y="230" width="180" height="52" rx="4"/>
+  <text class="d-text" x="586" y="252">clock screen</text>
+  <text class="d-text d-text--small" x="586" y="270">thread "app"</text>
+  <rect class="d-box--soft" x="572" y="336" width="180" height="52" rx="4"/>
+  <text class="d-text" x="586" y="358">source, takes samples</text>
+  <text class="d-text d-text--small" x="586" y="376">the speaker's thread</text>
+  <path class="d-line" d="M188 86h60" marker-end="url(#shared-head)"/>
+  <path class="d-line" d="M188 150h60" marker-end="url(#shared-head)"/>
+  <path class="d-line" d="M188 256h60" marker-end="url(#shared-head)"/>
+  <path class="d-line" d="M188 362h60" marker-end="url(#shared-head)"/>
+  <path class="d-line" d="M510 86h60" marker-end="url(#shared-head)"/>
+  <path class="d-line" d="M510 150h60" marker-end="url(#shared-head)"/>
+  <path class="d-line" d="M510 256h60" marker-end="url(#shared-head)"/>
+  <path class="d-line" d="M510 362h60" marker-end="url(#shared-head)"/>
+  <path class="d-line d-line--spark" d="M662 388v20H98v-18" marker-end="url(#shared-head-spark)"/>
+  <text class="d-text d-text--small d-text--spark" x="250" y="421">space.notify_one(): there is room again</text>
+</svg>

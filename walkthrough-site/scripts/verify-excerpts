@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Checks every code excerpt of every walkthrough against the source at the
+walkthrough's commit.
+
+    scripts/verify-excerpts [--max-lines N]
+
+An excerpt is right if each of its runs (the parts between `// ... @N`
+lines) is, character for character, the lines of the file at that commit,
+starting at the run's first line number, and the last run ends at the
+excerpt's stated last line. Highlighted lines must be shown lines. Exit
+status 1 if any excerpt is wrong.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from walkthrough import SITE, commit_of, excerpts, ranges, repo_root, source_lines, walkthroughs
+
+
+def check(ex, lines: list[str], max_lines: int) -> list[str]:
+    problems = []
+    shown = set()
+    n = ex.first
+    for start, run in ex.runs():
+        if start < n:
+            problems.append(f"a run starts at line {start}, before line {n}")
+        if not run:
+            problems.append(f"an empty run at line {start}")
+        for offset, text in enumerate(run):
+            number = start + offset
+            actual = lines[number - 1] if 0 < number <= len(lines) else None
+            if text != actual:
+                problems.append(f"line {number} differs:\n      excerpt: {text!r}\n      source:  {actual!r}")
+                break
+            shown.add(number)
+        n = start + len(run)
+    if not problems and n - 1 != ex.last:
+        problems.append(f"ends at line {n - 1}, but `lines` says {ex.last}")
+    for a, b in ranges(ex.hl):
+        missing = [x for x in range(a, b + 1) if x not in shown]
+        if missing:
+            problems.append(f"highlighted line {missing[0]} is not shown")
+    if len(shown) > max_lines:
+        problems.append(f"{len(shown)} lines shown, more than {max_lines}")
+    return problems
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--max-lines", type=int, default=32, help="most lines an excerpt may show (default 32)")
+    args = ap.parse_args()
+
+    total = wrong = 0
+    for walkthrough in walkthroughs():
+        pages = sorted(p for p in walkthrough.rglob("*.md"))
+        found = [ex for page in pages for ex in excerpts(page)]
+        if not found:
+            continue
+        repo, commit = repo_root(walkthrough), commit_of(walkthrough)
+        cache: dict[str, list[str]] = {}
+        for ex in found:
+            total += 1
+            where = f"{ex.path.relative_to(SITE)}:{ex.line}"
+            try:
+                if ex.file not in cache:
+                    cache[ex.file] = source_lines(repo, commit, ex.file)
+                problems = check(ex, cache[ex.file], args.max_lines)
+            except FileNotFoundError as e:
+                problems = [str(e)]
+            if problems:
+                wrong += 1
+                print(f"WRONG {where}  {ex.file} {ex.first}-{ex.last}")
+                for p in problems:
+                    print(f"    {p}")
+        print(f"{walkthrough.name}: {len(found)} excerpts checked against {commit[:7]}")
+    if wrong:
+        print(f"{wrong} of {total} excerpts do not match")
+        sys.exit(1)
+    print(f"all {total} excerpts match the source")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,62 @@
+<svg viewBox="0 0 760 372" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The one I2C driver sits behind an Arc and a Mutex. Six holders each keep a clone of the Arc: the IoExpanders handle, the Rx8130 clock handle, the threads touch, speaker and ambient, and the app task. Each locks the bus to talk to its chip: expanders at 0x43 and 0x44, clock at 0x32, touch at 0x55, codec at 0x10, camera at 0x36, battery meter at 0x41.">
+  <title>Who holds a clone of the I2C bus, and which chip each one talks to</title>
+  <defs>
+    <marker id="i2c-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <text class="d-text d-text--small" x="8" y="20">holds a clone of the Arc</text>
+  <text class="d-text d-text--small" x="300" y="20">one driver, one lock</text>
+  <text class="d-text d-text--small" x="536" y="20">chip and its address</text>
+  <rect class="d-box--accent" x="300" y="32" width="194" height="332" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="314" y="180">Arc&lt;Mutex&lt;SysI2c&gt;&gt;</text>
+  <text class="d-text d-text--small d-text--on-accent" x="314" y="202">the only I2cDriver</text>
+  <text class="d-text d-text--small d-text--on-accent" x="314" y="220">GPIO31 SDA, GPIO32 SCL</text>
+  <text class="d-text d-text--small d-text--on-accent" x="314" y="238">400 kHz</text>
+  <rect class="d-box--soft" x="8" y="32" width="250" height="52" rx="4"/>
+  <text class="d-text d-text--mono" x="22" y="54">IoExpanders</text>
+  <text class="d-text d-text--small" x="22" y="73">every clone, every Switch</text>
+  <rect class="d-box--soft" x="536" y="32" width="216" height="52" rx="4"/>
+  <text class="d-text" x="550" y="54">IO expanders</text>
+  <text class="d-text d-text--mono" x="550" y="73">0x43 and 0x44</text>
+  <path class="d-line" d="M258 58H298" marker-end="url(#i2c-head)"/>
+  <path class="d-line" d="M494 58H534" marker-end="url(#i2c-head)"/>
+  <rect class="d-box--soft" x="8" y="88" width="250" height="52" rx="4"/>
+  <text class="d-text d-text--mono" x="22" y="110">Rx8130</text>
+  <text class="d-text d-text--small" x="22" y="129">in the time-sync closure</text>
+  <rect class="d-box--soft" x="536" y="88" width="216" height="52" rx="4"/>
+  <text class="d-text" x="550" y="110">RTC RX8130</text>
+  <text class="d-text d-text--mono" x="550" y="129">0x32</text>
+  <path class="d-line" d="M258 114H298" marker-end="url(#i2c-head)"/>
+  <path class="d-line" d="M494 114H534" marker-end="url(#i2c-head)"/>
+  <rect class="d-box--soft" x="8" y="144" width="250" height="52" rx="4"/>
+  <text class="d-text d-text--mono" x="22" y="166">thread "touch"</text>
+  <text class="d-text d-text--small" x="22" y="185">reads the touch point</text>
+  <rect class="d-box--soft" x="536" y="144" width="216" height="52" rx="4"/>
+  <text class="d-text" x="550" y="166">touch ST7123</text>
+  <text class="d-text d-text--mono" x="550" y="185">0x55</text>
+  <path class="d-line" d="M258 170H298" marker-end="url(#i2c-head)"/>
+  <path class="d-line" d="M494 170H534" marker-end="url(#i2c-head)"/>
+  <rect class="d-box--soft" x="8" y="200" width="250" height="52" rx="4"/>
+  <text class="d-text d-text--mono" x="22" y="222">thread "speaker"</text>
+  <text class="d-text d-text--small" x="22" y="241">sets up the codec</text>
+  <rect class="d-box--soft" x="536" y="200" width="216" height="52" rx="4"/>
+  <text class="d-text" x="550" y="222">codec ES8388</text>
+  <text class="d-text d-text--mono" x="550" y="241">0x10</text>
+  <path class="d-line" d="M258 226H298" marker-end="url(#i2c-head)"/>
+  <path class="d-line" d="M494 226H534" marker-end="url(#i2c-head)"/>
+  <rect class="d-box--soft" x="8" y="256" width="250" height="52" rx="4"/>
+  <text class="d-text d-text--mono" x="22" y="278">thread "ambient"</text>
+  <text class="d-text d-text--small" x="22" y="297">camera as a light meter</text>
+  <rect class="d-box--soft" x="536" y="256" width="216" height="52" rx="4"/>
+  <text class="d-text" x="550" y="278">camera SC202CS</text>
+  <text class="d-text d-text--mono" x="550" y="297">0x36</text>
+  <path class="d-line" d="M258 282H298" marker-end="url(#i2c-head)"/>
+  <path class="d-line" d="M494 282H534" marker-end="url(#i2c-head)"/>
+  <rect class="d-box--soft" x="8" y="312" width="250" height="52" rx="4"/>
+  <text class="d-text d-text--mono" x="22" y="334">task app</text>
+  <text class="d-text d-text--small" x="22" y="353">battery check in a timer</text>
+  <rect class="d-box--soft" x="536" y="312" width="216" height="52" rx="4"/>
+  <text class="d-text" x="550" y="334">battery meter INA226</text>
+  <text class="d-text d-text--mono" x="550" y="353">0x41</text>
+  <path class="d-line" d="M258 338H298" marker-end="url(#i2c-head)"/>
+  <path class="d-line" d="M494 338H534" marker-end="url(#i2c-head)"/>
+</svg>

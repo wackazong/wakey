@@ -1,0 +1,68 @@
+<svg viewBox="0 0 760 372" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Block diagram of the M5Stack Tab5 as the firmware uses it. In the middle the ESP32-P4 with two cores, 32 MB PSRAM and 16 MB flash. Each of six parts has a connection of its own to it: the touch panel, the camera, the microSD card, the ESP32-C6 radio chip, the USB-A socket and the built-in speaker. Below, six chips share the system I2C bus: the IO expanders, the real-time clock, the touch controller, the battery current meter, the camera and the codec.">
+  <title>The hardware of the Tab5 as the firmware uses it</title>
+  <rect class="d-box--accent" x="270" y="20" width="220" height="230" rx="6"/>
+  <text class="d-text d-text--title d-text--on-accent" x="290" y="56">ESP32-P4</text>
+  <text class="d-text d-text--small d-text--on-accent" x="290" y="80">the main processor</text>
+  <text class="d-text d-text--on-accent" x="290" y="122">2 RISC-V cores, 360 MHz</text>
+  <text class="d-text d-text--on-accent" x="290" y="148">32 MB PSRAM</text>
+  <text class="d-text d-text--on-accent" x="290" y="174">16 MB flash</text>
+  <text class="d-text d-text--small d-text--on-accent" x="290" y="216">runs the Rust firmware,</text>
+  <text class="d-text d-text--small d-text--on-accent" x="290" y="233">has no radio of its own</text>
+  <rect class="d-box" x="8" y="20" width="200" height="56" rx="4"/>
+  <text class="d-text" x="22" y="43">Touch panel, 5 inch</text>
+  <text class="d-text d-text--small" x="22" y="62">720×1280 pixels</text>
+  <rect class="d-box" x="8" y="107" width="200" height="56" rx="4"/>
+  <text class="d-text" x="22" y="130">Camera</text>
+  <text class="d-text d-text--small" x="22" y="149">used as a light meter</text>
+  <rect class="d-box" x="8" y="194" width="200" height="56" rx="4"/>
+  <text class="d-text" x="22" y="217">microSD card</text>
+  <text class="d-text d-text--small" x="22" y="236">config.json, sound files</text>
+  <path class="d-line" d="M208 48H270"/>
+  <path class="d-line" d="M208 135H270"/>
+  <path class="d-line" d="M208 222H270"/>
+  <text class="d-text d-text--small" x="239" y="41" text-anchor="middle">DSI</text>
+  <text class="d-text d-text--small" x="239" y="128" text-anchor="middle">CSI</text>
+  <text class="d-text d-text--small" x="239" y="215" text-anchor="middle">SDMMC</text>
+  <rect class="d-box--spark" x="552" y="20" width="200" height="56" rx="4"/>
+  <text class="d-text" x="566" y="43">ESP32-C6</text>
+  <text class="d-text d-text--small" x="566" y="62">radio: Wi-Fi and AirDrop</text>
+  <rect class="d-box" x="552" y="107" width="200" height="56" rx="4"/>
+  <text class="d-text" x="566" y="130">USB-A socket</text>
+  <text class="d-text d-text--small" x="566" y="149">a USB speaker, if connected</text>
+  <rect class="d-box" x="552" y="194" width="200" height="56" rx="4"/>
+  <text class="d-text" x="566" y="217">Built-in speaker</text>
+  <text class="d-text d-text--small" x="566" y="236">ES8388 codec and amplifier</text>
+  <path class="d-line" d="M490 48H552"/>
+  <path class="d-line" d="M490 135H552"/>
+  <path class="d-line" d="M490 222H552"/>
+  <text class="d-text d-text--small" x="521" y="41" text-anchor="middle">SDIO</text>
+  <text class="d-text d-text--small" x="521" y="128" text-anchor="middle">USB</text>
+  <text class="d-text d-text--small" x="521" y="215" text-anchor="middle">I2S</text>
+  <path class="d-line" d="M380 250V290"/>
+  <path class="d-line" d="M65 290H695"/>
+  <text class="d-text d-text--small" x="394" y="278">the system I2C bus: two wires that these chips share</text>
+  <path class="d-line" d="M65 290v22"/>
+  <path class="d-line" d="M191 290v22"/>
+  <path class="d-line" d="M317 290v22"/>
+  <path class="d-line" d="M443 290v22"/>
+  <path class="d-line" d="M569 290v22"/>
+  <path class="d-line" d="M695 290v22"/>
+  <rect class="d-box--soft" x="8" y="312" width="114" height="52" rx="4"/>
+  <text class="d-text" x="18" y="334">IO expanders</text>
+  <text class="d-text d-text--small" x="18" y="352">power, resets</text>
+  <rect class="d-box--soft" x="134" y="312" width="114" height="52" rx="4"/>
+  <text class="d-text" x="144" y="334">RTC</text>
+  <text class="d-text d-text--small" x="144" y="352">keeps the time</text>
+  <rect class="d-box--soft" x="260" y="312" width="114" height="52" rx="4"/>
+  <text class="d-text" x="270" y="334">Touch</text>
+  <text class="d-text d-text--small" x="270" y="352">in the panel</text>
+  <rect class="d-box--soft" x="386" y="312" width="114" height="52" rx="4"/>
+  <text class="d-text" x="396" y="334">INA226</text>
+  <text class="d-text d-text--small" x="396" y="352">battery current</text>
+  <rect class="d-box--soft" x="512" y="312" width="114" height="52" rx="4"/>
+  <text class="d-text" x="522" y="334">Camera</text>
+  <text class="d-text d-text--small" x="522" y="352">sensor set-up</text>
+  <rect class="d-box--soft" x="638" y="312" width="114" height="52" rx="4"/>
+  <text class="d-text" x="648" y="334">Codec</text>
+  <text class="d-text d-text--small" x="648" y="352">set-up</text>
+</svg>

@@ -1,0 +1,48 @@
+{#
+  The landing page: every walkthrough (each folder below content/) as a card.
+#}
+{% extends "base.html" %}
+
+{% block body %}
+<main id="content" class="landing">
+  <section class="hero hero--site">
+    <div class="hero__inner">
+      <p class="eyebrow">Read the code with a guide</p>
+      <h1 class="hero__title">{{ config.title }}</h1>
+      <p class="hero__lede">{{ config.description }}</p>
+    </div>
+  </section>
+
+  {% if section.content %}
+  <div class="landing__intro prose">{{ section.content | safe | replace(from=base, to=root) }}</div>
+  {% endif %}
+
+  <ul class="cards">
+    {% for path in section.subsections %}
+    {%- set w = get_section(path=path) -%}
+    {%- set wpm = w.extra | get(key="wpm", default=config.extra.wpm) -%}
+    {%- set sums = <totals pages={w.pages} wpm={wpm} /> | trim | split(pat="|") -%}
+    {%- set total = sums | last | int -%}
+    <li class="card" style="--accent: {{ w.extra | get(key='accent', default='#1f3a5f') }}; --spark: {{ w.extra | get(key='spark', default='#f2a93b') }};">
+      <a class="card__link" href="{{ w.permalink | replace(from=base, to=root) }}">
+        <div class="card__block">
+          <p class="card__kicker">{{ w.extra | get(key="kicker", default="Walkthrough") }}</p>
+          <h2 class="card__title">{{ w.title }}</h2>
+        </div>
+        <div class="card__body">
+          <p class="card__text">{{ w.description }}</p>
+          <p class="card__meta">
+            <span>{{ sums | first }} {% if sums | first == "1" %}chapter{% else %}chapters{% endif %}</span>
+            <span>{{ <duration minutes={total} /> }}</span>
+          </p>
+          {% set tags = w.extra | get(key="tags", default=[]) %}
+          {% if tags %}
+          <p class="card__tags">{% for t in tags %}<span>{{ t }}</span>{% endfor %}</p>
+          {% endif %}
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</main>
+{% endblock body %}

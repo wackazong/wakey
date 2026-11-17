@@ -1,0 +1,64 @@
+<svg viewBox="0 0 760 464" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The four layers of the firmware crate, top to bottom: app; the services ui, audio, net, tidal, http, airdrop, sounds, clock, config and ambient; the hardware modules board, display and c6; the support modules runtime, psram and taskstats. Arrows point downwards from a module to one it uses. The crate wakey-core stands beside the layers and is used by app and by the services.">
+  <title>The layers of the firmware and their modules</title>
+  <defs>
+    <marker id="layers-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-head" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+  <rect class="d-box--dashed" x="6" y="8" width="554" height="74" rx="6"/>
+  <text class="d-text d-text--small" x="548" y="27" text-anchor="end">Application</text>
+  <rect class="d-box--accent" x="26" y="36" width="472" height="36" rx="4"/>
+  <text class="d-text d-text--mono d-text--on-accent" x="42" y="59">app</text>
+  <text class="d-text d-text--small d-text--on-accent" x="90" y="59">screens, wiring, UI texts</text>
+  <rect class="d-box--dashed" x="6" y="108" width="554" height="140" rx="6"/>
+  <text class="d-text d-text--small" x="548" y="127" text-anchor="end">Services</text>
+  <rect class="d-box--soft" x="26" y="136" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="70" y="161" text-anchor="middle">audio</text>
+  <rect class="d-box--soft" x="122" y="136" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="166" y="161" text-anchor="middle">tidal</text>
+  <rect class="d-box--soft" x="218" y="136" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="262" y="161" text-anchor="middle">http</text>
+  <rect class="d-box--soft" x="314" y="136" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="358" y="161" text-anchor="middle">sounds</text>
+  <rect class="d-box--soft" x="410" y="136" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="454" y="161" text-anchor="middle">config</text>
+  <rect class="d-box--soft" x="26" y="188" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="70" y="213" text-anchor="middle">ui</text>
+  <rect class="d-box--soft" x="122" y="188" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="166" y="213" text-anchor="middle">ambient</text>
+  <rect class="d-box--soft" x="218" y="188" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="262" y="213" text-anchor="middle">clock</text>
+  <rect class="d-box--soft" x="314" y="188" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="358" y="213" text-anchor="middle">net</text>
+  <rect class="d-box--soft" x="410" y="188" width="88" height="40" rx="4"/>
+  <text class="d-text d-text--mono" x="454" y="213" text-anchor="middle">airdrop</text>
+  <rect class="d-box--dashed" x="6" y="274" width="554" height="78" rx="6"/>
+  <text class="d-text d-text--small" x="548" y="293" text-anchor="end">Hardware</text>
+  <rect class="d-box--soft" x="26" y="302" width="88" height="36" rx="4"/>
+  <text class="d-text d-text--mono" x="70" y="325" text-anchor="middle">display</text>
+  <rect class="d-box--soft" x="122" y="302" width="184" height="36" rx="4"/>
+  <text class="d-text d-text--mono" x="214" y="325" text-anchor="middle">board</text>
+  <rect class="d-box--soft" x="314" y="302" width="184" height="36" rx="4"/>
+  <text class="d-text d-text--mono" x="406" y="325" text-anchor="middle">c6</text>
+  <rect class="d-box--dashed" x="6" y="378" width="554" height="78" rx="6"/>
+  <text class="d-text d-text--small" x="548" y="397" text-anchor="end">Support</text>
+  <rect class="d-box--soft" x="26" y="406" width="88" height="36" rx="4"/>
+  <text class="d-text d-text--mono" x="70" y="429" text-anchor="middle">psram</text>
+  <rect class="d-box--soft" x="122" y="406" width="88" height="36" rx="4"/>
+  <text class="d-text d-text--mono" x="166" y="429" text-anchor="middle">runtime</text>
+  <rect class="d-box--soft" x="218" y="406" width="88" height="36" rx="4"/>
+  <text class="d-text d-text--mono" x="262" y="429" text-anchor="middle">taskstats</text>
+  <path class="d-line" d="M262 72v34" marker-end="url(#layers-head)"/>
+  <path class="d-line" d="M70 228v72" marker-end="url(#layers-head)"/>
+  <path class="d-line" d="M166 228v72" marker-end="url(#layers-head)"/>
+  <path class="d-line" d="M262 228v72" marker-end="url(#layers-head)"/>
+  <path class="d-line" d="M358 228v72" marker-end="url(#layers-head)"/>
+  <path class="d-line" d="M454 228v72" marker-end="url(#layers-head)"/>
+  <path class="d-line" d="M70 338v66" marker-end="url(#layers-head)"/>
+  <rect class="d-box" x="598" y="8" width="154" height="240" rx="6"/>
+  <text class="d-text d-text--mono" x="614" y="38">wakey-core</text>
+  <text class="d-text d-text--small" x="614" y="64">a separate crate</text>
+  <text class="d-text d-text--small" x="614" y="84">pure logic</text>
+  <text class="d-text d-text--small" x="614" y="104">no ESP dependencies</text>
+  <text class="d-text d-text--small" x="614" y="124">tested on the host</text>
+  <path class="d-line d-line--dashed" d="M560 54h36" marker-end="url(#layers-head)"/>
+  <path class="d-line d-line--dashed" d="M560 182h36" marker-end="url(#layers-head)"/>
+</svg>

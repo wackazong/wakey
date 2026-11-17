@@ -1,0 +1,338 @@
+// Page basics and the chrome every page has: top bar, scroll progress,
+// footer, the hero blocks, buttons.
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%;
+  scroll-padding-top: calc(var(--topbar) + 1.5rem);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--text);
+  font-size: 1.1875rem;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  overflow-wrap: break-word;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+a {
+  color: var(--link);
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 0.16em;
+}
+
+:focus-visible {
+  outline: 3px solid var(--spark);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--spark) 45%, transparent);
+}
+
+kbd {
+  font-family: var(--mono);
+  font-size: 0.75em;
+  padding: 0.1em 0.45em;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.skip {
+  position: absolute;
+  left: -100rem;
+  top: 0.5rem;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--display);
+  font-weight: 600;
+}
+
+.skip:focus {
+  left: 0.5rem;
+}
+
+// ── Scroll progress ──────────────────────────────────────────────────────
+
+.progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 3px;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.progress__bar {
+  height: 100%;
+  width: 100%;
+  background: var(--spark);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}
+
+// ── Top bar ──────────────────────────────────────────────────────────────
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: var(--topbar);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 1.25rem;
+  background: color-mix(in oklab, var(--paper) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--display);
+  font-size: 0.9375rem;
+}
+
+.topbar svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+.topbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.25rem;
+  padding: 0 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.topbar button:hover {
+  background: var(--sunken);
+}
+
+.topbar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--ink);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.topbar__brand .topbar__mark {
+  fill: var(--accent);
+  stroke: none;
+  width: 1.4rem;
+  height: 1.4rem;
+}
+
+.topbar__crumb {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.topbar__crumb:not(:empty)::before {
+  content: "/";
+  margin-right: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.topbar__crumb a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.topbar__crumb a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.topbar .topbar__search {
+  border-color: var(--rule);
+  background: var(--surface);
+  color: var(--ink-soft);
+  padding-right: 0.45rem;
+}
+
+.topbar__search span {
+  margin-right: 1.5rem;
+}
+
+.topbar__menu {
+  display: none !important;
+}
+
+.icon-moon {
+  display: none;
+}
+
+@mixin moon {
+  .icon-sun {
+    display: none;
+  }
+
+  .icon-moon {
+    display: block;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    @include moon;
+  }
+}
+
+:root[data-theme="dark"] {
+  @include moon;
+}
+
+// ── Footer ───────────────────────────────────────────────────────────────
+
+.footer {
+  margin-top: 6rem;
+  padding: 2.5rem 1.5rem 3rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--display);
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+.footer p {
+  margin: 0;
+}
+
+.footer__small {
+  margin-top: 0.35rem !important;
+  color: var(--ink-faint);
+}
+
+// ── Shared pieces ────────────────────────────────────────────────────────
+
+.eyebrow {
+  margin: 0 0 0.9rem;
+  font-family: var(--display);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.button {
+  display: inline-block;
+  padding: 0.8rem 1.4rem;
+  border-radius: var(--radius);
+  background: var(--spark);
+  color: #1c1b22;
+  font-family: var(--display);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.button:hover {
+  filter: brightness(1.06);
+}
+
+// The colour block at the top of the landing page and of an overview.
+.hero {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.hero__inner {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: clamp(3rem, 8vw, 6.5rem) 1.5rem clamp(2.5rem, 6vw, 5rem);
+}
+
+.hero .eyebrow {
+  color: var(--spark);
+}
+
+.hero__title {
+  margin: 0;
+  max-width: 16ch;
+  font-family: var(--display);
+  font-size: clamp(2.75rem, 9vw, 6rem);
+  font-weight: 800;
+  line-height: 0.96;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.hero__lede {
+  max-width: 44ch;
+  margin: 1.5rem 0 0;
+  font-size: clamp(1.1875rem, 2.2vw, 1.5rem);
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
+.hero a:not(.button) {
+  color: inherit;
+}
+
+.hero .button {
+  margin-top: 2.25rem;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 3rem;
+  margin: 2.5rem 0 0;
+  font-family: var(--display);
+}
+
+.facts dt {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.facts dd {
+  margin: 0.1rem 0 0;
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}

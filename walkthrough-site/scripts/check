@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Everything that must hold before the site is published.
+
+    scripts/check [--time MIN-MAX]
+
+1. `zola build` and `zola check` pass (no broken links).
+2. Every code excerpt matches the source at its walkthrough's commit.
+3. The built pages load nothing from another site, and no URL still holds
+   the placeholder address of zola.toml.
+4. Prints each walkthrough's reading time; with `--time 165-195` the total
+   of every walkthrough must lie in that range (minutes).
+"""
+
+import argparse
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from walkthrough import SITE, front_matter, walkthroughs
+
+# What makes a browser fetch something: these must stay on the site.
+LOADS = re.compile(r"""<(?:script|img|link|iframe|source|video|audio)\b[^>]*?\b(?:src|href)=["']([^"']+)["']""", re.I)
+CSS_URL = re.compile(r"""url\(\s*["']?([^"')]+)""")
+
+
+def run(*cmd: str) -> bool:
+    print("$", " ".join(cmd))
+    return subprocess.run(cmd, cwd=SITE).returncode == 0
+
+
+def external(url: str) -> bool:
+    return url.startswith(("http://", "https://", "//"))
+
+
+def scan_output(placeholder: str) -> list[str]:
+    problems = []
+    public = SITE / "public"
+    for path in sorted(public.rglob("*")):
+        if path.suffix not in {".html", ".css"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        name = path.relative_to(public)
+        found = LOADS.findall(text) if path.suffix == ".html" else []
+        found += CSS_URL.findall(text)
+        for url in found:
+            if external(url):
+                problems.append(f"{name}: loads {url}")
+        # (The address itself is on <body data-base>, for the search.)
+        if path.suffix == ".html" and re.search(r"""(?:href|src)=["']""" + re.escape(placeholder), text):
+            problems.append(f"{name}: still holds {placeholder}")
+    return problems
+
+
+def reading_times(wpm_default: int) -> dict[str, int]:
+    """Minutes per walkthrough, as the templates count them: each written
+    chapter's words (Zola's count: text and code) at the walkthrough's
+    reading speed, rounded up, then added."""
+    totals = {}
+    for walkthrough in walkthroughs():
+        wpm = front_matter(walkthrough / "_index.md").get("extra", {}).get("wpm", wpm_default)
+        overview = (SITE / "public" / walkthrough.name / "index.html").read_text(encoding="utf-8")
+        minutes = [int(m) for m in re.findall(r'class="chapters__time">(\d+) min<', overview)]
+        totals[walkthrough.name] = sum(minutes)
+        print(f"{walkthrough.name}: {len(minutes)} chapters, {sum(minutes)} min "
+              f"({sum(minutes) // 60} h {sum(minutes) % 60:02d} min) at {wpm} words a minute")
+        print("   per chapter:", " ".join(str(m) for m in minutes))
+    return totals
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--time", help="allowed total reading time per walkthrough, minutes: MIN-MAX")
+    args = ap.parse_args()
+    config = tomllib.loads((SITE / "zola.toml").read_text(encoding="utf-8"))
+
+    ok = run("zola", "build")
+    ok = run("zola", "check") and ok
+    ok = run(sys.executable, str(SITE / "scripts" / "verify-excerpts")) and ok
+    if not (SITE / "public").is_dir():
+        sys.exit("no build to look at")
+
+    problems = scan_output(config["base_url"])
+    for p in problems:
+        print("PROBLEM", p)
+    if not problems:
+        print("the built pages load nothing from elsewhere")
+    ok = ok and not problems
+
+    totals = reading_times(config.get("extra", {}).get("wpm", 155))
+    if args.time:
+        low, high = (int(x) for x in args.time.split("-"))
+        for name, minutes in totals.items():
+            if not low <= minutes <= high:
+                print(f"PROBLEM {name}: {minutes} min is outside {low}-{high}")
+                ok = False
+
+    print("all checks passed" if ok else "CHECKS FAILED")
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

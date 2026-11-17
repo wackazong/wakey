@@ -1,0 +1,407 @@
+// What the components in templates/components.html produce: callouts, code
+// excerpts, figures and diagrams.
+
+// ── Callouts ─────────────────────────────────────────────────────────────
+
+.callout {
+  --tone: var(--concept);
+  margin: 1.75rem 0;
+  padding: 1.1rem 1.4rem 1.15rem;
+  border-left: 6px solid var(--tone);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: color-mix(in oklab, var(--tone) 9%, var(--surface));
+}
+
+.callout--tip {
+  --tone: var(--tip);
+}
+
+.callout--pitfall {
+  --tone: var(--pitfall);
+}
+
+.callout--unsafe {
+  --tone: var(--unsafe);
+  // Hazard stripes down the edge.
+  border-left: 0;
+  padding-left: calc(1.4rem + 6px);
+  background:
+    repeating-linear-gradient(-45deg, var(--tone) 0 6px, transparent 6px 12px) left / 6px 100% no-repeat,
+    color-mix(in oklab, var(--tone) 9%, var(--surface));
+}
+
+.callout__label {
+  margin: 0 0 0.3rem;
+  font-family: var(--display);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--tone);
+}
+
+.callout__title {
+  margin: 0 0 0.5rem;
+  font-family: var(--display);
+  font-size: 1.1875rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.callout > p,
+.callout > ul,
+.callout > ol {
+  margin: 0 0 0.7em;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+}
+
+.callout > :last-child {
+  margin-bottom: 0;
+}
+
+.callout__from {
+  font-family: var(--display);
+  font-size: 0.875rem !important;
+  font-weight: 600;
+}
+
+// ── Code excerpts ────────────────────────────────────────────────────────
+
+.prose > .code,
+.prose > .diagram,
+.prose > .gallery,
+.prose > pre,
+.prose > table {
+  max-width: none;
+}
+
+.code {
+  margin: 1.75rem 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  overflow: hidden;
+}
+
+.code__label {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.5rem 0.6rem 0.5rem 1rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.code__file {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.code__file a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.code__file a:hover {
+  text-decoration: underline;
+}
+
+// A walkthrough without a repository address: the name is not a link.
+.code__file a[href^="#source-"] {
+  pointer-events: none;
+}
+
+.code__lines {
+  flex: 1;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.code__copy {
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-family: var(--display);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.code__copy:hover {
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+
+.code__copy.is-done {
+  color: var(--ink);
+  border-color: var(--spark);
+}
+
+// Highlighted code: Zola's (Giallo's) markup. The colours of the tokens
+// come from giallo-light.css / giallo-dark.css; the ground is ours.
+pre.giallo {
+  margin: 0;
+  padding: 0.8rem 0;
+  background: var(--code-bg) !important;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  tab-size: 4;
+}
+
+.prose > pre.giallo {
+  margin: 1.75rem 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+// A grid makes every line as wide as the longest one, so a highlighted line
+// stays highlighted when the block scrolls sideways.
+pre.giallo > code {
+  display: grid;
+  min-width: max-content;
+  font: inherit;
+}
+
+.giallo-l {
+  display: block;
+  min-height: 1.6em;
+  padding: 0 1rem;
+}
+
+.giallo-ln {
+  display: inline-block;
+  width: 4ch;
+  margin-right: 1.5ch;
+  text-align: right;
+  color: var(--ink-faint) !important;
+  user-select: none;
+}
+
+.giallo-l.z-l-hl,
+.giallo-l.z-d-hl {
+  background: var(--code-hl) !important;
+  box-shadow: inset 4px 0 0 var(--spark);
+}
+
+.giallo-l.z-l-hl .giallo-ln,
+.giallo-l.z-d-hl .giallo-ln {
+  color: var(--ink-soft) !important;
+}
+
+// Lines left out between two runs of an excerpt.
+.code__gap {
+  padding: 0.15rem 1rem 0.15rem calc(1rem + 5.5ch);
+  border-block: 1px dashed var(--rule);
+  background: var(--sunken);
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  white-space: pre;
+  overflow: hidden;
+}
+
+// ── Figures ──────────────────────────────────────────────────────────────
+
+.figure,
+.diagram {
+  margin: 2rem 0;
+}
+
+.figure img {
+  display: block;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.figure--narrow img {
+  max-width: min(100%, 26rem);
+}
+
+figcaption:not(.code__label),
+.gallery__caption {
+  margin: 0.6rem 0 0;
+  max-width: var(--measure);
+  font-family: var(--display);
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.gallery {
+  margin: 2rem 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 1rem;
+}
+
+.gallery .figure {
+  margin: 0;
+}
+
+.gallery__caption {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
+.diagram {
+  padding: 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-x: auto;
+}
+
+.diagram > svg {
+  display: block;
+  margin: 0 auto;
+}
+
+// A Mermaid diagram before the script has drawn it (or without scripts):
+// its source, readable.
+.diagram pre.mermaid {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.diagram pre.mermaid[data-processed] {
+  text-align: center;
+  white-space: normal;
+}
+
+.diagram pre.mermaid svg {
+  height: auto;
+}
+
+// ── Hand-written SVG diagrams ────────────────────────────────────────────
+//
+// Classes for the SVG files a walkthrough keeps in its folder (the `svg`
+// component and the mini-map put them into the page). They follow the
+// theme; README.md lists them.
+
+.diagram svg,
+.minimap svg {
+  font-family: var(--display);
+}
+
+// Boxes.
+.d-box,
+.m-box {
+  fill: var(--surface);
+  stroke: var(--ink-soft);
+  stroke-width: 1.5;
+}
+
+.m-box {
+  fill: var(--sunken);
+  stroke: var(--rule);
+}
+
+.d-box--soft {
+  fill: var(--sunken);
+  stroke: var(--rule);
+}
+
+.d-box--accent {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.d-box--spark {
+  fill: color-mix(in oklab, var(--spark) 28%, var(--surface));
+  stroke: var(--spark);
+}
+
+.d-box--dashed {
+  fill: none;
+  stroke: var(--ink-faint);
+  stroke-dasharray: 5 4;
+}
+
+// Lines and arrowheads.
+.d-line {
+  fill: none;
+  stroke: var(--ink-soft);
+  stroke-width: 1.5;
+}
+
+.d-line--spark {
+  stroke: var(--spark);
+  stroke-width: 2.5;
+}
+
+.d-line--dashed {
+  stroke-dasharray: 5 4;
+}
+
+.d-head {
+  fill: var(--ink-soft);
+}
+
+.d-head--spark {
+  fill: var(--spark);
+}
+
+// Text.
+.d-text,
+.m-label {
+  fill: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.m-label {
+  fill: var(--ink-soft);
+  font-size: 13px;
+}
+
+.d-text--title {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.d-text--small {
+  fill: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.d-text--mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.d-text--on-accent {
+  fill: var(--on-accent);
+}
+
+.d-text--spark {
+  fill: var(--tip);
+}
+
+// A diagram does not shrink until its text is too small to read: it keeps
+// a least width and scrolls sideways inside its frame. Hand-written SVGs
+// get theirs here (`wide` for the large ones); a Mermaid diagram gets it
+// from static/js/site.js, which knows the size it was drawn at.
+.diagram > svg {
+  min-width: 40rem;
+}
+
+.diagram--wide > svg {
+  min-width: 60rem;
+}
