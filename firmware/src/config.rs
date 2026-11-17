@@ -40,10 +40,13 @@ pub fn load() -> Result<Config, String> {
                 return Err(e.to_string());
             }
         },
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            log::info!("config: no {FILE} ({e})");
-            Config::default()
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => match recover(&path) {
+            Some(cfg) => cfg,
+            None => {
+                log::info!("config: no {FILE} ({e})");
+                Config::default()
+            }
+        },
         Err(e) => {
             log::error!("config: {FILE}: {e}");
             return Err(e.to_string());
@@ -73,6 +76,28 @@ pub fn load() -> Result<Config, String> {
         alarm::sanitize_list(&mut cfg.alarms);
     }
     Ok(cfg)
+}
+
+/// Puts back a `config.json` that a power cut took in the middle of
+/// [`sd::replace`]: between removing the old file and renaming the new one,
+/// only `config.tmp` is on the card. It is used only if it parses: a power
+/// cut while writing the very first file can leave it cut short, and then
+/// the defaults are what the clock had anyway.
+fn recover(path: &std::path::Path) -> Option<Config> {
+    let tmp = path.with_extension("tmp");
+    let text = std::fs::read_to_string(&tmp).ok()?;
+    let cfg = match Config::load(&text) {
+        Ok((cfg, _)) => cfg,
+        Err(e) => {
+            log::warn!("config: ignoring {}: {e}", tmp.display());
+            return None;
+        }
+    };
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => log::warn!("config: {FILE} recovered from {}", tmp.display()),
+        Err(e) => log::error!("config: recovering {FILE} from {}: {e}", tmp.display()),
+    }
+    Some(cfg)
 }
 
 /// Writes `alarms` into `config.json`, keeping the rest of the file.
